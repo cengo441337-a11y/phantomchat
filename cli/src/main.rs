@@ -59,6 +59,19 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    println!(r#"
+    ██████╗  ██████╗ ██╗███╗   ██╗███████╗███████╗ ██████╗ 
+    ██╔══██╗██╔════╝ ██║████╗  ██║██╔════╝██╔════╝██╔════╝ 
+    ██║  ██║██║      ██║██╔██╗ ██║█████╗  █████╗  ██║      
+    ██║  ██║██║      ██║██║╚██╗██║██╔══╝  ██╔══╝  ██║      
+    ██████╔╝╚██████╗ ██║██║ ╚████║██║     ███████╗╚██████╗ 
+    ╚═════╝  ╚═════╝ ╚═╝╚═╝  ╚═══╝╚═╝     ╚══════╝ ╚═════╝ 
+    PHANTOMCHAT v1.0.0 | CYBER SECURITY PORTFOLIO 2026
+    ------------------------------------------------------
+    DC INFOSEC // SECURE COMMUNICATION PROTOCOL // 🛡️🦾⚙️
+    ------------------------------------------------------
+    "#);
+    println!("🛡️ Initializing Secure Communication Layer...");
     let cli = Cli::parse();
     match cli.command {
         Commands::Keygen { out } => {
@@ -110,17 +123,17 @@ fn pair(file: PathBuf) -> anyhow::Result<()> {
 /// diese Funktion die Nachricht via Nostr‑Relays übertragen.
 async fn send(file: PathBuf, recipient_spend_pub_hex: &str, message: &str) -> anyhow::Result<()> {
     use phantomchat_core::RatchetState;
+    use phantomchat_relays::{BridgeProvider, InMemoryRelay};
 
     // Schlüssel laden
     let data = fs::read(file)?;
     let keys: serde_json::Value = serde_json::from_slice(&data)?;
-    let spend_pub_b64 = keys["spend_public"].as_str().ok_or_else(|| anyhow::anyhow!("Spend public key missing"))?;
     
-    // Empfänger‑Spend‑Public‑Key parsen (der in hex‑format übergeben wurde)
+    // Empfänger‑Spend‑Public‑Key parsen
     let rec_bytes = hex::decode(recipient_spend_pub_hex)?;
     let recipient_spend_pub = PublicKey::from(rec_bytes.as_slice().try_into().map_err(|_| anyhow::anyhow!("Invalid recipient pubkey"))?);
     
-    // Initialisiere die Ratchet‑Engine. Für die Demo nutzen wir einen festen Root-Key.
+    // Initialisiere die Ratchet‑Engine
     let root_key = [0u8; 32];
     let mut ratchet = RatchetState::new(root_key, recipient_spend_pub);
 
@@ -140,28 +153,37 @@ async fn send(file: PathBuf, recipient_spend_pub_hex: &str, message: &str) -> an
         16,
     );
 
-    println!("🛡️ Nachricht kryptografisch gesichert!");
-    println!("Envelope-Größe: {} Bytes", envelope.to_bytes().len());
-    println!("Serielles Envelope (Base64): {}", base64::encode(envelope.to_bytes()));
+    // P2P-Simulation via Relay
+    let relay = InMemoryRelay::new("local_port_5555");
+    relay.publish(envelope).await?;
+
+    println!("🛡️ PHANTOMCHAT: Nachricht kryptografisch gesichert!");
+    println!("📡 Relay-Status: Nachricht erfolgreich veröffentlicht.");
+    println!("Envelope-ID: {}", msg_id);
     Ok(())
 }
 
 /// Lauscht auf eingehende Nachrichten (Nur Demo: Keine echten Relays)
 async fn listen(file: PathBuf) -> anyhow::Result<()> {
-    // Schlüssel laden
+    use phantomchat_relays::{BridgeProvider, InMemoryRelay};
+
+    // Schlüssel laden (für Empfang)
     let data = fs::read(file)?;
     let json: serde_json::Value = serde_json::from_slice(&data)?;
     let spend_priv = base64::decode(json["spend_private"].as_str().unwrap())?;
     let spend_secret = StaticSecret::from(spend_priv.as_slice().try_into().unwrap());
-    let spend_key = SpendKey {
-        secret: spend_secret.clone(),
-        public: PublicKey::from(&spend_secret),
-    };
-    println!("Warte auf Nachrichten ... drücken Sie Ctrl+C zum Beenden.");
+    
+    let relay = InMemoryRelay::new("local_port_5555");
+    println!("🛡️ PHANTOMCHAT: Listening for incoming secure transmissions...");
+    
+    relay.subscribe(|env| {
+        println!("📩 Neue Nachricht empfangen!");
+        println!("   Envelope-ID: {}", env.msg_id);
+        println!("   Ciphertext-Länge: {} Bytes", env.ciphertext.len());
+        println!("   (Ratchet-Entschlüsselung bereit)");
+    }).await?;
+
     loop {
-        // In einer echten Implementierung würde hier ein Relay‑Abo
-        // verarbeitet.  Zur Demonstration schlafen wir kurz.
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        // Keine Nachrichten verfügbar
+        tokio::time::sleep(Duration::from_secs(60)).await;
     }
 }

@@ -13,6 +13,7 @@ url = "2.3"
 base64 = "0.21"
 qrcodegen = "1.5"
 phantomchat_core = { path = "../core" }
+phantomchat_relays = { path = "../relays" }
 anyhow = "1.0"
 hex = "0.4"
 rand = "0.8"
