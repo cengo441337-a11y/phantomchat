@@ -1,0 +1,33 @@
+version: '3.8'
+services:
+  # Einfacher Nostr‑Relay basierend auf dem beliebten Go‑Projekt
+  # 'nostr-rs-relay'.  Dieses Image muss lokal vorhanden sein oder via
+  # Docker Hub bezogen werden.  Der Dienst wird auf Port 7000
+  # bereitgestellt.
+  relay1:
+    image: scsibug/nostr-rs-relay:latest
+    restart: unless-stopped
+    environment:
+      - RELAY_PORT=7000
+    ports:
+      - "7000:7000"
+
+  relay2:
+    image: scsibug/nostr-rs-relay:latest
+    restart: unless-stopped
+    environment:
+      - RELAY_PORT=7001
+    ports:
+      - "7001:7001"
+
+  relay3:
+    image: scsibug/nostr-rs-relay:latest
+    restart: unless-stopped
+    environment:
+      - RELAY_PORT=7002
+    ports:
+      - "7002:7002"
+
+  # Testharness kann optional eine lokale Python‑Anwendung starten, um
+  # Nachrichten zu senden und zu empfangen.  Diese Komponente ist
+  # experimentell.

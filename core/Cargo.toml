@@ -1,0 +1,28 @@
+[package]
+name = "phantomchat_core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "phantomchat_core"
+path = "src/lib.rs"
+
+[dependencies]
+# Die folgenden Bibliotheken werden benötigt, um die Kryptographie zu
+# implementieren.  Die Referenzimplementierung enthält lediglich Platzhalter
+# und kann ohne die Installation dieser Crates nicht kompiliert werden.
+rand = "0.8"
+sha2 = "0.10"
+hmac = "0.12"
+hkdf = "0.12"
+chacha20poly1305 = { version = "0.10", features = ["xchacha20-poly1305"] }
+x25519-dalek = { version = "1.2", features = ["alloc"] }
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+hex = "0.4"
+
+[features]
+default = []
+# Optionale Aktivierung des post‑quanten‑hybriden Handshakes (Kyber).  Diese
+# Abhängigkeiten sind im MVP noch nicht enthalten.
+pqc = []
