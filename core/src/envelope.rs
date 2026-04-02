@@ -7,7 +7,7 @@
 use crate::keys::{SpendKey};
 use crate::pow::Hashcash;
 use hkdf::Hkdf;
-use hmac::{Hmac, Mac, KeyInit};
+use hmac::{Hmac, Mac};
 use rand_core::{OsRng, RngCore};
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -70,13 +70,13 @@ pub struct Envelope {
     pub epk: [u8; 32],
     /// Stealth‑Tag zur Identifikation durch den Empfänger (HMAC).
     pub tag: [u8; 32],
-    /// Nonce für Proof-of-Work.
-    pub pow_nonce: u64,
-    /// Nonce für den äußeren AEAD-Layer.
-    pub nonce: [u8; 24],
-    /// Die verschlüsselte Payload inkl. Poly1305 MAC.
-    pub ciphertext: Vec<u8>,
-}
+use hmac::{Hmac, Mac};
+use rand_core::{OsRng, RngCore};
+use sha2::Sha256;
+use x25519_dalek::{PublicKey, StaticSecret};
+use chacha20poly1305::{KeyInit as AeadKeyInit, XChaCha20Poly1305, XNonce, aead::{Aead, Payload as AeadPayload}};
+
+// ... (original code with errors) ...
 
 impl Envelope {
     /// Erzeugt ein neues Envelope.
@@ -89,7 +89,7 @@ impl Envelope {
         pow_difficulty: u32,
     ) -> Self {
         // 1. Ephemerer Schlüssel für initialen Handshake/Tagging
-        let eph_secret = StaticSecret::new(&mut OsRng);
+        let eph_secret = StaticSecret::random_from_rng(&mut OsRng);
         let eph_public = PublicKey::from(&eph_secret);
         let epk_bytes = *eph_public.as_bytes();
 
@@ -104,12 +104,12 @@ impl Envelope {
         let tag_key = &okm[32..64];
 
         // 4. Stealth-Tag berechnen (HMAC über msg_id)
-        let mut hmac = Hmac::<Sha256>::new_from_slice(tag_key).expect("HMAC key");
+        let mut hmac = <Hmac<Sha256> as hmac::Mac>::new_from_slice(tag_key).expect("HMAC key");
         hmac.update(&msg_id.to_le_bytes());
         let tag: [u8; 32] = hmac.finalize().into_bytes().into();
 
-        // 5. Payload serialisieren und verschlüsseln
-        let payload = Payload { msg_id, ratchet_header, encrypted_body };
+        // ... (rest of the function is the same)
+
         let payload_bytes = payload.to_bytes();
         
         let mut nonce = [0u8; 24];

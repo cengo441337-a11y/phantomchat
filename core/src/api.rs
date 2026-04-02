@@ -1,4 +1,5 @@
 use crate::storage;
+use crate::frb_generated::StreamSink;
 use crate::network::{run_swarm, NetworkCommand, NetworkEvent, PhantomBehaviour};
 use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
 use flutter_rust_bridge::frb;
@@ -38,7 +39,7 @@ pub fn generate_phantom_id() -> String {
 }
 
 #[frb(sync)]
-pub fn start_network_node(sink: flutter_rust_bridge::StreamSink<NetworkEvent>, avatar_cid: Option<String>) {
+pub fn start_network_node(sink: StreamSink<NetworkEvent>, avatar_cid: Option<String>) {
     let (tx, rx) = mpsc::channel(32);
     let _ = COMMAND_TX.set(tx.clone());
 

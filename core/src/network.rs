@@ -5,6 +5,7 @@ use libp2p::{
     swarm::{NetworkBehaviour, SwarmEvent},
     PeerId, Swarm,
 };
+use crate::frb_generated::StreamSink;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -41,7 +42,7 @@ pub struct PhantomBehaviour {
 pub async fn run_swarm(
     mut swarm: Swarm<PhantomBehaviour>,
     mut command_rx: mpsc::Receiver<NetworkCommand>,
-    event_sink: flutter_rust_bridge::StreamSink<NetworkEvent>,
+    event_sink: StreamSink<NetworkEvent>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         tokio::select! {
