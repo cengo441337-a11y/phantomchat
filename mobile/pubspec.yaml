@@ -1,0 +1,36 @@
+name: mobile
+description: 'PhantomChat Secure Messenger Mobile Client'
+version: 1.0.0+1
+environment:
+  sdk: '>=3.5.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  flutter_rust_bridge: ^2.3.0
+  freezed_annotation: ^2.4.4
+  json_annotation: ^4.9.0
+  # Phase 4 Restore
+  flutter_secure_storage: ^9.2.2
+  path_provider: ^2.1.5
+  # Phase 5 QR Identity
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^5.2.2
+  # Phase 5 IPFS Avatars
+  image_picker: ^1.1.2
+  cached_network_image: ^3.4.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  ffigen: ^11.0.0
+  freezed: ^2.5.7
+  build_runner: ^2.4.12
+  json_serializable: ^6.8.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/shaders/

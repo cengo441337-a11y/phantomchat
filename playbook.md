@@ -1,0 +1,38 @@
+# Playbook – PhantomChat [Secure Messenger]
+
+## [Problem / Ziel]
+
+Härtung der kryptographischen Basis (Double Ratchet)
+
+### Kontext: 
+Die ursprüngliche PoC-Implementierung nutzte SHA256-Platzhalter. Für Produktion ist eine robuste KDF-Kette erforderlich.
+
+### Lösung:
+```rust
+// Nutze HKDF für Root-Kettenableitung
+let hk = Hkdf::<Sha256>::new(Some(salt), shared_secret);
+let mut info = [0u8; 16];
+info.copy_from_slice(b"PhantomRootV1");
+hk.expand(&info, &mut root_key)?;
+
+// Nutze HMAC-SHA256 für Sende/Empfangsketten
+let mut mac = HmacSha256::new_from_slice(chain_key)?;
+mac.update(&[0x01]); // Beispiel-Konstante für nächste Kette
+chain_key = mac.finalize().into_bytes().into();
+```
+- Getestet: Ja, 2026-04-01
+
+## [Problem / Ziel]
+
+Sicheres Envelope-Format (AEPD)
+
+### Kontext:
+Vermeidung von Metadaten-Lecks und Sicherstellung der Integrität des Stealth-Tags.
+
+### Lösung:
+Implementierung des `Envelope`-Formats, das den Stealth-Tag als assoziierte Daten (AD) in den AEAD-Prozess (XChaCha20-Poly1305) einbindet.
+```rust
+let cipher = XChaCha20Poly1305::new(slice_to_key(key));
+let ciphertext = cipher.encrypt(nonce, PayloadWithAD { tag, ciphertext: msg_data })?;
+```
+- Getestet: Ja, 2026-04-01

@@ -1,0 +1,17 @@
+# Letzte Aktualisierung: 2026-04-02 01:52
+# Active Task: Transition zu Flutter/Rust-Bridge Architektur & Implementierung von PQXDH (Post-Quantum Security).
+
+## Scope:
+- E:\Antigravity Agent\cyber_portfolio\phantomchat\mobile (Flutter Projekt)
+- E:\Antigravity Agent\cyber_portfolio\phantomchat\core (Rust Logic + PQ-Crypto)
+- E:\Antigravity Agent\cyber_portfolio\phantomchat\bridge (flutter_rust_bridge)
+
+## Status & Findings:
+- Architektur-Pivot: Von React Native zu Flutter 3.29+ (für bessere Shader/Animation Performance).
+- Security-Upgrade: Implementierung von PQXDH (Kyber-1024 + X25519) anstelle von reinem X25519.
+- Key-Storage: Migration zu TEE (Secure Enclave / StrongBox) geplant.
+- Netzwerk: Fokus auf Dezentralisierung via libp2p oder Onion-Routing (Session-Modell).
+- Design: Cyberpunk-High-End (Neon-Shader, Glitch-Effekte, Rive-Animations).
+
+## Nächster Schritt:
+- Setup des Flutter-Projekts `mobile` und Integration der `flutter_rust_bridge`.
