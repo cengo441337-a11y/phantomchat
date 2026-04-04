@@ -18,6 +18,8 @@
 //! Events werden mit einem **ephemeren secp256k1-Keypair** pro Session
 //! signiert — der Sender ist gegenüber Relay-Betreibern pseudonym.
 
+pub mod nostr;
+
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use futures::StreamExt;
