@@ -1,49 +1,50 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-const kBg = Color(0xFF080B0F);
-const kBgCard = Color(0xFF0D1117);
-const kBgInput = Color(0xFF131920);
-const kNeon = Color(0xFF00FFB2);
-const kNeonDim = Color(0xFF00FFB240);
-const kNeonText = Color(0xFF00E5A0);
-const kRed = Color(0xFFFF3860);
-const kGray = Color(0xFF5A6475);
-const kWhite = Color(0xFFE8F0F8);
-const kWhiteDim = Color(0xFF8899AA);
+// Core palette
+const kBg       = Color(0xFF050507);
+const kBgCard   = Color(0xFF080C12);
+const kBgInput  = Color(0xFF0B1018);
+const kCyan     = Color(0xFF00F5FF);
+const kCyanDim  = Color(0x2200F5FF);
+const kCyanMid  = Color(0x6600F5FF);
+const kMagenta  = Color(0xFFFF0066);
+const kMagDim   = Color(0x22FF0066);
+const kGreen    = Color(0xFF39FF14);
+const kYellow   = Color(0xFFFFD700);
+const kGray     = Color(0xFF2E3D50);
+const kGrayText = Color(0xFF4A5A6E);
+const kWhite    = Color(0xFFCDD9E8);
+const kWhiteDim = Color(0xFF6E7F90);
+
+// Legacy aliases so existing screens compile
+const kNeon    = kCyan;
+const kNeonDim = kCyanDim;
+const kNeonText = kCyan;
+const kRed     = kMagenta;
 
 ThemeData phantomTheme() {
   final base = ThemeData.dark();
   return base.copyWith(
     scaffoldBackgroundColor: kBg,
     colorScheme: const ColorScheme.dark(
-      primary: kNeon,
-      secondary: kNeonText,
+      primary: kCyan,
+      secondary: kMagenta,
       surface: kBgCard,
-      error: kRed,
+      error: kMagenta,
     ),
-    textTheme: GoogleFonts.spaceGroteskTextTheme(base.textTheme).copyWith(
-      bodyLarge: GoogleFonts.spaceGrotesk(color: kWhite),
-      bodyMedium: GoogleFonts.spaceGrotesk(color: kWhiteDim),
-      titleLarge: GoogleFonts.spaceGrotesk(
-        color: kWhite,
-        fontWeight: FontWeight.w700,
-        letterSpacing: -0.5,
-      ),
-      headlineLarge: GoogleFonts.spaceGrotesk(
-        color: kWhite,
-        fontWeight: FontWeight.w800,
-        letterSpacing: -1,
-      ),
+    textTheme: GoogleFonts.spaceGroteskTextTheme(base.textTheme).apply(
+      bodyColor: kWhite,
+      displayColor: kWhite,
     ),
     appBarTheme: AppBarTheme(
       backgroundColor: kBg,
       elevation: 0,
-      titleTextStyle: GoogleFonts.spaceGrotesk(
+      titleTextStyle: GoogleFonts.orbitron(
         color: kWhite,
-        fontSize: 18,
+        fontSize: 16,
         fontWeight: FontWeight.w700,
-        letterSpacing: -0.3,
+        letterSpacing: 1,
       ),
       iconTheme: const IconThemeData(color: kWhite),
     ),
@@ -52,34 +53,47 @@ ThemeData phantomTheme() {
       fillColor: kBgInput,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: Color(0xFF1E2733)),
+        borderRadius: BorderRadius.circular(4),
+        borderSide: const BorderSide(color: kGray),
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: Color(0xFF1E2733)),
+        borderRadius: BorderRadius.circular(4),
+        borderSide: const BorderSide(color: kGray),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: kNeon, width: 1.5),
+        borderRadius: BorderRadius.circular(4),
+        borderSide: const BorderSide(color: kCyan, width: 1.5),
       ),
-      hintStyle: GoogleFonts.spaceGrotesk(color: kGray, fontSize: 14),
-      labelStyle: GoogleFonts.spaceGrotesk(color: kGray, fontSize: 14),
+      hintStyle: GoogleFonts.spaceMono(color: kGrayText, fontSize: 13),
+      labelStyle: GoogleFonts.spaceMono(color: kGrayText, fontSize: 13),
     ),
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
-        backgroundColor: kNeon,
-        foregroundColor: kBg,
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        textStyle: GoogleFonts.spaceGrotesk(
+        backgroundColor: Colors.transparent,
+        foregroundColor: kCyan,
+        side: const BorderSide(color: kCyan, width: 1.5),
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        elevation: 0,
+        shadowColor: Colors.transparent,
+        textStyle: GoogleFonts.orbitron(
           fontWeight: FontWeight.w700,
-          fontSize: 15,
-          letterSpacing: 0.5,
+          fontSize: 13,
+          letterSpacing: 2,
         ),
       ),
     ),
-    dividerColor: const Color(0xFF1A2030),
+    dividerColor: kGray,
     cardColor: kBgCard,
+    snackBarTheme: SnackBarThemeData(
+      backgroundColor: kBgCard,
+      contentTextStyle: GoogleFonts.spaceMono(color: kWhite, fontSize: 12),
+    ),
   );
 }
+
+// Shared glow shadow helper
+List<BoxShadow> neonGlow(Color color, {double radius = 12}) => [
+  BoxShadow(color: color.withOpacity(0.4), blurRadius: radius, spreadRadius: 0),
+  BoxShadow(color: color.withOpacity(0.1), blurRadius: radius * 3, spreadRadius: 2),
+];

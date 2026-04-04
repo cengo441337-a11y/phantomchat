@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -6,6 +7,8 @@ import '../models/identity.dart';
 import '../services/crypto_service.dart';
 import '../services/storage_service.dart';
 import '../theme.dart';
+import '../widgets/glitch_text.dart';
+import '../widgets/cyber_card.dart';
 import 'home.dart';
 
 class OnboardingScreen extends StatefulWidget {
@@ -17,53 +20,65 @@ class OnboardingScreen extends StatefulWidget {
 
 class _OnboardingScreenState extends State<OnboardingScreen>
     with TickerProviderStateMixin {
-  int _step = 0; // 0=welcome, 1=name, 2=generating, 3=done
+  int _step = 0;
   final _nameCtrl = TextEditingController();
   PhantomIdentity? _identity;
-  bool _generating = false;
-  late AnimationController _glitchCtrl;
+
   late AnimationController _fadeCtrl;
   late Animation<double> _fadeAnim;
-  int _glitchFrame = 0;
-  Timer? _glitchTimer;
+  late AnimationController _bootCtrl;
+
+  // Boot sequence
+  List<String> _bootLines = [];
+  Timer? _bootTimer;
+  int _bootIndex = 0;
+  bool _bootDone = false;
+
+  static const _bootSequence = [
+    '> PHANTOM OS v1.0.0',
+    '> LOADING CRYPTO MODULE...',
+    '> X25519 ECDH: OK',
+    '> CHACHA20-POLY1305: OK',
+    '> SECURE STORAGE: OK',
+    '> NETWORK LAYER: ISOLATED',
+    '> SYSTEM ONLINE',
+  ];
 
   @override
   void initState() {
     super.initState();
-    _glitchCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 100),
-    );
-    _fadeCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 600),
-    );
+    _fadeCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
     _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
+    _bootCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 800));
     _fadeCtrl.forward();
-    _startGlitch();
+    _runBoot();
   }
 
-  void _startGlitch() {
-    _glitchTimer = Timer.periodic(const Duration(milliseconds: 80), (_) {
-      if (mounted) setState(() => _glitchFrame = (_glitchFrame + 1) % 8);
+  void _runBoot() {
+    _bootTimer = Timer.periodic(const Duration(milliseconds: 180), (_) {
+      if (!mounted) return;
+      if (_bootIndex < _bootSequence.length) {
+        setState(() => _bootLines.add(_bootSequence[_bootIndex++]));
+      } else {
+        _bootTimer?.cancel();
+        setState(() => _bootDone = true);
+      }
     });
   }
 
   @override
   void dispose() {
-    _glitchCtrl.dispose();
     _fadeCtrl.dispose();
-    _glitchTimer?.cancel();
+    _bootCtrl.dispose();
+    _bootTimer?.cancel();
     _nameCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _generateIdentity() async {
     if (_nameCtrl.text.trim().isEmpty) return;
-    setState(() {
-      _step = 2;
-      _generating = true;
-    });
+    FocusScope.of(context).unfocus();
+    setState(() => _step = 2);
 
     final viewKeys = await CryptoService.generateKeyPair();
     final spendKeys = await CryptoService.generateKeyPair();
@@ -79,17 +94,23 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     );
 
     await StorageService.saveIdentity(identity);
+    if (mounted) setState(() { _identity = identity; _step = 3; });
+  }
 
-    setState(() {
-      _identity = identity;
-      _generating = false;
-      _step = 3;
-    });
+  void _stepTo(int step) {
+    _fadeCtrl.reset();
+    setState(() => _step = step);
+    _fadeCtrl.forward();
   }
 
   void _finish() {
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const HomeScreen()),
+      PageRouteBuilder(
+        pageBuilder: (_, __, ___) => const HomeScreen(),
+        transitionDuration: const Duration(milliseconds: 400),
+        transitionsBuilder: (_, anim, __, child) =>
+            FadeTransition(opacity: anim, child: child),
+      ),
     );
   }
 
@@ -97,10 +118,12 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: kBg,
-      body: SafeArea(
-        child: FadeTransition(
-          opacity: _fadeAnim,
-          child: _buildStep(),
+      body: GridBackground(
+        child: SafeArea(
+          child: FadeTransition(
+            opacity: _fadeAnim,
+            child: _buildStep(),
+          ),
         ),
       ),
     );
@@ -116,267 +139,372 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     }
   }
 
+  // ── STEP 0: Welcome ─────────────────────────────────────────────────────────
   Widget _buildWelcome() {
     return Padding(
-      padding: const EdgeInsets.all(32),
-      child: Column(
-        children: [
-          const Spacer(),
-          _PhantomLogo(glitchFrame: _glitchFrame),
-          const SizedBox(height: 40),
-          Text(
-            'PHANTOM',
-            style: GoogleFonts.spaceGrotesk(
-              fontSize: 48,
-              fontWeight: FontWeight.w800,
-              color: kWhite,
-              letterSpacing: -2,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'End-to-end verschlüsselt.\nKein Server. Keine Spuren.',
-            textAlign: TextAlign.center,
-            style: GoogleFonts.spaceGrotesk(
-              fontSize: 16,
-              color: kWhiteDim,
-              height: 1.5,
-            ),
-          ),
-          const Spacer(),
-          _NeonDivider(),
-          const SizedBox(height: 32),
-          Row(
-            children: [
-              _FeaturePill(icon: Icons.lock_outline, label: 'X25519'),
-              const SizedBox(width: 8),
-              _FeaturePill(icon: Icons.shuffle, label: 'ChaCha20'),
-              const SizedBox(width: 8),
-              _FeaturePill(icon: Icons.visibility_off, label: 'Zero-Meta'),
-            ],
-          ),
-          const SizedBox(height: 32),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: () {
-                _fadeCtrl.reset();
-                setState(() => _step = 1);
-                _fadeCtrl.forward();
-              },
-              child: const Text('PHANTOM ERSTELLEN'),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'Kein Account. Keine E-Mail. Nur Kryptografie.',
-            style: GoogleFonts.spaceGrotesk(fontSize: 12, color: kGray),
-          ),
-          const SizedBox(height: 16),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNameInput() {
-    return Padding(
-      padding: const EdgeInsets.all(32),
+      padding: const EdgeInsets.symmetric(horizontal: 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SizedBox(height: 40),
-          Text(
-            'Dein\nCodename.',
-            style: GoogleFonts.spaceGrotesk(
-              fontSize: 42,
-              fontWeight: FontWeight.w800,
-              color: kWhite,
-              letterSpacing: -1.5,
-              height: 1.1,
+          const SizedBox(height: 48),
+
+          // Logo + Title
+          Center(
+            child: Column(
+              children: [
+                PulseRing(
+                  color: kCyan,
+                  size: 96,
+                  child: const Icon(Icons.shield_outlined, color: kCyan, size: 32),
+                ),
+                const SizedBox(height: 28),
+                GlitchText(
+                  text: 'PHANTOM',
+                  style: GoogleFonts.orbitron(
+                    fontSize: 46,
+                    fontWeight: FontWeight.w900,
+                    color: kWhite,
+                    letterSpacing: 6,
+                    shadows: [
+                      Shadow(color: kCyan.withOpacity(0.8), blurRadius: 20),
+                      Shadow(color: kCyan.withOpacity(0.3), blurRadius: 40),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'DECENTRALIZED ENCRYPTED MESSENGER',
+                  style: GoogleFonts.spaceMono(
+                    fontSize: 9,
+                    color: kCyan,
+                    letterSpacing: 2,
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 12),
-          Text(
-            'Wird lokal gespeichert — niemals übertragen.',
-            style: GoogleFonts.spaceGrotesk(fontSize: 14, color: kGray),
-          ),
-          const SizedBox(height: 40),
-          TextField(
-            controller: _nameCtrl,
-            autofocus: true,
-            style: GoogleFonts.spaceGrotesk(color: kWhite, fontSize: 16),
-            decoration: const InputDecoration(
-              hintText: 'z.B. Ghost, Cipher, Nexus...',
-              prefixIcon: Icon(Icons.person_outline, color: kNeon, size: 20),
+
+          const SizedBox(height: 36),
+
+          // Boot sequence
+          CyberCard(
+            borderColor: kCyan,
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final line in _bootLines)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 3),
+                    child: Text(
+                      line,
+                      style: GoogleFonts.spaceMono(
+                        fontSize: 11,
+                        color: line.contains('OK')
+                            ? kGreen
+                            : line.contains('ONLINE')
+                                ? kCyan
+                                : kGrayText,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                if (!_bootDone)
+                  Row(
+                    children: [
+                      Text('> ', style: GoogleFonts.spaceMono(fontSize: 11, color: kCyan)),
+                      const BlinkCursor(),
+                    ],
+                  ),
+              ],
             ),
-            onSubmitted: (_) => _generateIdentity(),
           ),
+
           const Spacer(),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _generateIdentity,
-              child: const Text('SCHLÜSSEL GENERIEREN'),
-            ),
+
+          // Feature pills
+          Row(
+            children: [
+              _Pill(label: 'X25519', color: kCyan),
+              const SizedBox(width: 8),
+              _Pill(label: 'ChaCha20', color: kCyan),
+              const SizedBox(width: 8),
+              _Pill(label: 'ZERO-LOG', color: kMagenta),
+              const SizedBox(width: 8),
+              _Pill(label: 'NO-SERVER', color: kMagenta),
+            ],
           ),
+
+          const SizedBox(height: 24),
+
+          // CTA
+          _CyberButton(
+            label: 'INITIALIZE IDENTITY',
+            onTap: _bootDone ? () => _stepTo(1) : null,
+            width: double.infinity,
+          ),
+
           const SizedBox(height: 12),
           Center(
-            child: TextButton(
-              onPressed: () {
-                _fadeCtrl.reset();
-                setState(() => _step = 0);
-                _fadeCtrl.forward();
-              },
-              child: Text(
-                'Zurück',
-                style: GoogleFonts.spaceGrotesk(color: kGray),
-              ),
+            child: Text(
+              'NO ACCOUNT · NO EMAIL · CRYPTOGRAPHY ONLY',
+              style: GoogleFonts.spaceMono(fontSize: 9, color: kGrayText, letterSpacing: 1.5),
             ),
           ),
+          const SizedBox(height: 24),
         ],
       ),
     );
   }
 
-  Widget _buildGenerating() {
-    return const Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          _GeneratingIndicator(),
-          SizedBox(height: 24),
-          Text(
-            'Generiere kryptografische\nSchlüssel...',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: kWhiteDim, fontSize: 16, height: 1.5),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDone() {
-    final identity = _identity!;
-    final shortId = identity.id.substring(0, 16);
-
+  // ── STEP 1: Name input ───────────────────────────────────────────────────────
+  Widget _buildNameInput() {
     return Padding(
-      padding: const EdgeInsets.all(32),
+      padding: const EdgeInsets.symmetric(horizontal: 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SizedBox(height: 40),
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: kNeonDim,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(Icons.check, color: kNeon, size: 20),
-              ),
-              const SizedBox(width: 12),
-              Text(
-                'Schlüssel generiert',
-                style: GoogleFonts.spaceGrotesk(
-                  color: kNeon,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 52),
+
           Text(
-            'Willkommen,\n${identity.nickname}.',
-            style: GoogleFonts.spaceGrotesk(
-              fontSize: 38,
-              fontWeight: FontWeight.w800,
+            '> ASSIGN\nCODENAME',
+            style: GoogleFonts.orbitron(
+              fontSize: 36,
+              fontWeight: FontWeight.w900,
               color: kWhite,
+              letterSpacing: 2,
               height: 1.1,
-              letterSpacing: -1,
+              shadows: [Shadow(color: kCyan.withOpacity(0.5), blurRadius: 16)],
             ),
           ),
-          const SizedBox(height: 32),
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: kBgCard,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: kNeonDim),
-            ),
+          const SizedBox(height: 6),
+          Text(
+            '// STORED LOCALLY — NEVER TRANSMITTED',
+            style: GoogleFonts.spaceMono(fontSize: 10, color: kGrayText),
+          ),
+          const SizedBox(height: 40),
+
+          // Input inside CyberCard frame
+          CyberCard(
+            borderColor: kCyan,
+            glow: true,
+            padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'DEINE PHANTOM ID',
-                  style: GoogleFonts.spaceGrotesk(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    color: kNeon,
-                    letterSpacing: 1.5,
-                  ),
+                  'CODENAME_INPUT:',
+                  style: GoogleFonts.spaceMono(fontSize: 10, color: kCyan, letterSpacing: 1),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _nameCtrl,
+                  autofocus: true,
+                  style: GoogleFonts.orbitron(color: kWhite, fontSize: 18, letterSpacing: 2),
+                  decoration: InputDecoration(
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    hintText: 'GHOST · CIPHER · NEXUS',
+                    hintStyle: GoogleFonts.orbitron(fontSize: 14, color: kGray, letterSpacing: 2),
+                    filled: false,
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                  onSubmitted: (_) => _generateIdentity(),
+                ),
+              ],
+            ),
+          ),
+
+          const Spacer(),
+
+          _CyberButton(
+            label: 'GENERATE KEYS',
+            onTap: _generateIdentity,
+            width: double.infinity,
+            color: kCyan,
+          ),
+          const SizedBox(height: 10),
+          _CyberButton(
+            label: '← BACK',
+            onTap: () => _stepTo(0),
+            width: double.infinity,
+            color: kGrayText,
+          ),
+          const SizedBox(height: 24),
+        ],
+      ),
+    );
+  }
+
+  // ── STEP 2: Generating ───────────────────────────────────────────────────────
+  Widget _buildGenerating() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(40),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            PulseRing(
+              color: kMagenta,
+              size: 100,
+              child: const Icon(Icons.lock_open_outlined, color: kMagenta, size: 32),
+            ),
+            const SizedBox(height: 32),
+            Text(
+              'GENERATING\nCRYPTOGRAPHIC\nKEYS',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.orbitron(
+                fontSize: 22,
+                fontWeight: FontWeight.w900,
+                color: kWhite,
+                letterSpacing: 3,
+                height: 1.3,
+                shadows: [Shadow(color: kMagenta.withOpacity(0.6), blurRadius: 20)],
+              ),
+            ),
+            const SizedBox(height: 24),
+            const _ScrambleBar(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── STEP 3: Done ─────────────────────────────────────────────────────────────
+  Widget _buildDone() {
+    final identity = _identity!;
+    final shortId = identity.id.substring(0, 16);
+    final formatted = '${shortId.substring(0,4)} ${shortId.substring(4,8)} ${shortId.substring(8,12)} ${shortId.substring(12,16)}';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 28),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 48),
+
+          // Status badge
+          Row(
+            children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: const BoxDecoration(
+                  color: kGreen,
+                  shape: BoxShape.circle,
+                  boxShadow: [BoxShadow(color: kGreen, blurRadius: 8)],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                'IDENTITY CREATED',
+                style: GoogleFonts.spaceMono(
+                  fontSize: 11,
+                  color: kGreen,
+                  letterSpacing: 2,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+
+          GlitchText(
+            text: 'WELCOME,\n${identity.nickname.toUpperCase()}.',
+            interval: const Duration(milliseconds: 120),
+            style: GoogleFonts.orbitron(
+              fontSize: 34,
+              fontWeight: FontWeight.w900,
+              color: kWhite,
+              height: 1.1,
+              letterSpacing: 2,
+              shadows: [Shadow(color: kCyan.withOpacity(0.4), blurRadius: 12)],
+            ),
+          ),
+
+          const SizedBox(height: 32),
+
+          CyberCard(
+            borderColor: kCyan,
+            glow: true,
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.fingerprint, color: kCyan, size: 14),
+                    const SizedBox(width: 8),
+                    Text(
+                      'PHANTOM_ID //',
+                      style: GoogleFonts.spaceMono(
+                        fontSize: 10,
+                        color: kCyan,
+                        letterSpacing: 2,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
                 Text(
-                  '${shortId.substring(0, 4)} ${shortId.substring(4, 8)} ${shortId.substring(8, 12)} ${shortId.substring(12, 16)}',
-                  style: GoogleFonts.spaceMono(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
+                  formatted,
+                  style: GoogleFonts.orbitron(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
                     color: kWhite,
-                    letterSpacing: 2,
+                    letterSpacing: 3,
+                    shadows: [Shadow(color: kCyan.withOpacity(0.6), blurRadius: 12)],
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 14),
                 Row(
                   children: [
                     Expanded(
                       child: Text(
-                        'Teile deine Phantom ID mit Kontakten, um verschlüsselt zu kommunizieren.',
-                        style: GoogleFonts.spaceGrotesk(
-                          fontSize: 12,
-                          color: kGray,
-                          height: 1.5,
-                        ),
+                        'Share your Phantom ID to receive encrypted messages. Only contacts with your ID can reach you.',
+                        style: GoogleFonts.spaceGrotesk(fontSize: 12, color: kGrayText, height: 1.5),
                       ),
                     ),
-                    IconButton(
-                      onPressed: () {
-                        Clipboard.setData(
-                          ClipboardData(text: identity.phantomId),
-                        );
+                    const SizedBox(width: 12),
+                    GestureDetector(
+                      onTap: () {
+                        Clipboard.setData(ClipboardData(text: identity.phantomId));
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Phantom ID kopiert'),
-                            backgroundColor: kBgCard,
-                          ),
+                          const SnackBar(content: Text('> PHANTOM ID COPIED')),
                         );
                       },
-                      icon: const Icon(Icons.copy_outlined, color: kNeon, size: 18),
+                      child: CyberCard(
+                        borderColor: kCyan,
+                        bgColor: kCyanDim,
+                        padding: const EdgeInsets.all(10),
+                        cut: 6,
+                        child: const Icon(Icons.copy_all_outlined, color: kCyan, size: 18),
+                      ),
                     ),
                   ],
                 ),
               ],
             ),
           ),
-          const Spacer(),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1A0D00),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFF3D2000)),
-            ),
+
+          const SizedBox(height: 16),
+
+          // Warning
+          CyberCard(
+            borderColor: kMagenta,
+            padding: const EdgeInsets.all(14),
+            cut: 8,
             child: Row(
               children: [
-                const Icon(Icons.warning_amber_outlined, color: Color(0xFFFFAA00), size: 18),
+                const Icon(Icons.warning_amber_rounded, color: kMagenta, size: 16),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    'Schlüssel sind nur auf diesem Gerät gespeichert. Backup-Funktion folgt in v2.',
-                    style: GoogleFonts.spaceGrotesk(
-                      fontSize: 12,
-                      color: const Color(0xFFFFAA00),
+                    '! KEYS EXIST ONLY ON THIS DEVICE. NO CLOUD BACKUP.',
+                    style: GoogleFonts.spaceMono(
+                      fontSize: 10,
+                      color: kMagenta,
+                      letterSpacing: 0.5,
                       height: 1.4,
                     ),
                   ),
@@ -384,145 +512,158 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               ],
             ),
           ),
-          const SizedBox(height: 20),
-          SizedBox(
+
+          const Spacer(),
+
+          _CyberButton(
+            label: '[ ENTER PHANTOM ]',
+            onTap: _finish,
             width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _finish,
-              child: const Text('LOS GEHT\'S'),
-            ),
+            color: kCyan,
+            glow: true,
           ),
+          const SizedBox(height: 24),
         ],
       ),
     );
   }
 }
 
-class _PhantomLogo extends StatelessWidget {
-  final int glitchFrame;
-  const _PhantomLogo({required this.glitchFrame});
+// ── Shared Widgets ────────────────────────────────────────────────────────────
 
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        Container(
-          width: 100,
-          height: 100,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: kNeonDim,
-            border: Border.all(color: kNeon, width: 1.5),
-            boxShadow: [
-              BoxShadow(
-                color: kNeon.withOpacity(0.3),
-                blurRadius: 30,
-                spreadRadius: 5,
-              ),
-            ],
-          ),
-        ),
-        Transform.translate(
-          offset: Offset(
-            (glitchFrame % 3 == 0) ? 2.0 : 0,
-            0,
-          ),
-          child: Icon(
-            Icons.shield_outlined,
-            size: 44,
-            color: kNeon.withOpacity(glitchFrame % 5 == 0 ? 0.5 : 1.0),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _NeonDivider extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: Container(
-            height: 1,
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Colors.transparent, kNeonDim, Colors.transparent],
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _FeaturePill extends StatelessWidget {
-  final IconData icon;
+class _Pill extends StatelessWidget {
   final String label;
-  const _FeaturePill({required this.icon, required this.label});
+  final Color color;
+  const _Pill({required this.label, required this.color});
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-        decoration: BoxDecoration(
-          color: kBgCard,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFF1E2733)),
-        ),
-        child: Column(
-          children: [
-            Icon(icon, size: 16, color: kNeon),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: GoogleFonts.spaceMono(fontSize: 9, color: kGray),
-            ),
-          ],
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        border: Border.all(color: color.withOpacity(0.4)),
+        color: color.withOpacity(0.06),
+      ),
+      child: Text(
+        label,
+        style: GoogleFonts.spaceMono(
+          fontSize: 9,
+          color: color,
+          letterSpacing: 1,
         ),
       ),
     );
   }
 }
 
-class _GeneratingIndicator extends StatefulWidget {
-  const _GeneratingIndicator();
+class _CyberButton extends StatelessWidget {
+  final String label;
+  final VoidCallback? onTap;
+  final double? width;
+  final Color color;
+  final bool glow;
+
+  const _CyberButton({
+    required this.label,
+    required this.onTap,
+    this.width,
+    this.color = kCyan,
+    this.glow = false,
+  });
 
   @override
-  State<_GeneratingIndicator> createState() => _GeneratingIndicatorState();
+  Widget build(BuildContext context) {
+    final active = onTap != null;
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: width,
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+        decoration: BoxDecoration(
+          border: Border.all(color: active ? color : kGray, width: 1.5),
+          color: active ? color.withOpacity(0.07) : Colors.transparent,
+          boxShadow: (active && glow)
+              ? [
+                  BoxShadow(color: color.withOpacity(0.3), blurRadius: 16, spreadRadius: 0),
+                  BoxShadow(color: color.withOpacity(0.1), blurRadius: 32, spreadRadius: 4),
+                ]
+              : null,
+        ),
+        child: Center(
+          child: Text(
+            label,
+            style: GoogleFonts.orbitron(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: active ? color : kGray,
+              letterSpacing: 2,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
-class _GeneratingIndicatorState extends State<_GeneratingIndicator>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
+class _ScrambleBar extends StatefulWidget {
+  const _ScrambleBar();
+
+  @override
+  State<_ScrambleBar> createState() => _ScrambleBarState();
+}
+
+class _ScrambleBarState extends State<_ScrambleBar> {
+  final _rng = Random();
+  String _hex = '0' * 32;
+  Timer? _timer;
+  double _progress = 0;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 1))
-      ..repeat();
+    _timer = Timer.periodic(const Duration(milliseconds: 60), (_) {
+      if (!mounted) return;
+      setState(() {
+        _progress = (_progress + 0.04).clamp(0, 1);
+        _hex = List.generate(
+          32,
+          (_) => '0123456789ABCDEF'[_rng.nextInt(16)],
+        ).join();
+      });
+    });
   }
 
   @override
   void dispose() {
-    _ctrl.dispose();
+    _timer?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 60,
-      height: 60,
-      child: CircularProgressIndicator(
-        strokeWidth: 2,
-        color: kNeon,
-        backgroundColor: kNeonDim,
-      ),
+    return Column(
+      children: [
+        Text(
+          _hex,
+          style: GoogleFonts.spaceMono(fontSize: 12, color: kCyan.withOpacity(0.6), letterSpacing: 2),
+        ),
+        const SizedBox(height: 16),
+        Container(
+          width: 200,
+          height: 2,
+          color: kGray,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 60),
+              width: 200 * _progress,
+              height: 2,
+              color: kCyan,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

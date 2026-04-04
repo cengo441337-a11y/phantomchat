@@ -5,6 +5,8 @@ import '../models/contact.dart';
 import '../models/identity.dart';
 import '../services/storage_service.dart';
 import '../theme.dart';
+import '../widgets/glitch_text.dart';
+import '../widgets/cyber_card.dart';
 import 'chat.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -42,84 +44,81 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: kBgCard,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
       builder: (ctx) => Padding(
         padding: EdgeInsets.only(
           left: 24, right: 24, top: 24,
-          bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
+          bottom: MediaQuery.of(ctx).viewInsets.bottom + 32,
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: kGray,
-                  borderRadius: BorderRadius.circular(2),
+            Container(height: 1, color: kCyan.withOpacity(0.4)),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Container(width: 3, height: 22, color: kCyan),
+                const SizedBox(width: 12),
+                Text(
+                  'ADD_CONTACT //',
+                  style: GoogleFonts.orbitron(
+                    fontSize: 16, fontWeight: FontWeight.w700,
+                    color: kWhite, letterSpacing: 1.5,
+                    shadows: [Shadow(color: kCyan.withOpacity(0.5), blurRadius: 10)],
+                  ),
                 ),
-              ),
+              ],
             ),
-            const SizedBox(height: 20),
-            Text(
-              'Kontakt hinzufügen',
-              style: GoogleFonts.spaceGrotesk(
-                fontSize: 22,
-                fontWeight: FontWeight.w700,
-                color: kWhite,
-              ),
-            ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 24),
+            Text('NICKNAME:', style: GoogleFonts.spaceMono(fontSize: 10, color: kCyan, letterSpacing: 1)),
+            const SizedBox(height: 8),
             TextField(
               controller: nameCtrl,
-              style: GoogleFonts.spaceGrotesk(color: kWhite),
-              decoration: const InputDecoration(
-                hintText: 'Spitzname',
-                prefixIcon: Icon(Icons.person_outline, color: kNeon, size: 18),
-              ),
+              style: GoogleFonts.spaceMono(color: kWhite, fontSize: 14),
+              decoration: const InputDecoration(hintText: 'ghost · cipher · zero'),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
+            Text('PHANTOM_ID:', style: GoogleFonts.spaceMono(fontSize: 10, color: kCyan, letterSpacing: 1)),
+            const SizedBox(height: 8),
             TextField(
               controller: ctrl,
-              style: GoogleFonts.spaceMono(color: kWhite, fontSize: 12),
+              style: GoogleFonts.spaceMono(color: kCyan, fontSize: 11),
               maxLines: 3,
-              decoration: const InputDecoration(
-                hintText: 'Phantom ID (phantom:...)',
-                prefixIcon: Padding(
-                  padding: EdgeInsets.only(top: 14),
-                  child: Icon(Icons.key_outlined, color: kNeon, size: 18),
-                ),
-                alignLabelWithHint: true,
-              ),
+              decoration: const InputDecoration(hintText: 'phantom:eyJ...'),
             ),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () async {
-                  final contact = PhantomContact.fromPhantomId(
-                    ctrl.text.trim(),
-                    nameCtrl.text.trim().isEmpty ? 'Unbekannt' : nameCtrl.text.trim(),
+            const SizedBox(height: 24),
+            GestureDetector(
+              onTap: () async {
+                final contact = PhantomContact.fromPhantomId(
+                  ctrl.text.trim(),
+                  nameCtrl.text.trim().isEmpty ? 'UNKNOWN' : nameCtrl.text.trim().toUpperCase(),
+                );
+                if (contact == null) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('! INVALID PHANTOM ID')),
                   );
-                  if (contact == null) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Ungültige Phantom ID'),
-                        backgroundColor: kRed,
-                      ),
-                    );
-                    return;
-                  }
-                  _contacts.add(contact);
-                  await StorageService.saveContacts(_contacts);
-                  setState(() {});
-                  if (ctx.mounted) Navigator.pop(ctx);
-                },
-                child: const Text('HINZUFÜGEN'),
+                  return;
+                }
+                _contacts.add(contact);
+                await StorageService.saveContacts(_contacts);
+                setState(() {});
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                decoration: BoxDecoration(
+                  border: Border.all(color: kCyan, width: 1.5),
+                  color: kCyan.withOpacity(0.08),
+                  boxShadow: neonGlow(kCyan, radius: 8),
+                ),
+                child: Center(
+                  child: Text(
+                    'CONFIRM ADD',
+                    style: GoogleFonts.orbitron(fontSize: 12, color: kCyan, letterSpacing: 2),
+                  ),
+                ),
               ),
             ),
           ],
@@ -133,88 +132,76 @@ class _HomeScreenState extends State<HomeScreen> {
     showModalBottomSheet(
       context: context,
       backgroundColor: kBgCard,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
       builder: (ctx) => Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: kGray,
-                borderRadius: BorderRadius.circular(2),
-              ),
+            Container(height: 1, color: kMagenta.withOpacity(0.5)),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Container(width: 3, height: 22, color: kMagenta),
+                const SizedBox(width: 12),
+                Text(
+                  'MY_PHANTOM_ID //',
+                  style: GoogleFonts.orbitron(
+                    fontSize: 14, fontWeight: FontWeight.w700,
+                    color: kWhite, letterSpacing: 1.5,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 24),
-            Container(
-              width: 64,
-              height: 64,
-              decoration: BoxDecoration(
-                color: kNeonDim,
-                shape: BoxShape.circle,
-                border: Border.all(color: kNeon),
-              ),
-              child: const Icon(Icons.shield_outlined, color: kNeon, size: 28),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              _identity!.nickname,
-              style: GoogleFonts.spaceGrotesk(
-                fontSize: 24,
-                fontWeight: FontWeight.w700,
-                color: kWhite,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'DEINE PHANTOM ID',
-              style: GoogleFonts.spaceGrotesk(
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                color: kNeon,
-                letterSpacing: 1.5,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Container(
+            const SizedBox(height: 20),
+            CyberCard(
+              borderColor: kMagenta,
+              glow: true,
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: kBgInput,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: kNeonDim),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _identity!.nickname.toUpperCase(),
+                    style: GoogleFonts.orbitron(
+                      fontSize: 20, fontWeight: FontWeight.w900,
+                      color: kWhite, letterSpacing: 2,
+                      shadows: [Shadow(color: kMagenta.withOpacity(0.5), blurRadius: 12)],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SelectableText(
+                    _identity!.phantomId,
+                    style: GoogleFonts.spaceMono(fontSize: 10, color: kMagenta, height: 1.6),
+                  ),
+                ],
               ),
-              child: SelectableText(
-                _identity!.phantomId,
-                style: GoogleFonts.spaceMono(
-                  fontSize: 10,
-                  color: kNeonText,
-                  height: 1.6,
+            ),
+            const SizedBox(height: 16),
+            GestureDetector(
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: _identity!.phantomId));
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('> PHANTOM ID COPIED TO CLIPBOARD')),
+                );
+              },
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                decoration: BoxDecoration(
+                  border: Border.all(color: kMagenta, width: 1.5),
+                  color: kMagenta.withOpacity(0.08),
+                ),
+                child: Center(
+                  child: Text(
+                    'COPY TO CLIPBOARD',
+                    style: GoogleFonts.orbitron(fontSize: 12, color: kMagenta, letterSpacing: 2),
+                  ),
                 ),
               ),
             ),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  Clipboard.setData(ClipboardData(text: _identity!.phantomId));
-                  Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Phantom ID kopiert'),
-                      backgroundColor: kBgCard,
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.copy_outlined, size: 16),
-                label: const Text('KOPIEREN'),
-              ),
-            ),
-            const SizedBox(height: 12),
           ],
         ),
       ),
@@ -225,54 +212,93 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: kBg,
-      appBar: AppBar(
-        backgroundColor: kBg,
-        title: Row(
-          children: [
-            Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: kNeonDim,
-                shape: BoxShape.circle,
-                border: Border.all(color: kNeon, width: 1),
+      body: GridBackground(
+        child: SafeArea(
+          child: Column(
+            children: [
+              _buildHeader(),
+              Container(height: 1, color: kCyan.withOpacity(0.12)),
+              Expanded(
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator(color: kCyan, strokeWidth: 1.5))
+                    : _contacts.isEmpty
+                        ? _buildEmpty()
+                        : _buildList(),
               ),
-              child: const Icon(Icons.shield_outlined, color: kNeon, size: 16),
-            ),
-            const SizedBox(width: 10),
-            Text(
-              'PHANTOM',
-              style: GoogleFonts.spaceGrotesk(
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-                color: kWhite,
-                letterSpacing: -0.5,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.qr_code_outlined, color: kWhiteDim),
-            onPressed: _showMyId,
-            tooltip: 'Meine Phantom ID',
+            ],
           ),
-        ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(height: 1, color: const Color(0xFF1A2030)),
         ),
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator(color: kNeon, strokeWidth: 2))
-          : _contacts.isEmpty
-              ? _buildEmpty()
-              : _buildList(),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _showAddContact,
-        backgroundColor: kNeon,
-        foregroundColor: kBg,
-        child: const Icon(Icons.add),
+      floatingActionButton: _CyberFab(onTap: _showAddContact),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      child: Row(
+        children: [
+          Container(
+            width: 36, height: 36,
+            decoration: BoxDecoration(
+              border: Border.all(color: kCyan.withOpacity(0.6), width: 1),
+              color: kCyanDim,
+              boxShadow: neonGlow(kCyan, radius: 8),
+            ),
+            child: const Icon(Icons.shield_outlined, color: kCyan, size: 18),
+          ),
+          const SizedBox(width: 12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              GlitchText(
+                text: 'PHANTOM',
+                interval: const Duration(milliseconds: 200),
+                style: GoogleFonts.orbitron(
+                  fontSize: 18, fontWeight: FontWeight.w900,
+                  color: kWhite, letterSpacing: 3,
+                  shadows: [Shadow(color: kCyan.withOpacity(0.5), blurRadius: 8)],
+                ),
+              ),
+              Row(
+                children: [
+                  Container(
+                    width: 6, height: 6,
+                    decoration: const BoxDecoration(
+                      color: kGreen, shape: BoxShape.circle,
+                      boxShadow: [BoxShadow(color: kGreen, blurRadius: 6)],
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  Text('SECURE · ONLINE', style: GoogleFonts.spaceMono(fontSize: 9, color: kGreen, letterSpacing: 1)),
+                ],
+              ),
+            ],
+          ),
+          const Spacer(),
+          if (_contacts.isNotEmpty)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                border: Border.all(color: kGrayText.withOpacity(0.3)),
+                color: kBgCard,
+              ),
+              child: Text('${_contacts.length} NODES',
+                style: GoogleFonts.spaceMono(fontSize: 9, color: kGrayText, letterSpacing: 1)),
+            ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: _showMyId,
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                border: Border.all(color: kGrayText.withOpacity(0.3)),
+                color: kBgCard,
+              ),
+              child: const Icon(Icons.fingerprint, color: kGrayText, size: 20),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -284,45 +310,43 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Container(
-              width: 80,
-              height: 80,
-              decoration: BoxDecoration(
-                color: kBgCard,
-                shape: BoxShape.circle,
-                border: Border.all(color: const Color(0xFF1E2733)),
+            CyberCard(
+              borderColor: kGray,
+              padding: const EdgeInsets.all(28),
+              cut: 20,
+              child: Column(
+                children: [
+                  const Icon(Icons.wifi_tethering_off, color: kGrayText, size: 40),
+                  const SizedBox(height: 16),
+                  Text(
+                    'NO NODES\nCONNECTED',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.orbitron(
+                      fontSize: 16, fontWeight: FontWeight.w700,
+                      color: kGrayText, letterSpacing: 2, height: 1.3,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Share your Phantom ID and\nadd contacts by theirs.',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.spaceMono(fontSize: 11, color: kGrayText.withOpacity(0.6), height: 1.5),
+                  ),
+                ],
               ),
-              child: const Icon(Icons.person_add_outlined, color: kGray, size: 32),
             ),
             const SizedBox(height: 24),
-            Text(
-              'Noch keine Kontakte',
-              style: GoogleFonts.spaceGrotesk(
-                fontSize: 20,
-                fontWeight: FontWeight.w700,
-                color: kWhite,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Teile deine Phantom ID und\nfüge Kontakte per ID hinzu.',
-              textAlign: TextAlign.center,
-              style: GoogleFonts.spaceGrotesk(
-                fontSize: 14,
-                color: kGray,
-                height: 1.5,
-              ),
-            ),
-            const SizedBox(height: 32),
-            OutlinedButton.icon(
-              onPressed: _showMyId,
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: kNeon),
-                foregroundColor: kNeon,
+            GestureDetector(
+              onTap: _showMyId,
+              child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: kMagenta.withOpacity(0.6), width: 1.5),
+                  color: kMagenta.withOpacity(0.06),
+                ),
+                child: Text('BROADCAST MY ID',
+                  style: GoogleFonts.orbitron(fontSize: 11, color: kMagenta, letterSpacing: 2)),
               ),
-              icon: const Icon(Icons.share_outlined, size: 16),
-              label: const Text('MEINE ID TEILEN'),
             ),
           ],
         ),
@@ -332,31 +356,22 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildList() {
     return ListView.builder(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.only(top: 4, bottom: 80),
       itemCount: _contacts.length,
-      itemBuilder: (ctx, i) {
-        final contact = _contacts[i];
-        return _ContactTile(
-          contact: contact,
-          onTap: () async {
-            await Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ChatScreen(
-                  contact: contact,
-                  identity: _identity!,
-                ),
-              ),
-            );
-            _load();
-          },
-          onDelete: () async {
-            _contacts.removeAt(i);
-            await StorageService.saveContacts(_contacts);
-            setState(() {});
-          },
-        );
-      },
+      itemBuilder: (ctx, i) => _ContactTile(
+        contact: _contacts[i],
+        onTap: () async {
+          await Navigator.push(
+            context,
+            PageRouteBuilder(
+              pageBuilder: (_, __, ___) => ChatScreen(contact: _contacts[i], identity: _identity!),
+              transitionDuration: const Duration(milliseconds: 300),
+              transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
+            ),
+          );
+          _load();
+        },
+      ),
     );
   }
 }
@@ -364,98 +379,96 @@ class _HomeScreenState extends State<HomeScreen> {
 class _ContactTile extends StatelessWidget {
   final PhantomContact contact;
   final VoidCallback onTap;
-  final VoidCallback onDelete;
-
-  const _ContactTile({
-    required this.contact,
-    required this.onTap,
-    required this.onDelete,
-  });
+  const _ContactTile({required this.contact, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final initials = contact.nickname.isNotEmpty
-        ? contact.nickname[0].toUpperCase()
-        : '?';
-
-    return InkWell(
+    return GestureDetector(
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: Color(0xFF0F1520))),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: kBgCard,
-                shape: BoxShape.circle,
-                border: Border.all(color: const Color(0xFF1E2733)),
-              ),
-              child: Center(
-                child: Text(
-                  initials,
-                  style: GoogleFonts.spaceGrotesk(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: kNeonText,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        child: CyberCard(
+          borderColor: kCyan.withOpacity(0.2),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              Container(
+                width: 44, height: 44,
+                decoration: BoxDecoration(
+                  border: Border.all(color: kCyan.withOpacity(0.4)),
+                  color: kCyanDim,
+                ),
+                child: Center(
+                  child: Text(
+                    contact.nickname[0],
+                    style: GoogleFonts.orbitron(
+                      fontSize: 18, fontWeight: FontWeight.w900,
+                      color: kCyan,
+                      shadows: [Shadow(color: kCyan.withOpacity(0.6), blurRadius: 8)],
+                    ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      contact.nickname.toUpperCase(),
+                      style: GoogleFonts.orbitron(fontSize: 13, fontWeight: FontWeight.w700, color: kWhite, letterSpacing: 1),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      contact.lastMessage ?? '// NO MESSAGES YET',
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.spaceMono(fontSize: 11, color: kGrayText),
+                    ),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text(
-                    contact.nickname,
-                    style: GoogleFonts.spaceGrotesk(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: kWhite,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    contact.lastMessage ?? 'Noch keine Nachrichten',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: GoogleFonts.spaceGrotesk(
-                      fontSize: 13,
-                      color: kGray,
-                    ),
-                  ),
+                  if (contact.lastMessageAt != null)
+                    Text(_fmt(contact.lastMessageAt!),
+                      style: GoogleFonts.spaceMono(fontSize: 10, color: kGrayText)),
+                  const SizedBox(height: 4),
+                  const Icon(Icons.lock_outline, size: 11, color: kGreen),
                 ],
               ),
-            ),
-            const SizedBox(width: 8),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                if (contact.lastMessageAt != null)
-                  Text(
-                    _formatTime(contact.lastMessageAt!),
-                    style: GoogleFonts.spaceGrotesk(fontSize: 11, color: kGray),
-                  ),
-                const SizedBox(height: 4),
-                const Icon(Icons.lock_outline, size: 12, color: kGray),
-              ],
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 
-  String _formatTime(DateTime dt) {
-    final now = DateTime.now();
-    final diff = now.difference(dt);
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m';
-    if (diff.inHours < 24) return '${diff.inHours}h';
+  String _fmt(DateTime dt) {
+    final d = DateTime.now().difference(dt);
+    if (d.inMinutes < 60) return '${d.inMinutes}m';
+    if (d.inHours < 24) return '${d.inHours}h';
     return '${dt.day}.${dt.month}';
+  }
+}
+
+class _CyberFab extends StatelessWidget {
+  final VoidCallback onTap;
+  const _CyberFab({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 56, height: 56,
+        decoration: BoxDecoration(
+          border: Border.all(color: kCyan, width: 1.5),
+          color: kCyanDim,
+          boxShadow: neonGlow(kCyan, radius: 12),
+        ),
+        child: const Icon(Icons.add, color: kCyan, size: 24),
+      ),
+    );
   }
 }
