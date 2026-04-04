@@ -1,0 +1,33 @@
+name: phantomchat
+description: PhantomChat — decentralized encrypted messenger
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cryptography: ^2.7.0
+  flutter_secure_storage: ^9.2.2
+  shared_preferences: ^2.3.2
+  provider: ^6.1.2
+  uuid: ^4.5.1
+  intl: ^0.20.2
+  google_fonts: ^6.2.1
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^6.0.4
+  local_auth: ^2.3.0
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
+
