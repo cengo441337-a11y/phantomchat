@@ -1,62 +1,133 @@
-# 🛡️ PhantomChat — Decentralized Privacy Messenger
+# PhantomChat — Decentralized Privacy Messenger
 
-![Branding](https://img.shields.io/badge/Status-Functional-brightgreen)
+![Status](https://img.shields.io/badge/Status-Functional-brightgreen)
 ![License](https://img.shields.io/badge/License-MIT-blue)
-![Architecture](https://img.shields.io/badge/Architecture-P2P%20%2F%20Decentralized-orange)
-![Security](https://img.shields.io/badge/Security-Double%20Ratchet-red)
+![Architecture](https://img.shields.io/badge/Architecture-P2P_%2F_Nostr-orange)
+![Security](https://img.shields.io/badge/Crypto-XChaCha20--Poly1305_%2B_X25519-red)
+![PQ](https://img.shields.io/badge/PQ--Ready-ML--KEM--1024-blueviolet)
 
-**PhantomChat** is a decentralized, end-to-end encrypted messaging bridge designed for maximum privacy and resilience. It implements a robust cryptographic stack including a functional **Double Ratchet** protocol for perfect forward secrecy.
-
----
-
-## 🚀 Key Features
-
-- **🔐 End-to-End Encryption**: Powered by **XChaCha20-Poly1305** and **X25519** key exchange.
-- **🛡️ Double Ratchet Protocol**: Perfect forward secrecy through continuous key updates for every message.
-- **👻 Decentralized Identity**: No central server, no registration, no metadata logging.
-- **⚙️ Rust Core**: High-performance, memory-safe cryptographic implementation.
+**PhantomChat** ist ein dezentraler, Ende-zu-Ende-verschlüsselter Messenger
+mit modularem Privacy-System — entwickelt als Sicherheitsforschungsprojekt
+von **DC INFOSEC**.
 
 ---
 
-## 🛠️ Technical Stack
+## Features
 
-- **Core**: Rust 1.75+
-- **Cryptography**: `x25519-dalek`, `chacha20poly1305`, `sha2`
-- **Networking**: P2P Simulation (Nostr Relay Support in dev)
-- **Serialization**: `serde`, `serde_json`
+| Feature | Status |
+|---------|--------|
+| XChaCha20-Poly1305 AEAD | ✓ |
+| X25519 Ephemeral ECDH | ✓ |
+| HKDF-SHA256 Schlüsselableitung | ✓ |
+| HMAC Stealth-Tags (Monero-Modell) | ✓ |
+| ViewKey-basierter Envelope-Scanner | ✓ |
+| Hashcash Proof-of-Work (Spam-Schutz) | ✓ |
+| libp2p GossipSub P2P Mesh | ✓ |
+| Dandelion++ Routing (IP-Anonymität) | ✓ |
+| Nostr Relay Transport (NIP-01/NIP-59) | ✓ |
+| SOCKS5 Proxy (Tor / Nym) | ✓ |
+| Cover Traffic (Light + Aggressive) | ✓ |
+| Daily Use / Maximum Stealth Mode | ✓ |
+| Post-Quantum Hybrid PQXDH (ML-KEM-1024 + X25519) | ✓ |
+| Flutter Mobile App (Android / iOS) | ✓ |
+| Cyberpunk CLI | ✓ |
+| SQLCipher lokale Verschlüsselung | ✓ |
+| Panic Wipe | ✓ |
 
 ---
 
-## 📖 Setup & Usage (CLI)
+## Architektur
 
-### 🔑 Keygen
-Generate your cryptographic identity:
-```bash
-cargo run --package phantomchat_cli -- keygen --out keys.json
+```
+┌─────────────────────────────────────────────────────┐
+│                  Flutter Mobile App                  │
+│         (Cyberpunk UI · Privacy Settings)            │
+└──────────────────────┬──────────────────────────────┘
+                       │ flutter_rust_bridge
+┌──────────────────────▼──────────────────────────────┐
+│              phantomchat_core  (Rust)                │
+│  Envelope · Keys · Scanner · Dandelion++ · PoW      │
+│  Privacy Modes · Cover Traffic · SQLCipher          │
+└──────────┬───────────────────────┬──────────────────┘
+           │                       │
+┌──────────▼──────────┐  ┌─────────▼─────────────────┐
+│    libp2p GossipSub  │  │   phantomchat_relays       │
+│    + Dandelion++     │  │   NostrRelay (TLS)         │
+│    (DailyUse)        │  │   StealthNostrRelay (Tor)  │
+└─────────────────────┘  └───────────────────────────┘
 ```
 
-### 📡 Listen
-Start listening for messages:
+### Privacy Modes
+
+**Daily Use** — libp2p + Dandelion++ + Nostr/TLS + Light Cover Traffic (30–180 s)
+
+**Maximum Stealth** — Relay-only, alle Verbindungen über SOCKS5 (Tor/Nym) + Aggressiver Cover Traffic (5–15 s)
+
+---
+
+## CLI
+
 ```bash
-cargo run --package phantomchat_cli -- listen --file keys.json
+# Keypair generieren
+cargo run -p phantomchat_cli -- keygen
+
+# Pairing-QR anzeigen
+cargo run -p phantomchat_cli -- pair
+
+# Privacy Mode setzen
+cargo run -p phantomchat_cli -- mode stealth --proxy 127.0.0.1:9050
+cargo run -p phantomchat_cli -- mode daily
+
+# Nachricht senden
+cargo run -p phantomchat_cli -- send -r <SPEND_PUB_HEX> -m "ghost protocol"
+
+# Lauschen (alle Envelopes scannen, eigene öffnen)
+cargo run -p phantomchat_cli -- listen
+
+# Relay Health-Check
+cargo run -p phantomchat_cli -- relay -u wss://relay.damus.io
+
+# Node Status
+cargo run -p phantomchat_cli -- status
 ```
 
-### ✉️ Send
-Send a message securely:
-```bash
-cargo run --package phantomchat_cli -- send --file keys.json --recipient-spend-pub <HEX_PUBKEY> --message "Hello from the shadows"
+---
+
+## Workspace
+
+```
+phantomchat/
+├── core/          Rust-Kernbibliothek (Krypto, Netzwerk, Privacy)
+│   └── src/
+│       ├── envelope.rs      Envelope-Format + Krypto
+│       ├── keys.rs          Identity/View/Spend/PQXDH-Keys
+│       ├── scanner.rs       ViewKey-basierter Envelope-Scanner
+│       ├── dandelion.rs     Dandelion++ Router
+│       ├── cover_traffic.rs Cover Traffic Generator
+│       ├── privacy.rs       PrivacyMode + Config
+│       ├── network.rs       libp2p GossipSub
+│       ├── pow.rs           Hashcash PoW
+│       └── api.rs           Flutter-Bridge API
+├── relays/        Nostr Relay Adapter
+│   └── src/
+│       ├── lib.rs           BridgeProvider Trait + Factory
+│       └── nostr.rs         NIP-01 Event-Typen
+├── cli/           Cyberpunk Terminal Interface
+├── mobile/        Flutter App (Android/iOS)
+├── docs/          SECURITY.md · PRIVACY.md
+├── spec/          SPEC.md Protokollspezifikation
+└── infra/         docker-compose.yml (Relay-Infrastruktur)
 ```
 
 ---
 
-## 🛡️ Security Disclaimer
-*This project is a cryptographic demonstration for educational and portfolio purposes. While it implements real Double Ratchet mechanisms, it has not been audited by a professional security firm.*
+## Security
+
+Siehe [docs/SECURITY.md](docs/SECURITY.md) und [docs/PRIVACY.md](docs/PRIVACY.md).
+
+> Dieses Projekt ist ein Forschungs- und Portfolio-Projekt von DC INFOSEC.
+> Vor einem produktiven Einsatz ist ein externer kryptografischer Audit erforderlich.
 
 ---
 
-## 🇩🇪 Deutsch: Kurzbeschreibung
-PhantomChat ist ein dezentraler Messenger mit Fokus auf maximale Anonymität. Er nutzt das Double-Ratchet-Verfahren für Forward Secrecy und basiert auf dem performanten Rust-Stack. **Entwickelt von DC INFOSEC.**
-
----
-
-© 2026 **DC INFOSEC** | [N0L3X GitHub](https://github.com/N0L3X)
+© 2026 **DC INFOSEC** · [github.com/N0L3X](https://github.com/N0L3X)

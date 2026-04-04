@@ -1,52 +1,97 @@
 # PRIVACY.md
 
 PhantomChat ist so konzipiert, dass möglichst wenige Metadaten preisgegeben
-werden.  Dieser Leitfaden erläutert die Datenschutzprinzipien des
-Projekts.
+werden. Dieser Leitfaden erläutert die Datenschutzprinzipien und beschreibt
+das **modulare Privacy-System** der aktuellen Implementierung.
+
+---
+
+## Privacy Modes
+
+PhantomChat bietet zwei operative Modi — wählbar per App-Toggle oder CLI:
+
+### Daily Use (Standard)
+
+```
+libp2p ──► Dandelion++ ──► GossipSub Mesh
+                │
+Nostr Relays ──► TLS WebSocket
+                │
+Cover Traffic ──► 30–180 s Zufallsintervall
+```
+
+- IP gegenüber direkten Peers verschleiert durch Dandelion++-Routing
+- Nostr-Relays sehen ausgehende TLS-Verbindungen, aber keinen Klartext
+- Leichter Cover Traffic verhindert einfache Timing-Korrelation
+- Niedriger Akkuverbrauch, geringe Latenz
+
+### Maximum Stealth
+
+```
+App ──► SOCKS5 (Tor | Nym) ──► Nostr Relay ──► WebSocket
+         ▲
+         libp2p: DEAKTIVIERT
+         Cover Traffic: 5–15 s (aggressiv)
+```
+
+- libp2p vollständig abgeschaltet — kein direktes Peer-Exposure
+- Alle Relay-Verbindungen exklusiv über SOCKS5-Proxy (Tor/Nym)
+- Das Relay sieht ausschließlich die Exit-IP des Anonymisierungsnetzes
+- Schützt gegen globale passive Angreifer (Traffic-Korrelation, NSA-Level)
+- Nutzer akzeptiert bewusst höheren Akkuverbrauch und Latenz
+
+---
 
 ## Keine zentralen Identitäten
 
-* Es gibt keine globalen Benutzernamen oder Telefonnummern.  Kontakte
-  werden ausschließlich über View‑ und Spend‑Schlüssel identifiziert.
-* Beim Pairing werden lediglich öffentliche Schlüssel und ein
-  Fingerprint ausgetauscht; es erfolgt keine Synchronisation über einen
-  zentralen Server.
+- Keine Benutzernamen, keine Telefonnummern, keine Account-Registrierung
+- Kontakte werden ausschließlich über View- und Spend-Schlüssel (X25519) identifiziert
+- Pairing erfolgt Out-of-Band (QR-Code) — kein Verzeichnisserver
+
+## Stealth-Tags (Empfänger-Anonymität)
+
+Jedes Envelope enthält ein **HMAC-SHA256-Tag** das mit einem ephemeren
+ECDH-Shared-Secret berechnet wird:
+
+```
+EPK ──► ECDH(recipient_spend_pub) ──► HKDF ──► tag_key
+tag = HMAC-SHA256(tag_key, msg_id)
+```
+
+Relays sehen nur zufällige 32-Byte-Tags — kein Empfänger ableitbar.
+Nur der Inhaber des passenden Spend-Keys kann das Tag reproduzieren.
+
+## Dandelion++ (Sender-Anonymität im P2P-Netz)
+
+```
+Origin ──► [Stem: 1 Peer] ──► [Stem: 1 Peer] ──► [FLUFF: Broadcast]
+                                       ↑
+                              10 % Übergangswahrscheinlichkeit pro Hop
+                              Stem-Peer rotiert alle 10 Minuten
+```
+
+Ein Beobachter sieht nur den Fluff-Phase-Broadcaster, der mehrere Hops
+vom wahren Ursprung entfernt ist.
+
+## Cover Traffic
+
+Periodische Dummy-Envelopes aus CSPRNG-Daten sind auf dem Wire
+kryptografisch ununterscheidbar von echten Envelopes. Empfänger verwerfen
+sie beim HMAC-Scan stillschweigend. Dummies maskieren reale Traffic-Muster
+gegen Timing-Analysen.
 
 ## Keine Telemetrie
 
-* PhantomChat sammelt keinerlei Diagnosedaten, Nutzungsstatistiken oder
-  Telemetrie.  Alle Logs verbleiben lokal auf dem Gerät und können vom
-  Benutzer gelöscht werden.
-* Es existiert keine Kontakt‑Upload‑Funktion; Kontakte werden lokal
-  verwaltet und nicht an den Entwickler übertragen.
-
-## Minimale Relaysichtbarkeit
-
-* Durch die Stealth‑Tags erkennen Relays nicht, wer der Empfänger einer
-  Nachricht ist.  Tags sind zufällige HMAC‑Werte, die nur vom
-  Empfänger rekonstruiert werden können.
-* Relays sehen lediglich, dass ein Envelope veröffentlicht wird, aber
-  nicht, was dessen Inhalt ist (dank AEAD) und für wen es bestimmt ist.
+PhantomChat sammelt keinerlei Diagnosedaten, Nutzungsstatistiken oder
+Telemetrie. Alle Logs verbleiben lokal.
 
 ## Lokale Datenspeicherung
 
-* Schlüssel und Nachrichten werden lokal verschlüsselt gespeichert.  Auf
-  Android erfolgt die Verschlüsselung mit Jetpack Security (AES‑GCM) und
-  SQLCipher/Room.  Beim CLI‑Client wird ein passwortgeschützter
-  SecretStore verwendet.
-* Keine Schlüssel werden im Klartext auf der Festplatte abgelegt.
-
-## Optionaler Mixnet‑Layer
-
-* Für Nutzer mit erhöhten Anonymitätsanforderungen kann der Datenverkehr
-  optional über ein Mixnet wie Nym oder das Tor‑Netzwerk geleitet
-  werden.  Dadurch wird auch die Netzwerkmetadatenebene weiter
-  verschleiert.
+Schlüssel und Nachrichten werden mit SQLCipher (AES-256) verschlüsselt
+gespeichert. Kein Schlüsselmaterial liegt im Klartext auf dem Gerät.
 
 ## Hinweis zur Implementierung
 
-Die in diesem Repository enthaltene Referenzimplementierung ist
-unvollständig und ersetzt nicht die Beratung durch erfahrene
-Kryptograph*innen.  Alle kryptographischen Platzhalter müssen durch
-geprüfte Bibliotheken ersetzt werden, bevor PhantomChat produktiv
-eingesetzt wird.
+Diese Referenzimplementierung ist ein Forschungs- und Portfolio-Projekt.
+Vor einem produktiven Einsatz sind externe kryptografische Audits
+erforderlich.

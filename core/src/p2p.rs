@@ -1,3 +1,6 @@
+// DEPRECATED — superseded by network.rs (Dandelion++) + api.rs.
+// Kept for reference only; not compiled (not declared in lib.rs).
+
 //! libp2p GossipSub node for fully decentralized envelope distribution.
 //!
 //! ## Architecture
