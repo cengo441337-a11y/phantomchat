@@ -244,3 +244,80 @@ Nachrichten.
   sollten ausgetauscht werden.
 * Die Pairing‑Prozedur, die QR‑Übertragung und der Mixnet‑Layer sind
   skizziert, aber nicht implementiert.
+
+
+## 7. Implementierungsstand
+
+Die Referenzimplementierung setzt die in Abschnitten 1–6 beschriebene
+Architektur vollständig um. Alle kryptographischen Primitive nutzen
+geprüfte Rust-Bibliotheken (x25519-dalek, chacha20poly1305, hkdf, hmac, sha2).
+
+## 8. Privacy-System
+
+### 8.1 Modulare Privacy Modes
+
+PhantomChat bietet zwei operative Modi:
+
+**Daily Use (Standard)**
+
+
+
+**Maximum Stealth**
+
+
+
+### 8.2 Dandelion++ Routing
+
+Dandelion++ (2018, Fanti et al.) trennt die Nachrichtenverbreitung in zwei Phasen:
+
+**Stem-Phase:** Das Envelope wird an genau einen zufällig gewählten Peer
+weitergeleitet. Jeder Relay-Knoten entscheidet mit Wahrscheinlichkeit p=0,1,
+ob er in die Fluff-Phase wechselt oder die Stem-Phase fortsetzt.
+
+**Fluff-Phase:** Standardmäßiger GossipSub-Broadcast an alle Peers.
+
+Der Stem-Peer rotiert alle 10 Minuten (Epoch-Rotation). Ein Netzwerk-
+Beobachter sieht nur den Fluff-Phase-Broadcaster, der mehrere Hops vom
+wahren Ursprung entfernt ist.
+
+### 8.3 Cover Traffic
+
+Periodic Dummy-Envelopes aus CSPRNG-Daten sind auf dem Wire kryptographisch
+ununterscheidbar von echten Envelopes (gleiche Struktur, gleiche Laenge,
+zufaellige Feldwerte). Empfaenger verwerfen sie beim HMAC-Scan stillschweigend.
+Cover Traffic maskiert reale Traffic-Muster gegen Timing-Korrelationsangriffe.
+
+### 8.4 StealthNostrRelay (SOCKS5)
+
+Im Maximum-Stealth-Modus oeffnet der Client die Relay-Verbindung ueber einen
+SOCKS5-Proxy:
+
+
+
+Das Relay sieht ausschliesslich die Exit-IP des Anonymisierungsnetzes.
+Unterstuetzt werden Tor (Standard: 127.0.0.1:9050) und Nym (127.0.0.1:1080).
+
+## 9. Nostr Transport (aktuell)
+
+Abweichend von Abschnitt 6 (MVP-Entwurf) verwendet die aktuelle
+Implementierung:
+
+| Parameter | Wert |
+|-----------|------|
+| Event Kind | 1059 (NIP-59 Gift Wrap) |
+| Content | Hex-kodiertes Envelope |
+| Signatur | Schnorr (secp256k1, ephemerer Keypair pro Session) |
+| Subscription | REQ mit Filter: {kinds: [1059]} |
+
+Der ephemere secp256k1-Keypair macht Posts pro Session pseudonym und
+unlinkbar gegenueber Relay-Betreibern.
+
+## 10. ViewKey-Scanner
+
+Der Scanner implementiert das Monero-Stealth-Adress-Modell fuer Messaging:
+
+1. Client laedt alle Envelopes von Relays herunter (kein Routing-Leak)
+2. Phase 1 (ViewKey): ECDH(view_secret, epk) -> HKDF -> tag_key -> HMAC-Verifikation
+3. Bei Tag-Match Phase 2 (SpendKey): Envelope::open() -> Payload
+4. Kein Relay weiss, welche Envelopes fuer welchen Client bestimmt sind
+

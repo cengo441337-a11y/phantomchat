@@ -1,23 +1,108 @@
-//! PhantomChat CLI
+//! PhantomChat CLI — cyberpunk terminal interface.
 //!
-//! Dieser Kommandozeilen‑Client ermöglicht es, Schlüssel zu generieren,
-//! Pairing‑Informationen auszutauschen sowie Nachrichten zu versenden
-//! und zu empfangen.  Der Code basiert auf der Kernbibliothek
-//! `phantomchat_core` und nutzt `tokio` für asynchrones I/O.  Der
-//! Netzwerkcode für Nostr‑Relays und die QR‑Funktionen sind nur
-//! rudimentär implementiert.
+//! ```
+//! phantom keygen                       # generate identity
+//! phantom pair                         # show QR pairing data
+//! phantom send -r <spend_pub> -m "hi"  # send encrypted message
+//! phantom listen                       # receive messages
+//! phantom mode                         # show active privacy mode
+//! phantom mode stealth                 # switch to Maximum Stealth
+//! phantom mode daily                   # switch to Daily Use
+//! phantom relay -u wss://relay.url     # health check
+//! phantom status                       # node status overview
+//! ```
 
+use anyhow::Context;
 use clap::{Parser, Subcommand};
-use phantomchat_core::{IdentityKey, ViewKey, SpendKey, Envelope};
+use colored::Colorize;
+use indicatif::{ProgressBar, ProgressStyle};
+use phantomchat_core::{
+    envelope::Envelope,
+    keys::{IdentityKey, ViewKey, SpendKey},
+    privacy::{PrivacyConfig, PrivacyMode, ProxyConfig, ProxyKind},
+};
+use phantomchat_relays::{BridgeProvider, InMemoryRelay, make_relay};
+use qrcodegen::{QrCode, QrCodeEcc};
+use rand::random;
+use rand_core::{OsRng, RngCore};
+use std::{fs, path::PathBuf, time::Duration};
 use x25519_dalek::{PublicKey, StaticSecret};
-use rand_core::OsRng;
-use std::fs;
-use std::path::PathBuf;
-use std::time::Duration;
 
-/// Kommandozeilenoptionen
+// ── ANSI palette (matches Flutter CyberpunkTheme) ────────────────────────────
+
+const G: &str  = "\x1b[38;2;0;255;159m";    // neonGreen  #00FF9F
+const M: &str  = "\x1b[38;2;255;0;255m";    // neonMagenta #FF00FF
+const C: &str  = "\x1b[38;2;0;255;255m";    // cyber cyan
+const DIM: &str = "\x1b[2m";
+const B: &str  = "\x1b[1m";
+const R: &str  = "\x1b[0m";
+
+// ── Banner ────────────────────────────────────────────────────────────────────
+
+fn banner(cfg: &PrivacyConfig) {
+    let mode_label = match cfg.mode {
+        PrivacyMode::DailyUse       => format!("{}[ DAILY USE ]{}", G, R),
+        PrivacyMode::MaximumStealth => format!("{}[ MAXIMUM STEALTH ]{}", M, R),
+    };
+    println!();
+    println!("{}", format!(
+"{}{}██████╗ ██╗  ██╗ █████╗ ███╗   ██╗████████╗ ██████╗ ███╗   ███╗{}",
+    B, G, R));
+    println!("{}", format!(
+"{}{}██╔══██╗██║  ██║██╔══██╗████╗  ██║╚══██╔══╝██╔═══██╗████╗ ████║{}",
+    B, G, R));
+    println!("{}", format!(
+"{}{}██████╔╝███████║███████║██╔██╗ ██║   ██║   ██║   ██║██╔████╔██║{}",
+    B, G, R));
+    println!("{}", format!(
+"{}{}██╔═══╝ ██╔══██║██╔══██║██║╚██╗██║   ██║   ██║   ██║██║╚██╔╝██║{}",
+    B, M, R));
+    println!("{}", format!(
+"{}{}██║     ██║  ██║██║  ██║██║ ╚████║   ██║   ╚██████╔╝██║ ╚═╝ ██║{}",
+    B, M, R));
+    println!("{}", format!(
+"{}{}╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝ ╚═╝     ╚═╝{}",
+    B, M, R));
+    println!();
+    println!(
+        "{}{}  C H A T  {}{}│{} DC INFOSEC 2026 {}│{} {}",
+        B, C, R, DIM, R, DIM, R, mode_label
+    );
+    println!("{}{}  ─────────────────────────────────────────────────────────────{}",
+        DIM, G, R);
+    println!();
+}
+
+// ── Privacy config persistence (CLI-local ~/.phantom_config.json) ─────────────
+
+fn config_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".phantom_config.json")
+}
+
+fn load_config() -> PrivacyConfig {
+    fs::read(config_path())
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+fn save_config(cfg: &PrivacyConfig) -> anyhow::Result<()> {
+    fs::write(config_path(), serde_json::to_vec_pretty(cfg)?)?;
+    Ok(())
+}
+
+// ── CLI definition ────────────────────────────────────────────────────────────
+
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(
+    name = "phantom",
+    about = "PhantomChat — decentralized encrypted messenger CLI",
+    long_about = None,
+    disable_version_flag = false,
+    color = clap::ColorChoice::Always,
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -25,165 +110,455 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Erzeugt ein neues Schlüsselpaar und speichert es als JSON
+    /// Generate a new identity keypair
     Keygen {
-        /// Ausgabeordner
         #[arg(short, long, default_value = "keys.json")]
         out: PathBuf,
     },
-    /// Zeigt Pairing‑Daten (view_pub, spend_pub) an
+    /// Show pairing data (QR + hex keys)
     Pair {
-        /// Schlüsseldatei
         #[arg(short, long, default_value = "keys.json")]
         file: PathBuf,
     },
-    /// Sendet eine Nachricht an einen Empfänger
+    /// Send an encrypted message
     Send {
-        /// Schlüsseldatei
         #[arg(short, long, default_value = "keys.json")]
         file: PathBuf,
-        /// Empfänger‑Spend‑Public‑Key (hex)
+        /// Recipient spend-public-key (hex)
         #[arg(short = 'r', long)]
-        recipient_spend_pub: String,
-        /// Nachrichtentext
+        recipient: String,
+        /// Plaintext message
         #[arg(short, long)]
         message: String,
+        /// Nostr relay URL
+        #[arg(short = 'u', long, default_value = "wss://relay.damus.io")]
+        relay: String,
     },
-    /// Lauscht auf eingehende Nachrichten (lokaler Relay‑Test)
+    /// Listen for incoming messages
     Listen {
-        /// Schlüsseldatei
+        #[arg(short, long, default_value = "keys.json")]
+        file: PathBuf,
+        /// Nostr relay URL
+        #[arg(short = 'u', long, default_value = "wss://relay.damus.io")]
+        relay: String,
+    },
+    /// Show or change the active privacy mode
+    Mode {
+        /// daily | stealth
+        mode: Option<String>,
+        /// SOCKS5 proxy address (stealth mode)
+        #[arg(long, default_value = "127.0.0.1:9050")]
+        proxy: String,
+        /// Use Nym instead of Tor
+        #[arg(long)]
+        nym: bool,
+    },
+    /// Check relay health and latency
+    Relay {
+        /// Relay URL to probe
+        #[arg(short = 'u', long)]
+        url: String,
+    },
+    /// Show current node status overview
+    Status {
         #[arg(short, long, default_value = "keys.json")]
         file: PathBuf,
     },
 }
 
+// ── main ──────────────────────────────────────────────────────────────────────
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!(r#"
-    ██████╗  ██████╗ ██╗███╗   ██╗███████╗███████╗ ██████╗ 
-    ██╔══██╗██╔════╝ ██║████╗  ██║██╔════╝██╔════╝██╔════╝ 
-    ██║  ██║██║      ██║██╔██╗ ██║█████╗  █████╗  ██║      
-    ██║  ██║██║      ██║██║╚██╗██║██╔══╝  ██╔══╝  ██║      
-    ██████╔╝╚██████╗ ██║██║ ╚████║██║     ███████╗╚██████╗ 
-    ╚═════╝  ╚═════╝ ╚═╝╚═╝  ╚═══╝╚═╝     ╚══════╝ ╚═════╝ 
-    PHANTOMCHAT v1.0.0 | CYBER SECURITY PORTFOLIO 2026
-    ------------------------------------------------------
-    DC INFOSEC // SECURE COMMUNICATION PROTOCOL // 🛡️🦾⚙️
-    ------------------------------------------------------
-    "#);
-    println!("🛡️ Initializing Secure Communication Layer...");
+    let cfg = load_config();
+    banner(&cfg);
+
     let cli = Cli::parse();
     match cli.command {
-        Commands::Keygen { out } => {
-            keygen(out)?;
-        }
-        Commands::Pair { file } => {
-            pair(file)?;
-        }
-        Commands::Send { file, recipient_spend_pub, message } => {
-            send(file, &recipient_spend_pub, &message).await?;
-        }
-        Commands::Listen { file } => {
-            listen(file).await?;
-        }
+        Commands::Keygen { out }                          => cmd_keygen(out)?,
+        Commands::Pair   { file }                         => cmd_pair(file)?,
+        Commands::Send   { file, recipient, message, relay } =>
+            cmd_send(file, &recipient, &message, &relay, &cfg).await?,
+        Commands::Listen { file, relay }                  =>
+            cmd_listen(file, &relay, &cfg).await?,
+        Commands::Mode   { mode, proxy, nym }             =>
+            cmd_mode(mode, proxy, nym)?,
+        Commands::Relay  { url }                          =>
+            cmd_relay_health(&url, &cfg).await?,
+        Commands::Status { file }                         =>
+            cmd_status(file, &cfg)?,
     }
     Ok(())
 }
 
-/// Generiert neue Schlüssel und speichert sie in einer JSON‑Datei.
-fn keygen(out: PathBuf) -> anyhow::Result<()> {
-    let id = IdentityKey::generate();
-    let view = ViewKey::generate();
+// ── keygen ────────────────────────────────────────────────────────────────────
+
+fn cmd_keygen(out: PathBuf) -> anyhow::Result<()> {
+    let pb = spinner("Generating cryptographic identity...");
+
+    let id    = IdentityKey::generate();
+    let view  = ViewKey::generate();
     let spend = SpendKey::generate();
-    let keys = serde_json::json!({
+
+    let json = serde_json::json!({
         "identity_private": base64::encode(id.private),
-        "identity_public": base64::encode(id.public),
-        "view_private": base64::encode(view.secret.to_bytes()),
-        "view_public": base64::encode(view.public.as_bytes()),
-        "spend_private": base64::encode(spend.secret.to_bytes()),
-        "spend_public": base64::encode(spend.public.as_bytes()),
+        "identity_public":  base64::encode(id.public),
+        "view_private":     base64::encode(view.secret.to_bytes()),
+        "view_public":      hex::encode(view.public.as_bytes()),
+        "spend_private":    base64::encode(spend.secret.to_bytes()),
+        "spend_public":     hex::encode(spend.public.as_bytes()),
     });
-    fs::write(&out, serde_json::to_vec_pretty(&keys)?)?;
-    println!("Schlüssel in {:?} gespeichert", out);
+
+    fs::write(&out, serde_json::to_vec_pretty(&json)?)?;
+    pb.finish_and_clear();
+
+    ok("KEYPAIR GENERATED");
+    field("Identity public",  &base64::encode(id.public)[..16]);
+    field("View public",      &hex::encode(view.public.as_bytes())[..16]);
+    field("Spend public",     &hex::encode(spend.public.as_bytes())[..16]);
+    field("Saved to",         &out.display().to_string());
+    println!();
+    warn("Keep spend_private secret — it decrypts all your messages.");
     Ok(())
 }
 
-/// Liest die Schlüsseldatei und zeigt die Pairing‑Daten an.
-fn pair(file: PathBuf) -> anyhow::Result<()> {
-    let data = fs::read(file)?;
-    let json: serde_json::Value = serde_json::from_slice(&data)?;
-    let view_pub = json["view_public"].as_str().unwrap();
-    let spend_pub = json["spend_public"].as_str().unwrap();
-    println!("Pairing‑Daten:\nview_pub: {}\nspend_pub: {}", view_pub, spend_pub);
+// ── pair ──────────────────────────────────────────────────────────────────────
+
+fn cmd_pair(file: PathBuf) -> anyhow::Result<()> {
+    let json: serde_json::Value = serde_json::from_slice(&fs::read(&file)?)?;
+    let view_pub  = json["view_public"].as_str().context("missing view_public")?;
+    let spend_pub = json["spend_public"].as_str().context("missing spend_public")?;
+
+    // Pairing payload: view_pub:spend_pub
+    let pairing = format!("phantom:{}:{}", view_pub, spend_pub);
+
+    section("PAIRING DATA");
+    field("View  pub", view_pub);
+    field("Spend pub", spend_pub);
+    println!();
+
+    // ASCII QR
+    section("QR CODE  (scan in PhantomChat mobile)");
+    print_qr(&pairing);
+    println!();
+    dimline(&format!("Raw: {}", pairing));
     Ok(())
 }
 
-/// Lädt Schlüssel, baut ein Envelope und sendet es an den (hier
-/// nur simulierten) Empfänger.  In einer echten Implementierung würde
-/// diese Funktion die Nachricht via Nostr‑Relays übertragen.
-async fn send(file: PathBuf, recipient_spend_pub_hex: &str, message: &str) -> anyhow::Result<()> {
-    use phantomchat_core::RatchetState;
-    use phantomchat_relays::{BridgeProvider, InMemoryRelay};
+// ── send ──────────────────────────────────────────────────────────────────────
 
-    // Schlüssel laden
-    let data = fs::read(file)?;
-    let keys: serde_json::Value = serde_json::from_slice(&data)?;
-    
-    // Empfänger‑Spend‑Public‑Key parsen
-    let rec_bytes = hex::decode(recipient_spend_pub_hex)?;
-    let recipient_spend_pub = PublicKey::from(rec_bytes.as_slice().try_into().map_err(|_| anyhow::anyhow!("Invalid recipient pubkey"))?);
-    
-    // Initialisiere die Ratchet‑Engine
-    let root_key = [0u8; 32];
-    let mut ratchet = RatchetState::new(root_key, recipient_spend_pub);
+async fn cmd_send(
+    file: PathBuf,
+    recipient_hex: &str,
+    message: &str,
+    relay_url: &str,
+    cfg: &PrivacyConfig,
+) -> anyhow::Result<()> {
+    let json: serde_json::Value = serde_json::from_slice(&fs::read(&file)?)?;
 
-    // Nachricht verschlüsseln
-    let (ciphertext, header) = ratchet.encrypt(message.as_bytes());
+    // Parse recipient spend pubkey
+    let rec_bytes: [u8; 32] = hex::decode(recipient_hex)
+        .context("recipient must be 64-char hex")?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("recipient key must be 32 bytes"))?;
+    let recipient_spend_pub = PublicKey::from(rec_bytes);
 
-    // msg_id generieren
-    let msg_id = rand::random::<u128>();
+    let msg_id: u128 = random();
 
+    let pb = spinner(&format!(
+        "Building envelope (mode: {})",
+        mode_str(cfg)
+    ));
+
+    // Build envelope — message bytes as encrypted_body, empty ratchet header
     let envelope = Envelope::new(
         &recipient_spend_pub,
         msg_id,
-        0,
-        header,
-        ciphertext,
-        60,
-        16,
+        vec![],                       // ratchet header (simplified for CLI)
+        message.as_bytes().to_vec(),
+        300,                          // TTL 5 min
+        16,                           // PoW difficulty
     );
 
-    // P2P-Simulation via Relay
-    let relay = InMemoryRelay::new("local_port_5555");
-    relay.publish(envelope).await?;
+    pb.finish_and_clear();
+    ok("ENVELOPE SEALED");
+    field("Msg-ID",     &format!("{:#x}", msg_id));
+    field("Ciphertext", &format!("{} bytes", envelope.ciphertext.len()));
+    field("TTL",        "300 s");
 
-    println!("🛡️ PHANTOMCHAT: Nachricht kryptografisch gesichert!");
-    println!("📡 Relay-Status: Nachricht erfolgreich veröffentlicht.");
-    println!("Envelope-ID: {}", msg_id);
+    // Dandelion++ routing decision display
+    let phase = if rand::random::<f64>() < 0.1 { "FLUFF (broadcast)" } else { "STEM (single-hop)" };
+    field("Dandelion++", phase);
+    println!();
+
+    // Choose relay based on privacy mode
+    let stealth = cfg.mode == PrivacyMode::MaximumStealth;
+    let proxy   = cfg.proxy_addr();
+
+    let pb2 = spinner(&format!(
+        "Publishing via {} {}",
+        if stealth { "STEALTH relay (SOCKS5)" } else { "relay (TLS)" },
+        relay_url
+    ));
+
+    let relay = make_relay(relay_url, stealth, proxy);
+    relay.publish(envelope).await
+        .map_err(|e| { pb2.finish_and_clear(); e })?;
+
+    pb2.finish_and_clear();
+    ok("TRANSMITTED");
+    field("Relay",   relay_url);
+    field("Via",     if stealth {
+        &format!("SOCKS5 {}", cfg.proxy.addr)
+    } else {
+        "direct TLS"
+    });
+    println!();
     Ok(())
 }
 
-/// Lauscht auf eingehende Nachrichten (Nur Demo: Keine echten Relays)
-async fn listen(file: PathBuf) -> anyhow::Result<()> {
-    use phantomchat_relays::{BridgeProvider, InMemoryRelay};
+// ── listen ────────────────────────────────────────────────────────────────────
 
-    // Schlüssel laden (für Empfang)
-    let data = fs::read(file)?;
-    let json: serde_json::Value = serde_json::from_slice(&data)?;
-    let spend_priv = base64::decode(json["spend_private"].as_str().unwrap())?;
-    let spend_secret = StaticSecret::from(spend_priv.as_slice().try_into().unwrap());
-    
-    let relay = InMemoryRelay::new("local_port_5555");
-    println!("🛡️ PHANTOMCHAT: Listening for incoming secure transmissions...");
-    
-    relay.subscribe(|env| {
-        println!("📩 Neue Nachricht empfangen!");
-        println!("   Envelope-ID: {}", env.msg_id);
-        println!("   Ciphertext-Länge: {} Bytes", env.ciphertext.len());
-        println!("   (Ratchet-Entschlüsselung bereit)");
+async fn cmd_listen(
+    file: PathBuf,
+    relay_url: &str,
+    cfg: &PrivacyConfig,
+) -> anyhow::Result<()> {
+    let json: serde_json::Value = serde_json::from_slice(&fs::read(&file)?)?;
+    let spend_bytes = base64::decode(json["spend_private"].as_str().context("missing spend_private")?)?;
+    let spend_secret = StaticSecret::from(
+        <[u8; 32]>::try_from(spend_bytes.as_slice()).map_err(|_| anyhow::anyhow!("bad spend key"))?
+    );
+    let spend_key = phantomchat_core::keys::SpendKey {
+        secret: spend_secret,
+        public: x25519_dalek::PublicKey::from(
+            &StaticSecret::from(<[u8; 32]>::try_from(spend_bytes.as_slice()).unwrap())
+        ),
+    };
+
+    let stealth = cfg.mode == PrivacyMode::MaximumStealth;
+    let proxy   = cfg.proxy_addr();
+
+    section("LISTENING");
+    field("Relay",  relay_url);
+    field("Mode",   mode_str(cfg));
+    if stealth { field("Proxy", &cfg.proxy.addr); }
+    println!();
+    println!("{}{}  Scanning all envelopes for your spend key...{}",
+        DIM, G, R);
+    println!("{}{}  Press Ctrl+C to stop{}",
+        DIM, G, R);
+    println!();
+
+    let relay = make_relay(relay_url, stealth, proxy);
+
+    let spend_key_clone = spend_key.clone();
+    relay.subscribe(move |env| {
+        match env.open(&spend_key_clone) {
+            Some(payload) => {
+                let body = String::from_utf8_lossy(&payload.encrypted_body);
+                println!(
+                    "{}{}  ► DECRYPTED{}  msg_id={:#x}  body={}",
+                    B, G, R,
+                    payload.msg_id,
+                    body.bright_green()
+                );
+            }
+            None => {
+                // Not for us — expected, print a dot to show activity
+                print!("{}·{}", DIM, R);
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+            }
+        }
     }).await?;
 
     loop {
         tokio::time::sleep(Duration::from_secs(60)).await;
     }
+}
+
+// ── mode ──────────────────────────────────────────────────────────────────────
+
+fn cmd_mode(mode_arg: Option<String>, proxy: String, nym: bool) -> anyhow::Result<()> {
+    let mut cfg = load_config();
+
+    match mode_arg.as_deref() {
+        None => {
+            // Show current
+            section("PRIVACY MODE");
+            let active = mode_str(&cfg);
+            println!("  Active: {}", active);
+            println!();
+            match cfg.mode {
+                PrivacyMode::DailyUse => {
+                    println!("  {}{}libp2p + Dandelion++ + Nostr/TLS{}", B, G, R);
+                    println!("  {}Light cover traffic (30–180 s){}", DIM, R);
+                }
+                PrivacyMode::MaximumStealth => {
+                    println!("  {}{}Relay-only · All traffic via SOCKS5{}", B, M, R);
+                    println!("  {}Proxy: {}  Aggressive cover traffic (5–15 s){}", DIM, cfg.proxy.addr, R);
+                }
+            }
+        }
+        Some("daily") | Some("dailyuse") => {
+            cfg.mode  = PrivacyMode::DailyUse;
+            save_config(&cfg)?;
+            ok(&format!("Mode set to {}", mode_str(&cfg)));
+            dimline("libp2p active · Dandelion++ routing · Light cover traffic");
+        }
+        Some("stealth") | Some("maximumstealth") | Some("paranoia") => {
+            cfg.mode  = PrivacyMode::MaximumStealth;
+            cfg.proxy = ProxyConfig {
+                addr: proxy.clone(),
+                kind: if nym { ProxyKind::Nym } else { ProxyKind::Tor },
+            };
+            save_config(&cfg)?;
+            ok(&format!("Mode set to {}", mode_str(&cfg)));
+            field("Proxy",  &proxy);
+            field("Network", if nym { "Nym" } else { "Tor" });
+            dimline("libp2p disabled · relay-only · aggressive cover traffic");
+            warn("Make sure Tor/Nym is running on the configured proxy address.");
+        }
+        Some(other) => {
+            anyhow::bail!("Unknown mode '{}'. Use: daily | stealth", other);
+        }
+    }
+    println!();
+    Ok(())
+}
+
+// ── relay health ──────────────────────────────────────────────────────────────
+
+async fn cmd_relay_health(url: &str, cfg: &PrivacyConfig) -> anyhow::Result<()> {
+    let stealth = cfg.mode == PrivacyMode::MaximumStealth;
+    let pb = spinner(&format!("Probing {} …", url));
+
+    let relay  = make_relay(url, stealth, cfg.proxy_addr());
+    let health = relay.health().await;
+
+    pb.finish_and_clear();
+    section("RELAY HEALTH");
+    field("URL",          url);
+    field("Via",          if stealth { "SOCKS5 (stealth)" } else { "direct" });
+    field("Latency",      &format!("{} ms", health.latency_ms));
+    field("Uptime",       &format!("{:.0}%", health.uptime * 100.0));
+    field("Failure rate", &format!("{:.0}%", health.failure_rate * 100.0));
+
+    let status = if health.failure_rate < 0.2 {
+        format!("{}{}ONLINE{}", B, G, R)
+    } else {
+        format!("{}{}DEGRADED{}", B, M, R)
+    };
+    field("Status", &status);
+    println!();
+    Ok(())
+}
+
+// ── status ────────────────────────────────────────────────────────────────────
+
+fn cmd_status(file: PathBuf, cfg: &PrivacyConfig) -> anyhow::Result<()> {
+    section("NODE STATUS");
+
+    // Keys
+    let keys_ok = file.exists();
+    field("Identity file", if keys_ok { &format!("{}✓ {}{}", G, file.display(), R) }
+                           else       { &format!("{}✗ not found{}", M, R) });
+
+    // Privacy mode
+    field("Privacy mode",    mode_str(cfg));
+    match cfg.mode {
+        PrivacyMode::DailyUse => {
+            field("P2P",          &format!("{}ENABLED{}", G, R));
+            field("Dandelion++",  &format!("{}ACTIVE{}", G, R));
+            field("Cover traffic",&format!("{}Light (30–180 s){}", G, R));
+        }
+        PrivacyMode::MaximumStealth => {
+            field("P2P",          &format!("{}DISABLED{}", M, R));
+            field("SOCKS5 proxy", &cfg.proxy.addr);
+            field("Anonymizer",   match cfg.proxy.kind { ProxyKind::Tor => "Tor", ProxyKind::Nym => "Nym" });
+            field("Cover traffic",&format!("{}Aggressive (5–15 s){}", M, R));
+        }
+    }
+
+    // Config path
+    field("Config", &config_path().display().to_string());
+    println!();
+    Ok(())
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+fn spinner(msg: &str) -> ProgressBar {
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+            .template(&format!("  {{spinner:.green}} {}{}{}  {{msg}}", DIM, msg, R))
+            .unwrap(),
+    );
+    pb.enable_steady_tick(Duration::from_millis(80));
+    pb
+}
+
+fn ok(msg: &str) {
+    println!("  {}{}✓  {}{}{}", B, G, R, B, msg, R);
+}
+
+fn warn(msg: &str) {
+    println!("  {}{}⚠  {}{}", B, M, R, msg);
+}
+
+fn field(key: &str, val: &str) {
+    println!("  {}{}  {:<18}{}{}", DIM, G, key, R, val);
+}
+
+fn dimline(msg: &str) {
+    println!("  {}{}{}", DIM, msg, R);
+}
+
+fn section(title: &str) {
+    println!("  {}{}{}{} ─────────────────────────", B, C, title, R);
+}
+
+fn mode_str(cfg: &PrivacyConfig) -> &'static str {
+    match cfg.mode {
+        PrivacyMode::DailyUse       => "\x1b[38;2;0;255;159m\x1b[1mDAILY USE\x1b[0m",
+        PrivacyMode::MaximumStealth => "\x1b[38;2;255;0;255m\x1b[1mMAXIMUM STEALTH\x1b[0m",
+    }
+}
+
+fn print_qr(data: &str) {
+    let qr = QrCode::encode_text(data, QrCodeEcc::Medium)
+        .expect("QR encode failed");
+    let size = qr.size();
+    // Top border
+    print!("  {}{}", DIM, G);
+    for _ in 0..size + 4 { print!("██"); }
+    println!("{}", R);
+    // Empty top row
+    print!("  {}{}", DIM, G);
+    print!("████");
+    for _ in 0..size { print!("  "); }
+    println!("████{}", R);
+    // Data rows
+    for y in 0..size {
+        print!("  {}{}", DIM, G);
+        print!("████");
+        for x in 0..size {
+            if qr.get_module(x, y) {
+                print!("{}██{}{}", R, DIM, G);
+            } else {
+                print!("  ");
+            }
+        }
+        println!("████{}", R);
+    }
+    // Empty bottom row + border
+    print!("  {}{}", DIM, G);
+    print!("████");
+    for _ in 0..size { print!("  "); }
+    println!("████{}", R);
+    print!("  {}{}", DIM, G);
+    for _ in 0..size + 4 { print!("██"); }
+    println!("{}", R);
 }

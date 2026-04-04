@@ -31,6 +31,7 @@ tokio = { version = "1.40", features = ["full"] }
 futures-util = "0.3"
 libp2p = { version = "0.56.0", features = ["tcp", "dns", "noise", "yamux", "kad", "request-response", "json", "tokio", "macros", "gossipsub"] }
 rusqlite = { version = "0.31", features = ["bundled-sqlcipher"] }
+tracing = "0.1"
 
 [features]
 default = []
