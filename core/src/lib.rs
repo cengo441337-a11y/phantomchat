@@ -8,3 +8,10 @@ pub mod pow;
 pub mod privacy;
 pub mod dandelion;
 pub mod cover_traffic;
+pub mod scanner;
+pub mod util;
+
+pub use keys::{IdentityKey, ViewKey, SpendKey, HybridKeyPair, HybridPublicKey};
+pub use envelope::{Envelope, Payload};
+pub use pow::Hashcash;
+pub use scanner::{scan_envelope, scan_batch, ScanResult};
