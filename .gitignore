@@ -1,7 +1,6 @@
-/target/
-**/*.rs.bk
-*.zip
+target/
+node_modules/
+*.lock
 .env
-.DS_Store
-*.json
-!keys.json.example
+dist/
+*.log
