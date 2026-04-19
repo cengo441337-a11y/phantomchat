@@ -19,7 +19,7 @@ use pqcrypto_mlkem::mlkem1024::{
     self, PublicKey as MlKemPublicKey, SecretKey as MlKemSecretKey,
     Ciphertext as MlKemCiphertext,
 };
-use pqcrypto_traits::kem::{PublicKey as KemPubTrait, SecretKey as KemSecTrait,
+use pqcrypto_traits::kem::{PublicKey as KemPubTrait,
     Ciphertext as KemCtTrait, SharedSecret as KemSSTrait};
 
 /// Identity‑Keypair.
@@ -29,16 +29,22 @@ pub struct IdentityKey {
     pub private: [u8; 32],
 }
 
-/// View‑Keypair (X25519)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// View‑Keypair (X25519).
+///
+/// `Debug` is intentionally *not* derived — the secret scalar must never
+/// leak through `{:?}` formatting into logs or panic traces.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ViewKey {
     #[serde(skip, default = "generate_secret")]
     pub secret: StaticSecret,
     pub public: PublicKey,
 }
 
-/// Spend‑Keypair (X25519)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Spend‑Keypair (X25519).
+///
+/// `Debug` is intentionally *not* derived — the secret scalar must never
+/// leak through `{:?}` formatting into logs or panic traces.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SpendKey {
     #[serde(skip, default = "generate_secret")]
     pub secret: StaticSecret,
@@ -46,7 +52,7 @@ pub struct SpendKey {
 }
 
 fn generate_secret() -> StaticSecret {
-    StaticSecret::new(&mut OsRng)
+    StaticSecret::random_from_rng(&mut OsRng)
 }
 
 impl IdentityKey {
@@ -65,7 +71,7 @@ impl IdentityKey {
 impl ViewKey {
     /// Erzeugt ein neues View‑Keypair.
     pub fn generate() -> Self {
-        let secret = StaticSecret::new(&mut OsRng);
+        let secret = StaticSecret::random_from_rng(&mut OsRng);
         let public = PublicKey::from(&secret);
         Self { secret, public }
     }
@@ -80,7 +86,7 @@ impl ViewKey {
 impl SpendKey {
     /// Erzeugt ein neues Spend‑Keypair.
     pub fn generate() -> Self {
-        let secret = StaticSecret::new(&mut OsRng);
+        let secret = StaticSecret::random_from_rng(&mut OsRng);
         let public = PublicKey::from(&secret);
         Self { secret, public }
     }
@@ -130,7 +136,7 @@ pub struct PqxdhSendResult {
 impl HybridKeyPair {
     /// Generiert ein neues PQXDH-Keypair.
     pub fn generate() -> Self {
-        let x25519_secret = StaticSecret::new(&mut OsRng);
+        let x25519_secret = StaticSecret::random_from_rng(&mut OsRng);
         let x25519_public = PublicKey::from(&x25519_secret);
         let (mlkem_pub, mlkem_sec) = mlkem1024::keypair();
         Self {
@@ -168,7 +174,7 @@ impl HybridPublicKey {
     /// Generiert ephemeres X25519-Keypair + ML-KEM-Kapselung → Session-Key.
     pub fn encapsulate(&self) -> PqxdhSendResult {
         // 1. Ephemeres X25519 Keypair
-        let eph_secret = StaticSecret::new(&mut OsRng);
+        let eph_secret = StaticSecret::random_from_rng(&mut OsRng);
         let eph_public = PublicKey::from(&eph_secret);
 
         // 2. X25519 ECDH mit Empfänger-X25519-Public

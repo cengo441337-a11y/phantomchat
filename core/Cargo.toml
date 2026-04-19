@@ -16,23 +16,29 @@ hmac = "0.12"
 hkdf = "0.12"
 chacha20poly1305 = "0.10"
 aes-gcm = "0.10"
-x25519-dalek = "2.0"
+x25519-dalek = { version = "2.0", features = ["static_secrets", "serde"] }
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 hex = "0.4"
 anyhow = "1.0"
 lazy_static = "1.4"
-flutter_rust_bridge = "=2.12.0"
 pqcrypto-mlkem = "0.1.1"
 pqcrypto-traits = "0.3.5"
 bs58 = "0.5"
 tokio = { version = "1.40", features = ["full"] }
 futures-util = "0.3"
 libp2p = { version = "0.56.0", features = ["tcp", "dns", "noise", "yamux", "kad", "request-response", "json", "tokio", "macros", "gossipsub"] }
-rusqlite = { version = "0.31", features = ["bundled-sqlcipher"] }
 tracing = "0.1"
 
+# ── Optional FFI/storage dependencies ────────────────────────────────────────
+# These only compile when the `ffi` feature is active (default for the Flutter
+# bridge build). Turning them off lets `cargo test --no-default-features` run
+# the pure-crypto tests without needing SQLCipher / OpenSSL on the host.
+flutter_rust_bridge = { version = "=2.12.0", optional = true }
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher"], optional = true }
+
 [features]
-default = []
+default = ["ffi"]
+ffi = ["dep:flutter_rust_bridge", "dep:rusqlite"]
 pqc = []

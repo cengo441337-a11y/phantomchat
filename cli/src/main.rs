@@ -21,7 +21,7 @@ use phantomchat_core::{
     keys::{IdentityKey, ViewKey, SpendKey},
     privacy::{PrivacyConfig, PrivacyMode, ProxyConfig, ProxyKind},
 };
-use phantomchat_relays::{BridgeProvider, InMemoryRelay, make_relay};
+use phantomchat_relays::make_relay;
 use qrcodegen::{QrCode, QrCodeEcc};
 use rand::random;
 use rand_core::{OsRng, RngCore};
@@ -124,7 +124,8 @@ enum Commands {
     Send {
         #[arg(short, long, default_value = "keys.json")]
         file: PathBuf,
-        /// Recipient spend-public-key (hex)
+        /// Recipient address: `view_pub_hex:spend_pub_hex` (the string
+        /// produced by `phantom pair` after the `phantom:` prefix).
         #[arg(short = 'r', long)]
         recipient: String,
         /// Plaintext message
@@ -248,20 +249,33 @@ fn cmd_pair(file: PathBuf) -> anyhow::Result<()> {
 // ── send ──────────────────────────────────────────────────────────────────────
 
 async fn cmd_send(
-    file: PathBuf,
+    _file: PathBuf,
     recipient_hex: &str,
     message: &str,
     relay_url: &str,
     cfg: &PrivacyConfig,
 ) -> anyhow::Result<()> {
-    let json: serde_json::Value = serde_json::from_slice(&fs::read(&file)?)?;
+    // `_file` is currently unused — the send flow only needs the recipient's
+    // public address (which is passed via -r). Kept on the signature so the
+    // CLI surface stays backward-compatible.
 
-    // Parse recipient spend pubkey
-    let rec_bytes: [u8; 32] = hex::decode(recipient_hex)
-        .context("recipient must be 64-char hex")?
+    // Parse recipient address: "view_pub_hex:spend_pub_hex" (or a legacy
+    // `phantom:view:spend` pairing string — we tolerate the prefix).
+    let raw = recipient_hex.strip_prefix("phantom:").unwrap_or(recipient_hex);
+    let (view_hex, spend_hex) = raw
+        .split_once(':')
+        .context("recipient must be 'view_pub_hex:spend_pub_hex'")?;
+
+    let view_bytes: [u8; 32] = hex::decode(view_hex)
+        .context("view_pub must be 64-char hex")?
         .try_into()
-        .map_err(|_| anyhow::anyhow!("recipient key must be 32 bytes"))?;
-    let recipient_spend_pub = PublicKey::from(rec_bytes);
+        .map_err(|_| anyhow::anyhow!("view_pub must be 32 bytes"))?;
+    let spend_bytes: [u8; 32] = hex::decode(spend_hex)
+        .context("spend_pub must be 64-char hex")?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("spend_pub must be 32 bytes"))?;
+    let recipient_view_pub  = PublicKey::from(view_bytes);
+    let recipient_spend_pub = PublicKey::from(spend_bytes);
 
     let msg_id: u128 = random();
 
@@ -272,6 +286,7 @@ async fn cmd_send(
 
     // Build envelope — message bytes as encrypted_body, empty ratchet header
     let envelope = Envelope::new(
+        &recipient_view_pub,
         &recipient_spend_pub,
         msg_id,
         vec![],                       // ratchet header (simplified for CLI)
@@ -308,11 +323,12 @@ async fn cmd_send(
     pb2.finish_and_clear();
     ok("TRANSMITTED");
     field("Relay",   relay_url);
-    field("Via",     if stealth {
-        &format!("SOCKS5 {}", cfg.proxy.addr)
+    let via = if stealth {
+        format!("SOCKS5 {}", cfg.proxy.addr)
     } else {
-        "direct TLS"
-    });
+        "direct TLS".to_string()
+    };
+    field("Via", &via);
     println!();
     Ok(())
 }
@@ -325,15 +341,31 @@ async fn cmd_listen(
     cfg: &PrivacyConfig,
 ) -> anyhow::Result<()> {
     let json: serde_json::Value = serde_json::from_slice(&fs::read(&file)?)?;
-    let spend_bytes = base64::decode(json["spend_private"].as_str().context("missing spend_private")?)?;
+
+    // Reconstruct ViewKey (for stealth-scanning) and SpendKey (for decryption)
+    // from the keyfile produced by `cmd_keygen`.
+    let view_bytes = base64::decode(
+        json["view_private"].as_str().context("missing view_private")?
+    )?;
+    let view_secret = StaticSecret::from(
+        <[u8; 32]>::try_from(view_bytes.as_slice())
+            .map_err(|_| anyhow::anyhow!("bad view key"))?
+    );
+    let view_key = phantomchat_core::keys::ViewKey {
+        public: PublicKey::from(&view_secret),
+        secret: view_secret,
+    };
+
+    let spend_bytes = base64::decode(
+        json["spend_private"].as_str().context("missing spend_private")?
+    )?;
     let spend_secret = StaticSecret::from(
-        <[u8; 32]>::try_from(spend_bytes.as_slice()).map_err(|_| anyhow::anyhow!("bad spend key"))?
+        <[u8; 32]>::try_from(spend_bytes.as_slice())
+            .map_err(|_| anyhow::anyhow!("bad spend key"))?
     );
     let spend_key = phantomchat_core::keys::SpendKey {
+        public: PublicKey::from(&spend_secret),
         secret: spend_secret,
-        public: x25519_dalek::PublicKey::from(
-            &StaticSecret::from(<[u8; 32]>::try_from(spend_bytes.as_slice()).unwrap())
-        ),
     };
 
     let stealth = cfg.mode == PrivacyMode::MaximumStealth;
@@ -344,7 +376,7 @@ async fn cmd_listen(
     field("Mode",   mode_str(cfg));
     if stealth { field("Proxy", &cfg.proxy.addr); }
     println!();
-    println!("{}{}  Scanning all envelopes for your spend key...{}",
+    println!("{}{}  View-key stealth-scanning every envelope...{}",
         DIM, G, R);
     println!("{}{}  Press Ctrl+C to stop{}",
         DIM, G, R);
@@ -352,10 +384,11 @@ async fn cmd_listen(
 
     let relay = make_relay(relay_url, stealth, proxy);
 
+    let view_key_clone = view_key.clone();
     let spend_key_clone = spend_key.clone();
-    relay.subscribe(move |env| {
-        match env.open(&spend_key_clone) {
-            Some(payload) => {
+    relay.subscribe(Box::new(move |env| {
+        match phantomchat_core::scan_envelope(&env, &view_key_clone, &spend_key_clone) {
+            phantomchat_core::ScanResult::Mine(payload) => {
                 let body = String::from_utf8_lossy(&payload.encrypted_body);
                 println!(
                     "{}{}  ► DECRYPTED{}  msg_id={:#x}  body={}",
@@ -364,13 +397,20 @@ async fn cmd_listen(
                     body.bright_green()
                 );
             }
-            None => {
-                // Not for us — expected, print a dot to show activity
+            phantomchat_core::ScanResult::Corrupted => {
+                eprintln!(
+                    "{}{}  ► TAG-MATCH but decrypt failed (corrupted / replay){}",
+                    B, M, R
+                );
+            }
+            phantomchat_core::ScanResult::NotMine => {
+                // Not for us — expected for every cover-traffic dummy and for
+                // real messages destined to other identities. Dot shows activity.
                 print!("{}·{}", DIM, R);
                 let _ = std::io::Write::flush(&mut std::io::stdout());
             }
         }
-    }).await?;
+    })).await?;
 
     loop {
         tokio::time::sleep(Duration::from_secs(60)).await;
@@ -461,8 +501,12 @@ fn cmd_status(file: PathBuf, cfg: &PrivacyConfig) -> anyhow::Result<()> {
 
     // Keys
     let keys_ok = file.exists();
-    field("Identity file", if keys_ok { &format!("{}✓ {}{}", G, file.display(), R) }
-                           else       { &format!("{}✗ not found{}", M, R) });
+    let id_label = if keys_ok {
+        format!("{}✓ {}{}", G, file.display(), R)
+    } else {
+        format!("{}✗ not found{}", M, R)
+    };
+    field("Identity file", &id_label);
 
     // Privacy mode
     field("Privacy mode",    mode_str(cfg));
@@ -501,7 +545,7 @@ fn spinner(msg: &str) -> ProgressBar {
 }
 
 fn ok(msg: &str) {
-    println!("  {}{}✓  {}{}{}", B, G, R, B, msg, R);
+    println!("  {}{}✓  {}{}", B, G, msg, R);
 }
 
 fn warn(msg: &str) {

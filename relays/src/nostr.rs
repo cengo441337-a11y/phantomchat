@@ -36,12 +36,13 @@ impl NostrEvent {
         let pubkey = hex::encode(public_key.x_only_public_key().0.serialize());
 
         // NIP-01: id = SHA-256 of canonical JSON
+        let empty_tags: Vec<Vec<String>> = Vec::new();
         let id_preimage = serde_json::json!([
             0,
             pubkey,
             created_at,
             PHANTOM_KIND,
-            [] as Vec<Vec<String>>,
+            empty_tags,
             envelope_hex,
         ])
         .to_string();
@@ -49,10 +50,9 @@ impl NostrEvent {
         let id = hex::encode(Sha256::digest(id_preimage.as_bytes()));
 
         // Sign id bytes
-        let msg = Message::from_digest(
-            <[u8; 32]>::try_from(hex::decode(&id)?.as_slice())
-                .map_err(|_| anyhow::anyhow!("id not 32 bytes"))?,
-        );
+        let id_bytes = hex::decode(&id)?;
+        let msg = Message::from_slice(&id_bytes)
+            .map_err(|_| anyhow::anyhow!("id not 32 bytes"))?;
         let sig = secp.sign_schnorr(&msg, &secret_key.keypair(&secp));
         let sig_hex = hex::encode(sig.as_ref());
 

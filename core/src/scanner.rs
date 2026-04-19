@@ -2,10 +2,10 @@
 //!
 //! ## How it works
 //! 1. All envelopes on a relay are opaque blobs. Nobody knows who they're for.
-//! 2. A client downloads ALL envelopes and runs `scan_envelope()` on each.
-//! 3. `scan_envelope()` uses the ViewKey to attempt HMAC tag verification.
+//! 2. A client downloads ALL envelopes and runs [`scan_envelope`] on each.
+//! 3. The scanner uses the ViewKey to attempt HMAC tag verification.
 //! 4. If the tag matches → the envelope is addressed to this identity.
-//! 5. Only then is `Envelope::open()` called with the SpendKey to decrypt.
+//! 5. Only then is [`Envelope::open`] called with the SpendKey to decrypt.
 //!
 //! ## Privacy guarantee
 //! The relay never learns who receives a message. An attacker observing the
@@ -13,11 +13,21 @@
 //! every client downloads everything. This is fundamentally different from
 //! Signal/Telegram/Threema where the server routes to a specific recipient.
 //!
+//! ## Cryptographic construction
+//! Matches [`Envelope::new`] exactly:
+//! ```text
+//! view_shared = view_secret × epk
+//! tag_key     = HKDF-SHA256(view_shared, info = "PhantomChat-v1-ViewTag", 32 bytes)
+//! expected    = HMAC-SHA256(tag_key, epk)
+//! ```
+//! Then constant-time compare against `env.tag`. Tag match → `Envelope::open`
+//! re-derives the encryption key from `spend_shared`.
+//!
 //! ## Performance
 //! ViewKey scanning is fast (one ECDH + one HMAC per envelope). For 10k
-//! envelopes: ~50ms on a mid-range phone. Parallelised via rayon.
+//! envelopes: ~50 ms on a mid-range phone.
 
-use crate::envelope::{Envelope, Payload};
+use crate::envelope::{Envelope, Payload, TAG_HKDF_INFO};
 use crate::keys::{ViewKey, SpendKey};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
@@ -33,7 +43,8 @@ pub enum ScanResult {
     Mine(Payload),
     /// Envelope is not for this identity.
     NotMine,
-    /// Tag matched but decryption failed (corrupted or replay).
+    /// Tag matched but decryption failed (corrupted, replay, or
+    /// ViewKey/SpendKey mismatch on the identity).
     Corrupted,
 }
 
@@ -51,21 +62,18 @@ pub fn scan_envelope(
     let view_shared = view_key.secret.diffie_hellman(&epk);
 
     let hk = Hkdf::<Sha256>::new(None, view_shared.as_bytes());
-    let mut okm = [0u8; 32];
-    if hk.expand(b"PhantomChat-v1-Tag", &mut okm).is_err() {
+    let mut tag_key = [0u8; 32];
+    if hk.expand(TAG_HKDF_INFO, &mut tag_key).is_err() {
         return ScanResult::NotMine;
     }
 
-    // Recompute expected tag from msg_id stored in envelope timestamp
-    // (We use the envelope timestamp as a proxy for msg_id here)
-    let mut hmac = match HmacSha256::new_from_slice(&okm) {
+    let mut hmac = match HmacSha256::new_from_slice(&tag_key) {
         Ok(h) => h,
         Err(_) => return ScanResult::NotMine,
     };
-    hmac.update(&env.ts.to_le_bytes());
+    hmac.update(&env.epk);
     let expected_tag: [u8; 32] = hmac.finalize().into_bytes().into();
 
-    // Constant-time comparison
     if !constant_time_eq(&expected_tag, &env.tag) {
         return ScanResult::NotMine;
     }
@@ -96,10 +104,9 @@ pub fn scan_batch(
 }
 
 /// PoW verification before scanning — cheap DoS filter.
-/// Call this before `scan_envelope` to reject spam without ECDH cost.
+/// Call this before [`scan_envelope`] to reject spam without ECDH cost.
 pub fn verify_pow(env: &Envelope, min_difficulty: u32) -> bool {
     use crate::pow::Hashcash;
-    use crate::util::sha256;
 
     let mut pow_header = Vec::with_capacity(40);
     pow_header.extend_from_slice(&env.tag);

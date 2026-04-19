@@ -15,17 +15,17 @@
 //! bereits Ende-zu-Ende-verschlüsselt ist, fügt das Nostr-Layer nur
 //! Transport-Routing hinzu, kein weiteres Krypto.
 //!
-//! Events werden mit einem **ephemeren secp256k1-Keypair** pro Session
+//! Events werden mit einem **ephemeren secp256k1-KeyPair** pro Session
 //! signiert — der Sender ist gegenüber Relay-Betreibern pseudonym.
 
 pub mod nostr;
 
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use phantomchat_core::envelope::Envelope;
 use rand::rngs::OsRng;
-use secp256k1::{Keypair, Message, Secp256k1, SecretKey};
+use secp256k1::{KeyPair, Message, Secp256k1, SecretKey};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
@@ -54,9 +54,9 @@ pub struct NostrEvent {
 impl NostrEvent {
     /// Build and sign a new event carrying `payload` bytes.
     ///
-    /// Uses an ephemeral `Keypair` so each session appears as a different
+    /// Uses an ephemeral `KeyPair` so each session appears as a different
     /// pseudonymous author to relay operators.
-    pub fn new(payload: &[u8], keypair: &Keypair) -> Self {
+    pub fn new(payload: &[u8], keypair: &KeyPair) -> Self {
         let secp = Secp256k1::new();
         let pubkey_hex = hex::encode(keypair.public_key().serialize()[1..].to_vec()); // x-only
         let created_at = SystemTime::now()
@@ -70,9 +70,8 @@ impl NostrEvent {
         let id = Self::compute_id(&pubkey_hex, created_at, NOSTR_KIND_PHANTOM, &tags, &content);
 
         // Schnorr signature over the event ID
-        let msg = Message::from_digest(
-            <[u8; 32]>::try_from(hex::decode(&id).unwrap().as_slice()).unwrap()
-        );
+        let id_bytes = hex::decode(&id).expect("event id is valid hex");
+        let msg = Message::from_slice(&id_bytes).expect("event id must be 32 bytes");
         let sig = secp.sign_schnorr(&msg, keypair);
         let sig_hex = hex::encode(sig.as_ref());
 
@@ -111,10 +110,10 @@ impl NostrEvent {
 
 // ── Session keypair (ephemeral per process start) ─────────────────────────────
 
-fn session_keypair() -> Keypair {
+fn session_keypair() -> KeyPair {
     let secp = Secp256k1::new();
     let secret = SecretKey::new(&mut OsRng);
-    Keypair::from_secret_key(&secp, &secret)
+    KeyPair::from_secret_key(&secp, &secret)
 }
 
 // ── BridgeHealth ──────────────────────────────────────────────────────────────
@@ -128,13 +127,15 @@ pub struct BridgeHealth {
 
 // ── BridgeProvider trait ──────────────────────────────────────────────────────
 
+/// Callback type for incoming envelopes. Boxed (not generic) so the trait
+/// stays dyn-compatible and `make_relay()` can return `Box<dyn BridgeProvider>`.
+pub type EnvelopeHandler = Box<dyn Fn(Envelope) + Send + Sync + 'static>;
+
 #[async_trait]
 pub trait BridgeProvider: Send + Sync {
     fn id(&self) -> &str;
     async fn publish(&self, env: Envelope) -> anyhow::Result<()>;
-    async fn subscribe<F>(&self, handler: F) -> anyhow::Result<()>
-    where
-        F: Fn(Envelope) + Send + 'static;
+    async fn subscribe(&self, handler: EnvelopeHandler) -> anyhow::Result<()>;
     async fn health(&self) -> BridgeHealth;
 }
 
@@ -160,10 +161,7 @@ impl BridgeProvider for InMemoryRelay {
         Ok(())
     }
 
-    async fn subscribe<F>(&self, handler: F) -> anyhow::Result<()>
-    where
-        F: Fn(Envelope) + Send + 'static,
-    {
+    async fn subscribe(&self, handler: EnvelopeHandler) -> anyhow::Result<()> {
         let queue = self.queue.clone();
         tokio::spawn(async move {
             loop {
@@ -189,7 +187,7 @@ impl BridgeProvider for InMemoryRelay {
 pub struct NostrRelay {
     id: String,
     url: String,
-    keypair: Keypair,
+    keypair: KeyPair,
 }
 
 impl NostrRelay {
@@ -228,10 +226,7 @@ impl BridgeProvider for NostrRelay {
         Ok(())
     }
 
-    async fn subscribe<F>(&self, handler: F) -> anyhow::Result<()>
-    where
-        F: Fn(Envelope) + Send + 'static,
-    {
+    async fn subscribe(&self, handler: EnvelopeHandler) -> anyhow::Result<()> {
         let url = self.url.clone();
         let (handler_tx, mut handler_rx) = mpsc::unbounded_channel::<Envelope>();
 
@@ -308,7 +303,7 @@ pub struct StealthNostrRelay {
     id: String,
     relay_url: String,
     proxy_addr: String,
-    keypair: Keypair,
+    keypair: KeyPair,
 }
 
 impl StealthNostrRelay {
@@ -379,10 +374,7 @@ impl BridgeProvider for StealthNostrRelay {
         Ok(())
     }
 
-    async fn subscribe<F>(&self, handler: F) -> anyhow::Result<()>
-    where
-        F: Fn(Envelope) + Send + 'static,
-    {
+    async fn subscribe(&self, handler: EnvelopeHandler) -> anyhow::Result<()> {
         let relay_url = self.relay_url.clone();
         let proxy_addr = self.proxy_addr.clone();
         let (handler_tx, mut handler_rx) = mpsc::unbounded_channel::<Envelope>();
@@ -463,8 +455,12 @@ pub fn make_relay(
 /// liest und über den `StealthNostrRelay` publiziert.
 ///
 /// Muss nach `start_network_node()` aufgerufen werden wenn MaximumStealth
-/// aktiv ist.  Ist der Channel nicht vorhanden (DailyUse-Modus oder schon
+/// aktiv ist. Ist der Channel nicht vorhanden (DailyUse-Modus oder schon
 /// abgeholt), passiert nichts.
+///
+/// Nur verfügbar in Builds mit aktivem `ffi` Feature — der Stealth-Cover-
+/// Channel lebt in `phantomchat_core::api`, das hinter demselben Flag steht.
+#[cfg(feature = "ffi")]
 pub fn start_stealth_cover_consumer(relay_url: &str, proxy_addr: &str) {
     let mut rx = match phantomchat_core::api::take_stealth_cover_rx() {
         Some(r) => r,

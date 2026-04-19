@@ -3,6 +3,28 @@
 //! Das Envelope kapselt alle notwendigen Metadaten und die verschlüsselte
 //! Nutzlast. Es nutzt Stealth-Tags zur Empfängeridentifikation und
 //! Proof-of-Work zur Spam-Abwehr.
+//!
+//! ## Monero-Stealth-Address-Modell (korrekt implementiert)
+//!
+//! Der Empfänger veröffentlicht zwei Public Keys:
+//! - `ViewKey.public` — erlaubt das Scannen (Tag-Verifikation) ohne Entschlüsselung.
+//! - `SpendKey.public` — erforderlich zum Entschlüsseln des Payloads.
+//!
+//! Der Sender erzeugt pro Envelope ein ephemeres Keypair (epk) und leitet
+//! **zwei** unabhängige geteilte Geheimnisse ab:
+//!
+//! ```text
+//! view_shared  = eph_secret × recipient_view_pub   → HKDF → tag_key   (für HMAC-Tag)
+//! spend_shared = eph_secret × recipient_spend_pub  → HKDF → enc_key   (für XChaCha20)
+//! ```
+//!
+//! **Scan-Phase** (schnell, ohne Entschlüsselung): Empfänger berechnet
+//! `view_shared = view_secret × epk` und verifiziert den HMAC-Tag.
+//! **Open-Phase** (nur wenn Tag matcht): Empfänger berechnet
+//! `spend_shared = spend_secret × epk` und entschlüsselt den Payload.
+//!
+//! Dadurch kann ein Relay-Operator oder Device mit nur dem ViewKey **sehen**,
+//! welche Nachrichten für den Empfänger sind, aber sie nicht **lesen**.
 
 use crate::keys::SpendKey;
 use crate::pow::Hashcash;
@@ -16,10 +38,15 @@ use chacha20poly1305::{
     aead::{Aead, Payload as AeadPayload},
 };
 
+/// HKDF info label for the scan-tag derivation. Uses `view_shared`.
+pub(crate) const TAG_HKDF_INFO: &[u8] = b"PhantomChat-v1-ViewTag";
+/// HKDF info label for the payload-encryption-key derivation. Uses `spend_shared`.
+pub(crate) const ENC_HKDF_INFO: &[u8] = b"PhantomChat-v1-Envelope";
+
 // ── Payload ───────────────────────────────────────────────────────────────────
 
 /// Innere Nutzlast — wird verschlüsselt im Envelope transportiert.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Payload {
     /// Eindeutige Nachrichten-ID (zufällig).
     pub msg_id: u128,
@@ -69,11 +96,11 @@ impl Payload {
 ///  8 B  ts          (Unix seconds)
 ///  4 B  ttl         (seconds)
 /// 32 B  epk         (ephemeral X25519 public key)
-/// 32 B  tag         (HMAC stealth tag)
+/// 32 B  tag         (HMAC stealth tag — HKDF(view_shared) keyed, over epk)
 ///  8 B  pow_nonce
 /// 24 B  nonce       (XChaCha20 nonce)
 ///  4 B  ciphertext_len
-///  N B  ciphertext
+///  N B  ciphertext  (XChaCha20-Poly1305, aad = tag, key = HKDF(spend_shared))
 /// ```
 #[derive(Debug, Clone)]
 pub struct Envelope {
@@ -88,13 +115,18 @@ pub struct Envelope {
     pub pow_nonce: u64,
     /// XChaCha20-Poly1305 Nonce.
     pub nonce: [u8; 24],
-    /// Verschlüsselter Payload (XChaCha20-Poly1305, tag als AAD).
+    /// Verschlüsselter Payload (XChaCha20-Poly1305, `tag` als AAD gebunden).
     pub ciphertext: Vec<u8>,
 }
 
 impl Envelope {
     /// Erzeugt ein neues, vollständig verschlüsseltes und PoW-gestempeltes Envelope.
+    ///
+    /// Verlangt **beide** Public Keys des Empfängers (Monero-Modell):
+    /// - `recipient_view_pub`  → Stealth-Tag (Scanner kann matchen ohne Spend-Key)
+    /// - `recipient_spend_pub` → Payload-Verschlüsselung (nur Spend-Key öffnet)
     pub fn new(
+        recipient_view_pub: &PublicKey,
         recipient_spend_pub: &PublicKey,
         msg_id: u128,
         ratchet_header: Vec<u8>,
@@ -107,37 +139,42 @@ impl Envelope {
         let eph_public = PublicKey::from(&eph_secret);
         let epk_bytes  = *eph_public.as_bytes();
 
-        // 2. ECDH mit Empfänger-SpendKey
-        let shared = eph_secret.diffie_hellman(recipient_spend_pub);
+        // 2. Zwei unabhängige ECDH-Shares
+        let view_shared  = eph_secret.diffie_hellman(recipient_view_pub);
+        let spend_shared = eph_secret.diffie_hellman(recipient_spend_pub);
 
-        // 3. HKDF → enc_key (32 B) + tag_key (32 B)
-        let hk = Hkdf::<Sha256>::new(None, shared.as_bytes());
-        let mut okm = [0u8; 64];
-        hk.expand(b"PhantomChat-v1-Envelope", &mut okm).expect("HKDF expand");
-        let enc_key = &okm[0..32];
-        let tag_key = &okm[32..64];
+        // 3. tag_key aus view_shared
+        let tag_hkdf = Hkdf::<Sha256>::new(None, view_shared.as_bytes());
+        let mut tag_key = [0u8; 32];
+        tag_hkdf.expand(TAG_HKDF_INFO, &mut tag_key).expect("HKDF tag");
 
-        // 4. Stealth-Tag: HMAC-SHA256(tag_key, msg_id)
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(tag_key).expect("HMAC key");
-        mac.update(&msg_id.to_le_bytes());
-        let tag: [u8; 32] = mac.finalize().into_bytes().into();
+        // 4. Stealth-Tag = HMAC(tag_key, epk). Sender und Empfänger können
+        //    beide `epk` lesen, also ist das über den Wire reproduzierbar.
+        let mut tag_mac = <Hmac<Sha256> as Mac>::new_from_slice(&tag_key).expect("HMAC key");
+        tag_mac.update(&epk_bytes);
+        let tag: [u8; 32] = tag_mac.finalize().into_bytes().into();
 
-        // 5. Payload bauen und verschlüsseln
+        // 5. enc_key aus spend_shared
+        let enc_hkdf = Hkdf::<Sha256>::new(None, spend_shared.as_bytes());
+        let mut enc_key = [0u8; 32];
+        enc_hkdf.expand(ENC_HKDF_INFO, &mut enc_key).expect("HKDF enc");
+
+        // 6. Payload bauen und verschlüsseln (Tag als AAD → bindet ihn an den Chiffretext)
         let payload = Payload { msg_id, ratchet_header, encrypted_body };
         let payload_bytes = payload.to_bytes();
 
         let mut nonce = [0u8; 24];
         OsRng.fill_bytes(&mut nonce);
 
-        let cipher = XChaCha20Poly1305::new_from_slice(enc_key).expect("Cipher init");
+        let cipher = XChaCha20Poly1305::new_from_slice(&enc_key).expect("Cipher init");
         let ciphertext = cipher
             .encrypt(XNonce::from_slice(&nonce), AeadPayload {
                 msg: &payload_bytes,
-                aad: &tag, // Tag als Associated Data binden
+                aad: &tag,
             })
             .expect("Encryption failed");
 
-        // 6. Proof-of-Work
+        // 7. Proof-of-Work über (tag || ts)
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -196,14 +233,13 @@ impl Envelope {
     /// Versucht das Envelope mit dem eigenen SpendKey zu öffnen.
     /// Gibt `Some(Payload)` zurück wenn der SpendKey passt, sonst `None`.
     pub fn open(&self, spend_key: &SpendKey) -> Option<Payload> {
-        let shared  = spend_key.secret.diffie_hellman(&PublicKey::from(self.epk));
-        let hk      = Hkdf::<Sha256>::new(None, shared.as_bytes());
-        let mut okm = [0u8; 64];
-        hk.expand(b"PhantomChat-v1-Envelope", &mut okm).ok()?;
+        let spend_shared = spend_key.secret.diffie_hellman(&PublicKey::from(self.epk));
+        let hk = Hkdf::<Sha256>::new(None, spend_shared.as_bytes());
+        let mut enc_key = [0u8; 32];
+        hk.expand(ENC_HKDF_INFO, &mut enc_key).ok()?;
 
-        let enc_key = &okm[0..32];
-        let cipher  = XChaCha20Poly1305::new_from_slice(enc_key).ok()?;
-        let plain   = cipher.decrypt(XNonce::from_slice(&self.nonce), AeadPayload {
+        let cipher = XChaCha20Poly1305::new_from_slice(&enc_key).ok()?;
+        let plain  = cipher.decrypt(XNonce::from_slice(&self.nonce), AeadPayload {
             msg: &self.ciphertext,
             aad: &self.tag,
         }).ok()?;
