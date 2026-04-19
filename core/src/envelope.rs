@@ -26,10 +26,12 @@
 //! Dadurch kann ein Relay-Operator oder Device mit nur dem ViewKey **sehen**,
 //! welche Nachrichten für den Empfänger sind, aber sie nicht **lesen**.
 
-use crate::keys::SpendKey;
+use crate::keys::{HybridPublicKey, HybridSecretKey, SpendKey};
 use crate::pow::Hashcash;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
+use pqcrypto_mlkem::mlkem1024::{self, Ciphertext as MlKemCiphertext};
+use pqcrypto_traits::kem::{Ciphertext as KemCtTrait, SharedSecret as KemSSTrait};
 use rand_core::{OsRng, RngCore};
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -42,6 +44,15 @@ use chacha20poly1305::{
 pub(crate) const TAG_HKDF_INFO: &[u8] = b"PhantomChat-v1-ViewTag";
 /// HKDF info label for the payload-encryption-key derivation. Uses `spend_shared`.
 pub(crate) const ENC_HKDF_INFO: &[u8] = b"PhantomChat-v1-Envelope";
+/// HKDF info label for the **hybrid** payload-encryption-key derivation.
+/// Mixes `spend_shared` (X25519) with the `mlkem_shared` from ML-KEM-1024
+/// so that breaking one primitive does not reveal the session key.
+pub(crate) const HYBRID_ENC_HKDF_INFO: &[u8] = b"PhantomChat-v2-HybridEnvelope";
+
+/// Envelope version byte: classic X25519-only wire format.
+pub const VERSION_CLASSIC: u8 = 1;
+/// Envelope version byte: PQXDH-hybrid (X25519 + ML-KEM-1024).
+pub const VERSION_HYBRID: u8 = 2;
 
 // ── Payload ───────────────────────────────────────────────────────────────────
 
@@ -117,6 +128,10 @@ pub struct Envelope {
     pub nonce: [u8; 24],
     /// Verschlüsselter Payload (XChaCha20-Poly1305, `tag` als AAD gebunden).
     pub ciphertext: Vec<u8>,
+    /// ML-KEM-1024 Ciphertext — nur bei `ver == VERSION_HYBRID` populated.
+    /// Nicht in der Display-Impl, nicht im Debug-Output, aber auf dem Wire
+    /// hinter `ciphertext` angehängt (siehe [`Envelope::to_bytes`]).
+    pub mlkem_ct: Option<Vec<u8>>,
 }
 
 impl Envelope {
@@ -184,12 +199,112 @@ impl Envelope {
         pow_header.extend_from_slice(&ts.to_le_bytes());
         let pow_nonce = Hashcash::new(pow_difficulty).compute_nonce(&pow_header);
 
-        Self { ver: 1, ts, ttl, epk: epk_bytes, tag, pow_nonce, nonce, ciphertext }
+        Self {
+            ver: VERSION_CLASSIC,
+            ts, ttl, epk: epk_bytes, tag, pow_nonce, nonce, ciphertext,
+            mlkem_ct: None,
+        }
+    }
+
+    /// PQXDH-hybrid variant of [`Envelope::new`].
+    ///
+    /// Adds an ML-KEM-1024 encapsulation to the recipient's post-quantum
+    /// public key. The session encryption key becomes
+    /// `HKDF(spend_shared || mlkem_shared, info = HYBRID_ENC_HKDF_INFO)` —
+    /// an attacker needs to break **both** X25519 *and* ML-KEM to recover
+    /// the payload, future-proofing the envelope against a cryptographically
+    /// relevant quantum computer.
+    ///
+    /// Wire-identical to the classic envelope except the version byte is
+    /// [`VERSION_HYBRID`] and the ML-KEM ciphertext is appended after the
+    /// XChaCha20 payload (see [`to_bytes`]).
+    pub fn new_hybrid(
+        recipient_view_pub: &PublicKey,
+        recipient_hybrid_pub: &HybridPublicKey,
+        msg_id: u128,
+        ratchet_header: Vec<u8>,
+        encrypted_body: Vec<u8>,
+        ttl: u32,
+        pow_difficulty: u32,
+    ) -> Self {
+        let eph_secret = StaticSecret::random_from_rng(&mut OsRng);
+        let eph_public = PublicKey::from(&eph_secret);
+        let epk_bytes  = *eph_public.as_bytes();
+
+        // X25519 paths (tag still uses view_shared exactly like the classic
+        // flow so the existing scanner keeps working unchanged).
+        let view_shared  = eph_secret.diffie_hellman(recipient_view_pub);
+        let spend_shared = eph_secret.diffie_hellman(&recipient_hybrid_pub.x25519);
+
+        // Post-quantum encapsulation.
+        let (mlkem_shared, mlkem_ct) = mlkem1024::encapsulate(&recipient_hybrid_pub.mlkem);
+        let mlkem_ct_bytes = mlkem_ct.as_bytes().to_vec();
+
+        // Stealth tag — view-key-only, same as classic.
+        let tag_hkdf = Hkdf::<Sha256>::new(None, view_shared.as_bytes());
+        let mut tag_key = [0u8; 32];
+        tag_hkdf.expand(TAG_HKDF_INFO, &mut tag_key).expect("HKDF tag");
+        let mut tag_mac = <Hmac<Sha256> as Mac>::new_from_slice(&tag_key).expect("HMAC key");
+        tag_mac.update(&epk_bytes);
+        let tag: [u8; 32] = tag_mac.finalize().into_bytes().into();
+
+        // Hybrid enc_key = HKDF(spend_shared || mlkem_shared, "...Hybrid...").
+        let mut combined = Vec::with_capacity(32 + mlkem_shared.as_bytes().len());
+        combined.extend_from_slice(spend_shared.as_bytes());
+        combined.extend_from_slice(mlkem_shared.as_bytes());
+        let enc_hkdf = Hkdf::<Sha256>::new(None, &combined);
+        let mut enc_key = [0u8; 32];
+        enc_hkdf.expand(HYBRID_ENC_HKDF_INFO, &mut enc_key).expect("HKDF hybrid");
+
+        let payload = Payload { msg_id, ratchet_header, encrypted_body };
+        let payload_bytes = payload.to_bytes();
+
+        let mut nonce = [0u8; 24];
+        OsRng.fill_bytes(&mut nonce);
+
+        let cipher = XChaCha20Poly1305::new_from_slice(&enc_key).expect("Cipher init");
+        let ciphertext = cipher
+            .encrypt(XNonce::from_slice(&nonce), AeadPayload {
+                msg: &payload_bytes,
+                aad: &tag,
+            })
+            .expect("Hybrid encryption failed");
+
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut pow_header = Vec::with_capacity(40);
+        pow_header.extend_from_slice(&tag);
+        pow_header.extend_from_slice(&ts.to_le_bytes());
+        let pow_nonce = Hashcash::new(pow_difficulty).compute_nonce(&pow_header);
+
+        Self {
+            ver: VERSION_HYBRID,
+            ts, ttl, epk: epk_bytes, tag, pow_nonce, nonce, ciphertext,
+            mlkem_ct: Some(mlkem_ct_bytes),
+        }
     }
 
     /// Serialisiert das Envelope für den Versand (Wire-Format).
+    ///
+    /// Classic envelope:
+    /// ```text
+    ///  1  ver
+    ///  8  ts | 4  ttl | 32 epk | 32 tag | 8 pow_nonce | 24 nonce
+    ///  4  ciphertext_len | N  ciphertext
+    /// ```
+    /// Hybrid envelope — identical prefix, plus trailing ML-KEM block:
+    /// ```text
+    ///  ... classic payload ...
+    ///  4  mlkem_ct_len | M  mlkem_ct     (only when ver == VERSION_HYBRID)
+    /// ```
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(1 + 8 + 4 + 32 + 32 + 8 + 24 + 4 + self.ciphertext.len());
+        let mlkem_len = self.mlkem_ct.as_ref().map(|v| v.len()).unwrap_or(0);
+        let mut out = Vec::with_capacity(
+            1 + 8 + 4 + 32 + 32 + 8 + 24 + 4 + self.ciphertext.len()
+                + if mlkem_len > 0 { 4 + mlkem_len } else { 0 }
+        );
         out.push(self.ver);
         out.extend_from_slice(&self.ts.to_le_bytes());
         out.extend_from_slice(&self.ttl.to_le_bytes());
@@ -199,6 +314,13 @@ impl Envelope {
         out.extend_from_slice(&self.nonce);
         out.extend_from_slice(&(self.ciphertext.len() as u32).to_le_bytes());
         out.extend_from_slice(&self.ciphertext);
+
+        if self.ver == VERSION_HYBRID {
+            if let Some(ct) = &self.mlkem_ct {
+                out.extend_from_slice(&(ct.len() as u32).to_le_bytes());
+                out.extend_from_slice(ct);
+            }
+        }
         out
     }
 
@@ -226,17 +348,70 @@ impl Envelope {
         let ct_len = u32::from_le_bytes(data[c..c+4].try_into().ok()?) as usize; c += 4;
         if c + ct_len > data.len() { return None; }
         let ciphertext = data[c..c+ct_len].to_vec();
+        c += ct_len;
 
-        Some(Self { ver, ts, ttl, epk, tag, pow_nonce, nonce, ciphertext })
+        let mlkem_ct = if ver == VERSION_HYBRID {
+            if c + 4 > data.len() { return None; }
+            let mc_len = u32::from_le_bytes(data[c..c+4].try_into().ok()?) as usize;
+            c += 4;
+            if c + mc_len > data.len() { return None; }
+            Some(data[c..c+mc_len].to_vec())
+        } else {
+            None
+        };
+
+        Some(Self { ver, ts, ttl, epk, tag, pow_nonce, nonce, ciphertext, mlkem_ct })
     }
 
     /// Versucht das Envelope mit dem eigenen SpendKey zu öffnen.
-    /// Gibt `Some(Payload)` zurück wenn der SpendKey passt, sonst `None`.
+    ///
+    /// Erkennt automatisch Classic vs. Hybrid:
+    /// - `ver == VERSION_CLASSIC` → nur SpendKey nötig, X25519-only Pfad.
+    /// - `ver == VERSION_HYBRID`  → benötigt zusätzlich den ML-KEM-Secret
+    ///   des Empfängers; rufe dafür [`Envelope::open_hybrid`] auf. Diese
+    ///   Funktion gibt `None` zurück, wenn sie auf ein Hybrid-Envelope
+    ///   stößt.
     pub fn open(&self, spend_key: &SpendKey) -> Option<Payload> {
+        if self.ver != VERSION_CLASSIC {
+            return None;
+        }
         let spend_shared = spend_key.secret.diffie_hellman(&PublicKey::from(self.epk));
         let hk = Hkdf::<Sha256>::new(None, spend_shared.as_bytes());
         let mut enc_key = [0u8; 32];
         hk.expand(ENC_HKDF_INFO, &mut enc_key).ok()?;
+
+        let cipher = XChaCha20Poly1305::new_from_slice(&enc_key).ok()?;
+        let plain  = cipher.decrypt(XNonce::from_slice(&self.nonce), AeadPayload {
+            msg: &self.ciphertext,
+            aad: &self.tag,
+        }).ok()?;
+
+        Payload::from_bytes(&plain)
+    }
+
+    /// PQXDH-hybrid open. Requires the receiver's [`HybridSecretKey`] (the
+    /// X25519 half doubles as the spend-secret). Returns `None` if the
+    /// envelope is not marked hybrid, or the attached ML-KEM ciphertext
+    /// cannot be parsed / decapsulated / AEAD-decrypted.
+    pub fn open_hybrid(&self, hybrid: &HybridSecretKey) -> Option<Payload> {
+        if self.ver != VERSION_HYBRID {
+            return None;
+        }
+        let mlkem_bytes = self.mlkem_ct.as_ref()?;
+
+        // Re-derive both halves of the shared secret.
+        let epk = PublicKey::from(self.epk);
+        let spend_shared = hybrid.x25519.diffie_hellman(&epk);
+
+        let ct = MlKemCiphertext::from_bytes(mlkem_bytes).ok()?;
+        let mlkem_shared = mlkem1024::decapsulate(&ct, &hybrid.mlkem);
+
+        let mut combined = Vec::with_capacity(32 + mlkem_shared.as_bytes().len());
+        combined.extend_from_slice(spend_shared.as_bytes());
+        combined.extend_from_slice(mlkem_shared.as_bytes());
+        let enc_hkdf = Hkdf::<Sha256>::new(None, &combined);
+        let mut enc_key = [0u8; 32];
+        enc_hkdf.expand(HYBRID_ENC_HKDF_INFO, &mut enc_key).ok()?;
 
         let cipher = XChaCha20Poly1305::new_from_slice(&enc_key).ok()?;
         let plain  = cipher.decrypt(XNonce::from_slice(&self.nonce), AeadPayload {
@@ -267,6 +442,10 @@ impl Envelope {
             .duration_since(std::time::UNIX_EPOCH)
             .ok()?
             .as_secs();
-        Some(Self { ver: 1, ts, ttl: 300, epk, tag, pow_nonce: 0, nonce, ciphertext })
+        Some(Self {
+            ver: VERSION_CLASSIC,
+            ts, ttl: 300, epk, tag, pow_nonce: 0, nonce, ciphertext,
+            mlkem_ct: None,
+        })
     }
 }

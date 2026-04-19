@@ -29,15 +29,17 @@ use std::fs;
 use std::path::Path;
 
 use hkdf::Hkdf;
+use pqcrypto_mlkem::mlkem1024::PublicKey as MlKemPublicKey;
+use pqcrypto_traits::kem::PublicKey as KemPubTrait;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use x25519_dalek::PublicKey;
 
 use crate::address::PhantomAddress;
-use crate::envelope::Envelope;
-use crate::keys::{SpendKey, ViewKey};
+use crate::envelope::{Envelope, VERSION_HYBRID};
+use crate::keys::{HybridPublicKey, HybridSecretKey, SpendKey, ViewKey};
 use crate::ratchet::{RatchetError, RatchetState};
-use crate::scanner::{scan_envelope, ScanResult};
+use crate::scanner::scan_envelope_tag_ok;
 
 const SESSION_HKDF_INFO: &[u8] = b"PhantomChat-v1-Session";
 
@@ -93,6 +95,11 @@ impl SessionStore {
 
     /// Encrypt `plaintext` addressed to `recipient` and return a ready-to-
     /// publish [`Envelope`]. Creates a new ratchet session on first contact.
+    ///
+    /// Automatically picks the PQXDH-hybrid path when `recipient` carries
+    /// an ML-KEM public key, falls back to the classic X25519-only path
+    /// otherwise. Either way the ratchet layer is the same — only the
+    /// envelope-level encryption key differs.
     pub fn send(
         &mut self,
         recipient: &PhantomAddress,
@@ -100,10 +107,6 @@ impl SessionStore {
         pow_difficulty: u32,
     ) -> Envelope {
         let session = self.sessions.entry(recipient.short_id()).or_insert_with(|| {
-            // Bootstrap: derive `initial_shared` from a throwaway shared
-            // secret between us and the recipient's spend_pub. The envelope
-            // layer does its own fresh ECDH later, so the ratchet's
-            // bootstrap value only needs to be deterministic on both sides.
             let bootstrap = initial_shared_from_spend_pub(&recipient.spend_pub());
             RatchetState::initialize_as_sender(bootstrap, recipient.spend_pub())
         });
@@ -111,44 +114,112 @@ impl SessionStore {
         let (header, inner_ciphertext) = session.encrypt(plaintext);
         let msg_id = rand::random::<u128>();
 
-        Envelope::new(
-            &recipient.view_pub(),
-            &recipient.spend_pub(),
-            msg_id,
-            header,
-            inner_ciphertext,
-            300,
-            pow_difficulty,
-        )
+        match &recipient.mlkem_pub {
+            None => Envelope::new(
+                &recipient.view_pub(),
+                &recipient.spend_pub(),
+                msg_id,
+                header,
+                inner_ciphertext,
+                300,
+                pow_difficulty,
+            ),
+            Some(mlkem_bytes) => {
+                // Reconstruct the PQ-public from wire bytes and build a
+                // HybridPublicKey on the fly (recipient.spend_pub doubles
+                // as the X25519 half).
+                let mlkem_pk = match MlKemPublicKey::from_bytes(mlkem_bytes) {
+                    Ok(pk) => pk,
+                    Err(_) => {
+                        // Malformed ML-KEM pub — degrade gracefully to
+                        // classic so the message still ships.
+                        return Envelope::new(
+                            &recipient.view_pub(),
+                            &recipient.spend_pub(),
+                            msg_id, header, inner_ciphertext, 300, pow_difficulty,
+                        );
+                    }
+                };
+                let hybrid_pub = HybridPublicKey {
+                    x25519: recipient.spend_pub(),
+                    mlkem: mlkem_pk,
+                };
+                Envelope::new_hybrid(
+                    &recipient.view_pub(),
+                    &hybrid_pub,
+                    msg_id,
+                    header,
+                    inner_ciphertext,
+                    300,
+                    pow_difficulty,
+                )
+            }
+        }
     }
 
-    /// Try to decrypt `envelope` using our own `view_key` + `spend_key`.
-    /// Returns `Ok(None)` when the envelope simply isn't for us (silent drop
-    /// — the common case on a relay stream). Propagates real errors.
+    /// Classic X25519-only receive — see [`receive_hybrid`] for the PQXDH
+    /// variant. Returns `Ok(None)` when the envelope simply isn't for us
+    /// (silent drop — the common case on a relay stream).
     pub fn receive(
         &mut self,
         envelope: &Envelope,
         view_key: &ViewKey,
         spend_key: &SpendKey,
     ) -> Result<Option<Vec<u8>>, SessionError> {
-        let payload = match scan_envelope(envelope, view_key, spend_key) {
-            ScanResult::Mine(p) => p,
-            ScanResult::NotMine => return Ok(None),
-            ScanResult::Corrupted => return Err(SessionError::OuterDecryptFailed),
+        self.receive_inner(envelope, view_key, spend_key, None)
+    }
+
+    /// Receive path that can open both classic (v1) and PQXDH-hybrid (v2)
+    /// envelopes. Pass the caller's [`HybridSecretKey`] so hybrid envelopes
+    /// can be decapsulated. Classic envelopes are handled exactly like in
+    /// [`receive`].
+    pub fn receive_hybrid(
+        &mut self,
+        envelope: &Envelope,
+        view_key: &ViewKey,
+        spend_key: &SpendKey,
+        hybrid_secret: &HybridSecretKey,
+    ) -> Result<Option<Vec<u8>>, SessionError> {
+        self.receive_inner(envelope, view_key, spend_key, Some(hybrid_secret))
+    }
+
+    fn receive_inner(
+        &mut self,
+        envelope: &Envelope,
+        view_key: &ViewKey,
+        spend_key: &SpendKey,
+        hybrid_secret: Option<&HybridSecretKey>,
+    ) -> Result<Option<Vec<u8>>, SessionError> {
+        // Phase 1 — view-key tag check. Cheap, short-circuits on someone
+        // else's envelope (the majority of traffic on a public relay).
+        if !scan_envelope_tag_ok(envelope, view_key) {
+            return Ok(None);
+        }
+
+        // Phase 2 — version-aware payload decryption.
+        let payload = if envelope.ver == VERSION_HYBRID {
+            match hybrid_secret {
+                Some(hk) => envelope
+                    .open_hybrid(hk)
+                    .ok_or(SessionError::OuterDecryptFailed)?,
+                // Tag matches but we don't have the PQ secret — treat as
+                // silently-not-mine rather than a hard error so mixed
+                // classic/hybrid identities still work on the same node.
+                None => return Ok(None),
+            }
+        } else {
+            envelope
+                .open(spend_key)
+                .ok_or(SessionError::OuterDecryptFailed)?
         };
 
         if payload.ratchet_header.len() < 32 {
             return Err(SessionError::MissingHeader);
         }
 
-        // We only see what the envelope exposes: the outer `epk` and the
-        // ratchet header. We do **not** see the peer's stable PhantomAddress.
-        //
-        // First, try every existing session. This covers the common case
-        // where an ongoing conversation's peer just did a DH-ratchet step
-        // (the peer_ratchet public rotated but it's still the same contact).
-        // We clone before attempting so a failed decrypt doesn't advance the
-        // real session's chain keys.
+        // Phase 3 — ratchet lookup. See module docs for why we try every
+        // session before opening a new one: peer DH-ratchet rotations
+        // change `peer_ratchet_public` mid-conversation.
         for session in self.sessions.values_mut() {
             let mut candidate = session.clone();
             candidate.restore_secret();
@@ -161,7 +232,6 @@ impl SessionStore {
             }
         }
 
-        // No existing session could decrypt — treat this as first contact.
         let peer_ratchet_bytes: [u8; 32] = payload.ratchet_header[0..32]
             .try_into()
             .map_err(|_| SessionError::MissingHeader)?;

@@ -18,7 +18,7 @@ use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 use phantomchat_core::{
     address::PhantomAddress,
-    keys::{IdentityKey, ViewKey, SpendKey},
+    keys::{HybridKeyPair, IdentityKey, ViewKey, SpendKey},
     privacy::{PrivacyConfig, PrivacyMode, ProxyConfig, ProxyKind},
     session::SessionStore,
 };
@@ -202,7 +202,9 @@ async fn main() -> anyhow::Result<()> {
 fn cmd_selftest() -> anyhow::Result<()> {
     section("PIPELINE SELF-TEST");
 
-    // Ephemeral identities — nothing is persisted.
+    // ── Phase 1: classic X25519-only flow ────────────────────────────────
+    dimline("Phase 1 — classic envelope (X25519 + Double Ratchet)");
+
     let alice_view  = ViewKey::generate();
     let alice_spend = SpendKey::generate();
     let alice_addr  = PhantomAddress::new(alice_view.public, alice_spend.public);
@@ -211,14 +213,10 @@ fn cmd_selftest() -> anyhow::Result<()> {
     let bob_spend = SpendKey::generate();
     let bob_addr  = PhantomAddress::new(bob_view.public, bob_spend.public);
 
-    field("Alice",  &alice_addr.short_id());
-    field("Bob",    &bob_addr.short_id());
-    println!();
-
     let mut alice_store = SessionStore::new();
     let mut bob_store   = SessionStore::new();
 
-    let script: &[(&str, &[u8])] = &[
+    let classic_script: &[(&str, &[u8])] = &[
         ("A→B", b"handshake"),
         ("A→B", b"chain continues"),
         ("B→A", b"reply"),
@@ -230,7 +228,7 @@ fn cmd_selftest() -> anyhow::Result<()> {
     let mut passed = 0usize;
     let mut failed = 0usize;
 
-    for (dir, plain) in script {
+    for (dir, plain) in classic_script {
         let result = match *dir {
             "A→B" => {
                 let env = alice_store.send(&bob_addr, plain, 0);
@@ -240,49 +238,72 @@ fn cmd_selftest() -> anyhow::Result<()> {
                 let env = bob_store.send(&alice_addr, plain, 0);
                 alice_store.receive(&env, &alice_view, &alice_spend)
             }
-            other => {
-                eprintln!("unknown direction '{}'", other);
-                continue;
-            }
+            _ => continue,
         };
-
-        match result {
-            Ok(Some(got)) if got == *plain => {
-                println!(
-                    "  {}{}✓ {} {:<32}{}  plaintext matched ({} B)",
-                    B, G, dir, String::from_utf8_lossy(plain), R,
-                    got.len(),
-                );
-                passed += 1;
-            }
-            Ok(Some(got)) => {
-                println!(
-                    "  {}{}✗ {} {:<32}{}  mismatch: got {:?}",
-                    B, M, dir, String::from_utf8_lossy(plain), R,
-                    String::from_utf8_lossy(&got),
-                );
-                failed += 1;
-            }
-            Ok(None) => {
-                println!(
-                    "  {}{}✗ {} {:<32}{}  silently dropped (scanner miss)",
-                    B, M, dir, String::from_utf8_lossy(plain), R,
-                );
-                failed += 1;
-            }
-            Err(e) => {
-                println!(
-                    "  {}{}✗ {} {:<32}{}  error: {}",
-                    B, M, dir, String::from_utf8_lossy(plain), R, e,
-                );
-                failed += 1;
-            }
-        }
+        report_result(dir, plain, result, &mut passed, &mut failed);
     }
 
+    // ── Phase 2: PQXDH-hybrid flow (X25519 + ML-KEM-1024) ───────────────
+    println!();
+    dimline("Phase 2 — hybrid envelope (PQXDH: X25519 + ML-KEM-1024)");
+
+    let carol_view   = ViewKey::generate();
+    let carol_hybrid = HybridKeyPair::generate();
+    let carol_spend  = SpendKey {
+        public: carol_hybrid.public.x25519,
+        secret: carol_hybrid.secret.x25519.clone(),
+    };
+    let carol_addr = PhantomAddress::new_hybrid(
+        carol_view.public,
+        carol_hybrid.public.x25519,
+        carol_hybrid.public.to_bytes()[32..].to_vec(),
+    );
+
+    let dave_view   = ViewKey::generate();
+    let dave_hybrid = HybridKeyPair::generate();
+    let dave_spend  = SpendKey {
+        public: dave_hybrid.public.x25519,
+        secret: dave_hybrid.secret.x25519.clone(),
+    };
+    let dave_addr = PhantomAddress::new_hybrid(
+        dave_view.public,
+        dave_hybrid.public.x25519,
+        dave_hybrid.public.to_bytes()[32..].to_vec(),
+    );
+
+    let mut carol_store = SessionStore::new();
+    let mut dave_store  = SessionStore::new();
+
+    let hybrid_script: &[(&str, &[u8])] = &[
+        ("C→D", b"pq handshake"),
+        ("D→C", b"pq reply"),
+        ("C→D", b"pq rotation"),
+        ("D→C", b"pq final"),
+    ];
+
+    for (dir, plain) in hybrid_script {
+        let result = match *dir {
+            "C→D" => {
+                let env = carol_store.send(&dave_addr, plain, 0);
+                dave_store.receive_hybrid(&env, &dave_view, &dave_spend, &dave_hybrid.secret)
+            }
+            "D→C" => {
+                let env = dave_store.send(&carol_addr, plain, 0);
+                carol_store.receive_hybrid(&env, &carol_view, &carol_spend, &carol_hybrid.secret)
+            }
+            _ => continue,
+        };
+        report_result(dir, plain, result, &mut passed, &mut failed);
+    }
+
+    // ── Summary ─────────────────────────────────────────────────────────
+    let total = classic_script.len() + hybrid_script.len();
     println!();
     if failed == 0 {
-        ok(&format!("SELF-TEST PASSED — {} / {} messages round-tripped", passed, script.len()));
+        ok(&format!(
+            "SELF-TEST PASSED — {}/{} messages (classic+hybrid) round-tripped",
+            passed, total
+        ));
         Ok(())
     } else {
         Err(anyhow::anyhow!(
@@ -290,6 +311,46 @@ fn cmd_selftest() -> anyhow::Result<()> {
             passed,
             failed
         ))
+    }
+}
+
+fn report_result(
+    dir: &str,
+    plain: &[u8],
+    result: Result<Option<Vec<u8>>, phantomchat_core::session::SessionError>,
+    passed: &mut usize,
+    failed: &mut usize,
+) {
+    match result {
+        Ok(Some(got)) if got == plain => {
+            println!(
+                "  {}{}✓ {} {:<32}{}  plaintext matched ({} B)",
+                B, G, dir, String::from_utf8_lossy(plain), R, got.len(),
+            );
+            *passed += 1;
+        }
+        Ok(Some(got)) => {
+            println!(
+                "  {}{}✗ {} {:<32}{}  mismatch: got {:?}",
+                B, M, dir, String::from_utf8_lossy(plain), R,
+                String::from_utf8_lossy(&got),
+            );
+            *failed += 1;
+        }
+        Ok(None) => {
+            println!(
+                "  {}{}✗ {} {:<32}{}  silently dropped (scanner miss)",
+                B, M, dir, String::from_utf8_lossy(plain), R,
+            );
+            *failed += 1;
+        }
+        Err(e) => {
+            println!(
+                "  {}{}✗ {} {:<32}{}  error: {}",
+                B, M, dir, String::from_utf8_lossy(plain), R, e,
+            );
+            *failed += 1;
+        }
     }
 }
 

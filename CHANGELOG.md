@@ -5,6 +5,62 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.3.0] — 2026-04-20 — PQXDH live + Tor live
+
+### Added — Post-Quantum in the message flow
+
+PQXDH (ML-KEM-1024 + X25519) is no longer dormant code — it drives the
+envelope encryption key whenever the recipient address carries a PQ
+public key.
+
+- `envelope.rs` — new `Envelope::new_hybrid` /
+  `Envelope::open_hybrid`. Wire format bumps to version byte `2`; the
+  1568-byte ML-KEM ciphertext is appended after the classic payload so
+  v1 parsers still decode the common prefix. Hybrid key derivation:
+  `HKDF(spend_shared || mlkem_shared, "PhantomChat-v2-HybridEnvelope")`.
+- `address.rs` — `PhantomAddress` gains an optional `mlkem_pub` field.
+  New `phantomx:` wire prefix with the ML-KEM half base64-encoded:
+  `phantomx:<view_hex>:<spend_hex>:<mlkem_b64>`. Classic `phantom:`
+  addresses still round-trip untouched.
+- `session.rs` — `SessionStore::send` auto-routes to the hybrid path
+  when the recipient is hybrid. `receive_hybrid()` variant takes the
+  caller's `HybridSecretKey`. Classic `receive()` silently ignores v2
+  envelopes so mixed identities can coexist on one node.
+- `scanner.rs` — new `scan_envelope_tag_ok()` exposes just the
+  view-key phase so `SessionStore` can pick classic-vs-hybrid open
+  itself. The existing `scan_envelope()` wrapper remains for v1-only
+  callers.
+- `cli selftest` — now runs **two** phases: 6 classic messages + 4
+  hybrid messages. Live on the Hostinger VPS: 10/10 round-trip.
+
+### Added — Tor runtime
+
+- Tor daemon installed + enabled on the VPS. SOCKS5 listener at
+  `127.0.0.1:9050` verified against
+  `https://check.torproject.org/api/ip` →
+  `{"IsTor":true,"IP":"185.220.101.43"}`.
+- `phantom mode stealth` live-verified — switches to MaximumStealth,
+  flips CoverTraffic to Aggressive, routes Nostr through SOCKS5.
+
+### Added — Systemd background listener
+
+- `/etc/systemd/system/phantom-listener.service` — runs
+  `phantom listen` against `wss://relay.damus.io` on the VPS, restarts
+  on failure, appends to `/var/log/phantom-listener.log`. Started after
+  `tor.service` so stealth mode has a SOCKS5 listener waiting.
+
+### Tests
+
+`core/tests/hybrid_tests.rs` (7): address wire round-trip, classic vs
+hybrid sniff, self-send through PQXDH envelope, classic receive silently
+drops v2, foreign hybrid identity rejected, on-wire → parse →
+open_hybrid → plaintext intact, classic flow untouched by the extension.
+
+Full suite: **49 / 49 tests passing** under
+`cargo test --no-default-features`.
+
+---
+
 ## [2.2.0] — 2026-04-20 — Stufe A: daily-driver
 
 ### Added — Real message pipeline

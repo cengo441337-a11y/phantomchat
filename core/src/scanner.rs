@@ -48,37 +48,46 @@ pub enum ScanResult {
     Corrupted,
 }
 
-/// Scans a single envelope with the given ViewKey.
-///
-/// Phase 1 (fast): ECDH(view_secret, epk) → derive tag_key → verify HMAC tag.
-/// Phase 2 (only if tag matches): open with SpendKey → decrypt payload.
-pub fn scan_envelope(
-    env: &Envelope,
-    view_key: &ViewKey,
-    spend_key: &SpendKey,
-) -> ScanResult {
-    // Phase 1: ViewKey scan — O(1) ECDH + HMAC
+/// Phase-1 ViewKey scan only — returns `true` if the stealth tag matches,
+/// i.e. the envelope is addressed to this identity. Does **not** attempt
+/// decryption (callers pick classic vs hybrid open themselves).
+pub fn scan_envelope_tag_ok(env: &Envelope, view_key: &ViewKey) -> bool {
     let epk = PublicKey::from(env.epk);
     let view_shared = view_key.secret.diffie_hellman(&epk);
 
     let hk = Hkdf::<Sha256>::new(None, view_shared.as_bytes());
     let mut tag_key = [0u8; 32];
     if hk.expand(TAG_HKDF_INFO, &mut tag_key).is_err() {
-        return ScanResult::NotMine;
+        return false;
     }
 
     let mut hmac = match HmacSha256::new_from_slice(&tag_key) {
         Ok(h) => h,
-        Err(_) => return ScanResult::NotMine,
+        Err(_) => return false,
     };
     hmac.update(&env.epk);
     let expected_tag: [u8; 32] = hmac.finalize().into_bytes().into();
 
-    if !constant_time_eq(&expected_tag, &env.tag) {
+    constant_time_eq(&expected_tag, &env.tag)
+}
+
+/// Scans a single envelope with the given ViewKey.
+///
+/// Phase 1 (fast): ECDH(view_secret, epk) → derive tag_key → verify HMAC tag.
+/// Phase 2 (only if tag matches): open with SpendKey → decrypt payload.
+///
+/// Only decrypts **classic** (v1) envelopes — a hybrid (v2) envelope whose
+/// tag matches will come back as `Corrupted` here because the classic
+/// `Envelope::open` refuses v2. Use [`crate::session::SessionStore::receive`]
+/// for the full hybrid-aware path.
+pub fn scan_envelope(
+    env: &Envelope,
+    view_key: &ViewKey,
+    spend_key: &SpendKey,
+) -> ScanResult {
+    if !scan_envelope_tag_ok(env, view_key) {
         return ScanResult::NotMine;
     }
-
-    // Phase 2: SpendKey decrypt
     match env.open(spend_key) {
         Some(payload) => ScanResult::Mine(payload),
         None => ScanResult::Corrupted,
