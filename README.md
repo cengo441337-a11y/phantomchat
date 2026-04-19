@@ -131,8 +131,10 @@ SQLCipher AES-256    Lokale Datenbankversclüsselung
 | **Safety Numbers** (60-Digit Signal-style Fingerprint gegen MITM) | ✓ |
 | **X3DH Prekey Bundle** (SignedPrekey + OPK + Bundle-Sig-Chain) | ✓ |
 | **Gruppenchat via Sender Keys** (Signal-Stil, Ed25519-signiert) | ✓ |
-| **WASM-Feature-Gate** (core crypto ohne libp2p/tokio) | ✓ |
-| MLS Gruppen (RFC 9420 via `openmls`) | Deferred |
+| **Onion-Mixnet** (Sphinx-style layered AEAD, N-Hop Routing) | ✓ |
+| **PSI Contact Discovery** (DDH-Ristretto, no-leakage) | ✓ |
+| **WASM Browser-Bindings** (wasm-bindgen für JS-Client) | ✓ |
+| MLS Gruppen (RFC 9420 via `openmls`) | Geplant (roadmap in `mls.rs`) |
 | Externer Krypto-Audit | Vor Produktion |
 
 ---

@@ -21,10 +21,13 @@ use phantomchat_core::{
     fingerprint::safety_number,
     group::PhantomGroup,
     keys::{HybridKeyPair, IdentityKey, PhantomSigningKey, SpendKey, ViewKey},
+    mixnet::{pack_onion, peel_onion, MixnetHop, Peeled},
     prekey::PrekeyMaterial,
     privacy::{PrivacyConfig, PrivacyMode, ProxyConfig, ProxyKind},
+    psi::{PsiClient, PsiServer},
     session::SessionStore,
 };
+use x25519_dalek::StaticSecret as MixnetSecret;
 use phantomchat_relays::make_relay;
 use qrcodegen::{QrCode, QrCodeEcc};
 use rand_core::{OsRng, RngCore};
@@ -464,14 +467,105 @@ fn cmd_selftest() -> anyhow::Result<()> {
         }
     }
 
+    // ── Phase 7: Onion-routed mixnet (3-hop Sphinx-style) ────────────────
+    println!();
+    dimline("Phase 7 — Onion mixnet (3-hop layered AEAD)");
+
+    let h1_sec = MixnetSecret::random_from_rng(&mut OsRng);
+    let h2_sec = MixnetSecret::random_from_rng(&mut OsRng);
+    let h3_sec = MixnetSecret::random_from_rng(&mut OsRng);
+
+    let h1 = MixnetHop { public: (&h1_sec).into() };
+    let h2 = MixnetHop { public: (&h2_sec).into() };
+    let h3 = MixnetHop { public: (&h3_sec).into() };
+
+    let packet = pack_onion(&[h1.clone(), h2.clone(), h3.clone()], b"onion-delivered");
+
+    let peeled1 = peel_onion(&packet, &h1_sec);
+    let after_h1 = match peeled1 {
+        Ok(Peeled::Forward { packet: p, .. }) => p,
+        _ => { println!("  {}{}✗ hop1 did not forward{}", B, M, R); failed += 1; return Err(anyhow::anyhow!("mixnet")); }
+    };
+    let peeled2 = peel_onion(&after_h1, &h2_sec);
+    let after_h2 = match peeled2 {
+        Ok(Peeled::Forward { packet: p, .. }) => p,
+        _ => { println!("  {}{}✗ hop2 did not forward{}", B, M, R); failed += 1; return Err(anyhow::anyhow!("mixnet")); }
+    };
+    match peel_onion(&after_h2, &h3_sec) {
+        Ok(Peeled::Final { payload }) if payload == b"onion-delivered" => {
+            println!("  {}{}✓ 3-hop onion round-trip{}                  payload intact after 3 peels", B, G, R);
+            passed += 1;
+        }
+        other => {
+            println!("  {}{}✗ hop3 delivery failed{}  {:?}", B, M, R, other);
+            failed += 1;
+        }
+    }
+
+    // Peel with the wrong secret must fail.
+    let impostor_sec = MixnetSecret::random_from_rng(&mut OsRng);
+    let rogue = peel_onion(&packet, &impostor_sec);
+    if rogue.is_err() {
+        println!("  {}{}✓ wrong-key peel correctly refused{}", B, G, R);
+        passed += 1;
+    } else {
+        println!("  {}{}✗ wrong-key peel should have failed{}", B, M, R);
+        failed += 1;
+    }
+
+    // ── Phase 8: Private Set Intersection (DDH-Ristretto) ───────────────
+    println!();
+    dimline("Phase 8 — Private Set Intersection (DDH-Ristretto)");
+
+    let shared_a = PhantomAddress::new(ViewKey::generate().public, SpendKey::generate().public);
+    let shared_b = PhantomAddress::new(ViewKey::generate().public, SpendKey::generate().public);
+    let alice_only = PhantomAddress::new(ViewKey::generate().public, SpendKey::generate().public);
+    let bob_only = PhantomAddress::new(ViewKey::generate().public, SpendKey::generate().public);
+
+    let alice_set = vec![alice_only.clone(), shared_a.clone(), shared_b.clone()];
+    let bob_set   = vec![bob_only.clone(),   shared_a.clone(), shared_b.clone()];
+
+    let alice_psi = PsiClient::new(&alice_set);
+    let bob_psi   = PsiServer::new(&bob_set);
+
+    let my_dbl = bob_psi
+        .double_blind(alice_psi.blinded_query())
+        .expect("bob double-blind");
+    let peer_blinded = bob_psi.blinded_directory().to_vec();
+    let hits = alice_psi
+        .intersect(&my_dbl, &peer_blinded)
+        .expect("intersect");
+
+    let hit_set: std::collections::HashSet<_> = hits.iter().map(|a| a.short_id()).collect();
+    let alice_only_leaked = hit_set.contains(&alice_only.short_id());
+    let bob_only_leaked = hit_set.contains(&bob_only.short_id());
+    let shared_found = hit_set.contains(&shared_a.short_id())
+        && hit_set.contains(&shared_b.short_id());
+
+    if shared_found && !alice_only_leaked && !bob_only_leaked {
+        println!(
+            "  {}{}✓ PSI found {} shared, leaked 0 non-shared{}",
+            B, G, hits.len(), R
+        );
+        passed += 1;
+    } else {
+        println!(
+            "  {}{}✗ PSI wrong — hits={} shared_found={} leaked={}{}",
+            B, M, hits.len(), shared_found, alice_only_leaked || bob_only_leaked, R
+        );
+        failed += 1;
+    }
+
     // ── Summary ─────────────────────────────────────────────────────────
     let total = classic_script.len() + hybrid_script.len()
         + 1 /* sealed */ + 1 /* safety number */ + 2 /* prekey */
-        + group_script.len();
+        + group_script.len()
+        + 2 /* mixnet (roundtrip + wrong-key) */
+        + 1 /* PSI */;
     println!();
     if failed == 0 {
         ok(&format!(
-            "SELF-TEST PASSED — {}/{} checks across 6 phases",
+            "SELF-TEST PASSED — {}/{} checks across 8 phases",
             passed, total
         ));
         Ok(())

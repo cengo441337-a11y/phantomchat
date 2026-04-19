@@ -12,13 +12,19 @@ pub mod envelope;
 pub mod fingerprint;
 pub mod group;
 pub mod keys;
+pub mod mixnet;
+pub mod mls;
 pub mod pow;
 pub mod prekey;
 pub mod privacy;
+pub mod psi;
 pub mod ratchet;
 pub mod scanner;
 pub mod session;
 pub mod util;
+
+#[cfg(feature = "wasm")]
+pub mod wasm;
 
 // ── Native-runtime modules ───────────────────────────────────────────────────
 // These pull tokio + libp2p and therefore only compile on hosts with a real
@@ -34,6 +40,8 @@ pub use address::PhantomAddress;
 pub use envelope::{Envelope, Payload, SealedSender};
 pub use fingerprint::safety_number;
 pub use group::{GroupError, PhantomGroup, SenderKeyDistribution};
+pub use mixnet::{pack_onion, peel_onion, MixnetError, MixnetHop, MixnetPacket, Peeled};
+pub use psi::{PsiClient, PsiError, PsiServer};
 pub use keys::{
     verify_ed25519, HybridKeyPair, HybridPublicKey, HybridSecretKey, IdentityKey,
     PhantomSigningKey, SpendKey, ViewKey,

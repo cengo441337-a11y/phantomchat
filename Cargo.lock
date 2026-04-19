@@ -510,7 +510,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -668,6 +668,7 @@ dependencies = [
  "curve25519-dalek-derive",
  "digest",
  "fiat-crypto",
+ "rand_core 0.6.4",
  "rustc_version",
  "serde",
  "subtle",
@@ -2605,6 +2606,7 @@ dependencies = [
  "base64 0.22.1",
  "bs58",
  "chacha20poly1305",
+ "curve25519-dalek",
  "ed25519-dalek",
  "flutter_rust_bridge",
  "futures-util",
@@ -2620,12 +2622,14 @@ dependencies = [
  "rand_core 0.6.4",
  "rusqlite",
  "serde",
+ "serde-wasm-bindgen",
  "serde_json",
  "sha2",
  "subtle",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "wasm-bindgen",
  "x25519-dalek",
 ]
 
@@ -3279,6 +3283,17 @@ checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde-wasm-bindgen"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
+dependencies = [
+ "js-sys",
+ "serde",
+ "wasm-bindgen",
 ]
 
 [[package]]

@@ -5,6 +5,71 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.5.0] — 2026-04-20 — Tier 2 fertig
+
+### Added — Onion-routed mixnet
+
+- `mixnet.rs` — Sphinx-style layered AEAD mixnet. N-hop route, one
+  X25519 ephemeral shared across all hops; each hop peels its layer via
+  `ECDH(own_secret, eph_pub) → HKDF → XChaCha20-Poly1305` and either
+  forwards (`TAG_FORWARD`) or delivers (`TAG_FINAL`).
+- `MixnetHop`, `MixnetPacket` (with serde-free wire serialisation),
+  `pack_onion()`, `peel_onion() → Peeled::{Forward, Final}`.
+- **5 tests**: single-hop delivery, 3-hop peel-chain, wrong-key refusal,
+  AEAD-tamper detection, wire serialisation round-trip.
+- Hops pick themselves out of a public Nostr directory (future work);
+  this module is the transport primitive.
+
+### Added — Private Set Intersection (contact discovery)
+
+- `psi.rs` — DDH-PSI over Ristretto255 (`curve25519-dalek`). Three-round
+  protocol: Alice sends `H(a)^α`, Bob returns `{H(a)^(αβ)}` + his own
+  blinded set `H(b)^β`, Alice re-blinds and intersects. Each side
+  learns only the intersection — the non-matching half of their set
+  stays hidden under the DDH assumption.
+- `PsiClient::new(local_set)`, `PsiServer::new(directory)`, stateless
+  `blinded_query` / `double_blind` / `blinded_directory` / `intersect`.
+- Domain-separated hash-to-Ristretto so PSI points can't collide with
+  any other PhantomChat subprotocol.
+- **5 tests**: exact-intersection recovery, empty-intersection privacy,
+  all-match (self-intersection), arity mismatch rejection, fresh
+  scalars on every session (no cross-run membership leakage).
+
+### Added — WebAssembly bindings
+
+- `wasm.rs` — `wasm-bindgen`-annotated entry points guarded by the
+  `wasm` Cargo feature. Stateless surface: `wasm_generate_address`,
+  `wasm_safety_number`, `wasm_address_parse_ok`,
+  `wasm_prekey_bundle_verify`, `wasm_pack_onion`, `wasm_peel_onion`.
+- Enables a browser-side PhantomChat client that hands session state
+  to IndexedDB and calls these crypto primitives per message.
+- Build recipe documented in the module header; pins `getrandom v0.2`
+  `js` feature via `[target.'cfg(target_arch = "wasm32")']`.
+
+### Added — MLS integration plan
+
+- `mls.rs` — intentional stub + roadmap. `GROUP_VERSION_MLS = 2`
+  reserved so future TreeKEM-based groups coexist with the shipping
+  Sender-Keys format without a flag day. The `openmls` v0.6 dep and
+  ciphersuite bridge is a separate commit (see module docs for the
+  full rationale — pulling `rustls` + ~50 transitive crates is
+  non-trivial and best done in a dedicated session).
+
+### Selftest: 6 → 8 phases, 23 checks
+
+`phantom selftest` now runs Phases 7 (onion mixnet — 3-hop peel +
+wrong-key refusal) and 8 (PSI — 2 shared of 3, 0 non-shared leaked).
+Live on the Hostinger VPS: **23/23 passed**.
+
+### Deps
+
+- `curve25519-dalek = 4.1` with `rand_core` + `digest` features (for
+  PSI's Ristretto hash-to-point).
+- `wasm-bindgen = 0.2` + `serde-wasm-bindgen = 0.6` (optional, `wasm`
+  feature only).
+
+---
+
 ## [2.4.0] — 2026-04-20 — Tier 1 + Tier 2
 
 Top-tier privacy features — everything we previously marked "future work"
