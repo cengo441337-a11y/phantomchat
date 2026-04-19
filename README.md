@@ -122,10 +122,17 @@ SQLCipher AES-256    Lokale Datenbankversclüsselung
 | Cyberpunk CLI | ✓ |
 | Post-Quantum Hybrid vollständig (ML-KEM / Kyber im Envelope-Flow) | ✓ |
 | App-Lock PIN (PBKDF2) + Biometrie + Panic-Wipe | ✓ |
-| Core integration-test suite (49 tests) | ✓ |
-| CLI selftest (classic + PQXDH phases) | ✓ |
+| Core integration-test suite (64 tests) | ✓ |
+| CLI selftest (6 phases, 20 checks) | ✓ |
 | Tor SOCKS5 Stealth-Routing live | ✓ |
 | Systemd Dauer-Listener | ✓ |
+| **Sealed Sender** (Ed25519 identity-level message attribution) | ✓ |
+| **Payload Padding** (1024-byte blocks, gegen Length-Korrelation) | ✓ |
+| **Safety Numbers** (60-Digit Signal-style Fingerprint gegen MITM) | ✓ |
+| **X3DH Prekey Bundle** (SignedPrekey + OPK + Bundle-Sig-Chain) | ✓ |
+| **Gruppenchat via Sender Keys** (Signal-Stil, Ed25519-signiert) | ✓ |
+| **WASM-Feature-Gate** (core crypto ohne libp2p/tokio) | ✓ |
+| MLS Gruppen (RFC 9420 via `openmls`) | Deferred |
 | Externer Krypto-Audit | Vor Produktion |
 
 ---

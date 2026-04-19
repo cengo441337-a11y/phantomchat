@@ -5,6 +5,101 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.4.0] — 2026-04-20 — Tier 1 + Tier 2
+
+Top-tier privacy features — everything we previously marked "future work"
+on the README roadmap is now real code, on-VPS verified.
+
+### Added — Tier 1
+
+**Sealed Sender (Ed25519 authentication)**
+
+- `keys.rs` — new `PhantomSigningKey` + `verify_ed25519` helper. Ed25519
+  identity key separate from the X25519 Envelope crypto.
+- `envelope.rs` — `SealedSender { sender_pub, signature }` carried
+  *inside* the AEAD-encrypted [`Payload`]. Signs `ratchet_header ||
+  encrypted_body`. New `Envelope::new_sealed` /
+  `Envelope::new_hybrid_sealed` constructors, and low-level
+  `Envelope::seal_classic` / `::seal_hybrid` that take a pre-assembled
+  `Payload` for exotic callers.
+- `session.rs` — `SessionStore::send_sealed` pairs the plaintext with a
+  signature chain; `SessionStore::receive_full` returns a new
+  `ReceivedMessage { plaintext, sender: Option<(SealedSender, ok)> }`.
+- Relay + man-in-the-middle never learn the sender; only the recipient
+  does, and the signature can be cryptographically verified against a
+  known identity list.
+
+**Payload padding**
+
+- `Payload::to_bytes` now rounds the serialised length up to the next
+  multiple of `PAYLOAD_PAD_BLOCK = 1024` with CSPRNG-filled padding.
+  Different-length plaintexts land in the same wire bucket, breaking
+  length-correlation attacks.
+
+**Safety Numbers (Signal-style MITM detection)**
+
+- `fingerprint.rs` — `safety_number(addr_a, addr_b)` computes a
+  symmetric 60-digit decimal number from two PhantomAddresses using
+  5 200 rounds of SHA-512 (the Signal
+  `NumericFingerprintGenerator` arithmetic). Twelve 5-digit groups,
+  spoken-aloud friendly. Alice and Bob compare it out-of-band — a
+  mismatch flags an active MITM.
+
+**X3DH Prekey Bundle**
+
+- `prekey.rs` — `SignedPrekey` (Ed25519-signed rotating X25519 key),
+  `OneTimePrekey`, `PrekeyBundle { identity_pub, signed_prekey,
+  one_time_prekey }` with wire-level signature-chain verification.
+  `PrekeyMaterial::fresh(&identity)` generates a publish-ready bundle
+  and keeps the matching secrets on the owner side.
+- Ready to be dropped into any transport (Nostr event, NIP-05 HTTP
+  endpoint, QR code) for genuine out-of-band handshake.
+
+### Added — Tier 2
+
+**Sender-Keys group chat (pre-MLS)**
+
+- `group.rs` — `PhantomGroup` with Signal's Sender-Keys primitive:
+  each member holds a symmetric ratchet (`SenderKeyState`) they
+  distribute once per group via the pairwise 1-to-1 channel; subsequent
+  sends are O(1) AEAD + O(1) Ed25519 signature. Member removal rotates
+  our own chain so post-removal messages stay inaccessible.
+- Wire format versioned (`GROUP_VERSION_SENDER_KEYS = 1`) so a future
+  MLS (RFC 9420) migration via `openmls` can coexist without a
+  flag-day break.
+
+**WASM feature gate (crypto-only core for browser builds)**
+
+- `core/Cargo.toml` — new `net` feature gates libp2p + tokio +
+  dandelion + cover_traffic; `ffi` now depends on `net`; a bare
+  `cargo check --target wasm32-unknown-unknown --no-default-features
+  --features wasm` compiles the crypto core with zero native-runtime
+  deps.
+- `cfg(target_arch = "wasm32")` pins `getrandom v0.2`'s `js` feature so
+  the browser's `crypto.getRandomValues()` backs all RNG.
+- Note: `getrandom v0.3` transitives (e.g. through some newer crates)
+  currently also need `RUSTFLAGS='--cfg getrandom_backend="wasm_js"'`.
+  Documented in README; not a blocker for the feature-gate itself.
+
+### Selftest Phase 3–6
+
+`phantom selftest` grew from 10 messages to **20 checks across 6
+phases**: classic envelope, PQXDH, sealed-sender round-trip, safety
+number symmetry + format, prekey-bundle signature chain + forgery
+rejection, and a 3-member × 2-message group chat. Live on the Hostinger
+VPS: **20/20 passed**.
+
+### Tests
+
+`core/tests/sealed_sender_tests.rs` (5): sealed-sender round-trip,
+impersonation detection, padding block-alignment, padded-payload
+from_bytes round-trip, sealed + hybrid combination. `group.rs` inline
+tests (3), `fingerprint.rs` inline tests (3), `prekey.rs` inline tests
+(4). Full suite: **64 tests** under
+`cargo test --no-default-features --features net`.
+
+---
+
 ## [2.3.0] — 2026-04-20 — PQXDH live + Tor live
 
 ### Added — Post-Quantum in the message flow

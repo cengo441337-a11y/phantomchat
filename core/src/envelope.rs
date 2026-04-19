@@ -26,7 +26,7 @@
 //! Dadurch kann ein Relay-Operator oder Device mit nur dem ViewKey **sehen**,
 //! welche Nachrichten für den Empfänger sind, aber sie nicht **lesen**.
 
-use crate::keys::{HybridPublicKey, HybridSecretKey, SpendKey};
+use crate::keys::{HybridPublicKey, HybridSecretKey, PhantomSigningKey, SpendKey, verify_ed25519};
 use crate::pow::Hashcash;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
@@ -56,6 +56,51 @@ pub const VERSION_HYBRID: u8 = 2;
 
 // ── Payload ───────────────────────────────────────────────────────────────────
 
+/// Sealed-Sender block: optional sender attribution embedded *inside* the
+/// AEAD-encrypted payload. The relay and any eavesdropper see only random
+/// bytes — the receiver learns who sent the message (and can
+/// cryptographically verify it) only after successful decryption.
+///
+/// Signs `ratchet_header || encrypted_body` with the sender's
+/// [`PhantomSigningKey`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SealedSender {
+    /// 32-byte Ed25519 verifying key (the sender's identity pub).
+    pub sender_pub: [u8; 32],
+    /// 64-byte Ed25519 signature over `ratchet_header || encrypted_body`.
+    pub signature: [u8; 64],
+}
+
+impl SealedSender {
+    pub fn new(
+        signing_key: &PhantomSigningKey,
+        ratchet_header: &[u8],
+        encrypted_body: &[u8],
+    ) -> Self {
+        let mut msg = Vec::with_capacity(ratchet_header.len() + encrypted_body.len());
+        msg.extend_from_slice(ratchet_header);
+        msg.extend_from_slice(encrypted_body);
+        Self {
+            sender_pub: signing_key.public_bytes(),
+            signature: signing_key.sign(&msg),
+        }
+    }
+
+    /// Verify the signature matches `(ratchet_header || encrypted_body)`.
+    pub fn verify(&self, ratchet_header: &[u8], encrypted_body: &[u8]) -> bool {
+        let mut msg = Vec::with_capacity(ratchet_header.len() + encrypted_body.len());
+        msg.extend_from_slice(ratchet_header);
+        msg.extend_from_slice(encrypted_body);
+        verify_ed25519(&self.sender_pub, &msg, &self.signature)
+    }
+}
+
+/// Round payload bytes up to the next multiple of this padding granularity
+/// before AEAD encryption. A power-of-two block size keeps the wire size
+/// distribution coarse-grained: 1 KiB messages → 1024, 2 KiB → 2048, etc.
+/// so length-correlation attacks lose resolution.
+pub const PAYLOAD_PAD_BLOCK: usize = 1024;
+
 /// Innere Nutzlast — wird verschlüsselt im Envelope transportiert.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Payload {
@@ -65,22 +110,83 @@ pub struct Payload {
     pub ratchet_header: Vec<u8>,
     /// Die eigentliche Nachricht (verschlüsselt durch Ratchet).
     pub encrypted_body: Vec<u8>,
+    /// Optionale Sender-Attribution (Sealed Sender). Wenn `Some`, kann der
+    /// Empfänger nach erfolgreicher Entschlüsselung kryptografisch prüfen
+    /// wer die Nachricht gesendet hat.
+    pub sender_attribution: Option<SealedSender>,
+    /// Zufällige Padding-Bytes innerhalb des AEAD-Ciphertexts. Serialisiert
+    /// so dass die Payload-Länge auf ein Vielfaches von
+    /// [`PAYLOAD_PAD_BLOCK`] aufgerundet wird.
+    pub padding: Vec<u8>,
 }
 
 impl Payload {
+    /// Serialise with optional Sealed-Sender block + padding to the next
+    /// [`PAYLOAD_PAD_BLOCK`] multiple. Wire layout:
+    /// ```text
+    /// 16 B  msg_id
+    ///  4 B  rh_len  | N  ratchet_header
+    ///  4 B  eb_len  | M  encrypted_body
+    ///  1 B  has_attribution
+    ///  32 B sender_pub   ]── only if has_attribution == 1
+    ///  64 B signature    ]
+    ///  4 B  pad_len | P  padding
+    /// ```
     pub fn to_bytes(&self) -> Vec<u8> {
+        self.to_bytes_inner(true)
+    }
+
+    /// Same as [`to_bytes`] but **without** appending padding. Used by the
+    /// test suite to anchor non-padded round-trips.
+    pub fn to_bytes_unpadded(&self) -> Vec<u8> {
+        self.to_bytes_inner(false)
+    }
+
+    fn to_bytes_inner(&self, apply_padding: bool) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&self.msg_id.to_le_bytes());
         out.extend_from_slice(&(self.ratchet_header.len() as u32).to_le_bytes());
         out.extend_from_slice(&self.ratchet_header);
         out.extend_from_slice(&(self.encrypted_body.len() as u32).to_le_bytes());
         out.extend_from_slice(&self.encrypted_body);
+
+        match &self.sender_attribution {
+            None => out.push(0),
+            Some(s) => {
+                out.push(1);
+                out.extend_from_slice(&s.sender_pub);
+                out.extend_from_slice(&s.signature);
+            }
+        }
+
+        // Pad to next PAYLOAD_PAD_BLOCK boundary (including the pad_len u32).
+        let baseline_len = out.len() + 4; // pad_len field takes 4 bytes
+        let padding_needed = if apply_padding {
+            let overflow = baseline_len % PAYLOAD_PAD_BLOCK;
+            if overflow == 0 { 0 } else { PAYLOAD_PAD_BLOCK - overflow }
+        } else {
+            self.padding.len()
+        };
+
+        let mut padding = if apply_padding {
+            let mut p = vec![0u8; padding_needed];
+            OsRng.fill_bytes(&mut p);
+            p
+        } else {
+            self.padding.clone()
+        };
+        if !apply_padding && padding.len() != padding_needed {
+            padding.resize(padding_needed, 0);
+        }
+
+        out.extend_from_slice(&(padding.len() as u32).to_le_bytes());
+        out.extend_from_slice(&padding);
         out
     }
 
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         let mut c = 0usize;
-        if data.len() < 16 + 4 + 4 { return None; }
+        if data.len() < 16 + 4 + 4 + 1 + 4 { return None; }
 
         let msg_id = u128::from_le_bytes(data[c..c+16].try_into().ok()?); c += 16;
 
@@ -91,9 +197,38 @@ impl Payload {
         if c + 4 > data.len() { return None; }
         let eb_len = u32::from_le_bytes(data[c..c+4].try_into().ok()?) as usize; c += 4;
         if c + eb_len > data.len() { return None; }
-        let encrypted_body = data[c..c+eb_len].to_vec();
+        let encrypted_body = data[c..c+eb_len].to_vec(); c += eb_len;
 
-        Some(Self { msg_id, ratchet_header, encrypted_body })
+        if c + 1 > data.len() { return None; }
+        let has_attribution = data[c]; c += 1;
+        let sender_attribution = if has_attribution == 1 {
+            if c + 32 + 64 > data.len() { return None; }
+            let sender_pub: [u8; 32] = data[c..c+32].try_into().ok()?; c += 32;
+            let signature:  [u8; 64] = data[c..c+64].try_into().ok()?; c += 64;
+            Some(SealedSender { sender_pub, signature })
+        } else {
+            None
+        };
+
+        if c + 4 > data.len() { return None; }
+        let pad_len = u32::from_le_bytes(data[c..c+4].try_into().ok()?) as usize; c += 4;
+        if c + pad_len > data.len() { return None; }
+        let padding = data[c..c+pad_len].to_vec();
+
+        Some(Self {
+            msg_id, ratchet_header, encrypted_body,
+            sender_attribution, padding,
+        })
+    }
+
+    /// Convenience constructor — no sealed sender, padding is filled at
+    /// serialisation time.
+    pub fn classic(msg_id: u128, ratchet_header: Vec<u8>, encrypted_body: Vec<u8>) -> Self {
+        Self {
+            msg_id, ratchet_header, encrypted_body,
+            sender_attribution: None,
+            padding: Vec::new(),
+        }
     }
 }
 
@@ -175,7 +310,7 @@ impl Envelope {
         enc_hkdf.expand(ENC_HKDF_INFO, &mut enc_key).expect("HKDF enc");
 
         // 6. Payload bauen und verschlüsseln (Tag als AAD → bindet ihn an den Chiffretext)
-        let payload = Payload { msg_id, ratchet_header, encrypted_body };
+        let payload = Payload::classic(msg_id, ratchet_header, encrypted_body);
         let payload_bytes = payload.to_bytes();
 
         let mut nonce = [0u8; 24];
@@ -190,6 +325,96 @@ impl Envelope {
             .expect("Encryption failed");
 
         // 7. Proof-of-Work über (tag || ts)
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut pow_header = Vec::with_capacity(40);
+        pow_header.extend_from_slice(&tag);
+        pow_header.extend_from_slice(&ts.to_le_bytes());
+        let pow_nonce = Hashcash::new(pow_difficulty).compute_nonce(&pow_header);
+
+        Self {
+            ver: VERSION_CLASSIC,
+            ts, ttl, epk: epk_bytes, tag, pow_nonce, nonce, ciphertext,
+            mlkem_ct: None,
+        }
+    }
+
+    /// Sealed-Sender variant of [`Envelope::new`].
+    ///
+    /// Identical on the wire, but the inner AEAD-encrypted [`Payload`]
+    /// additionally carries a [`SealedSender`] block — a 32-byte Ed25519
+    /// public key plus a signature over `ratchet_header || encrypted_body`.
+    /// Only the recipient sees the attribution (after successful AEAD
+    /// decrypt) and can cryptographically verify it.
+    pub fn new_sealed(
+        recipient_view_pub: &PublicKey,
+        recipient_spend_pub: &PublicKey,
+        sender_signing_key: &PhantomSigningKey,
+        msg_id: u128,
+        ratchet_header: Vec<u8>,
+        encrypted_body: Vec<u8>,
+        ttl: u32,
+        pow_difficulty: u32,
+    ) -> Self {
+        let attribution = SealedSender::new(sender_signing_key, &ratchet_header, &encrypted_body);
+        Self::seal_classic(
+            recipient_view_pub,
+            recipient_spend_pub,
+            Payload {
+                msg_id,
+                ratchet_header,
+                encrypted_body,
+                sender_attribution: Some(attribution),
+                padding: Vec::new(),
+            },
+            ttl,
+            pow_difficulty,
+        )
+    }
+
+    /// Low-level constructor that takes an already-assembled [`Payload`].
+    /// Used by [`new`] and [`new_sealed`]; exposed so callers with exotic
+    /// payload needs (e.g. group-level MLS wrappers) can feed their own.
+    pub fn seal_classic(
+        recipient_view_pub: &PublicKey,
+        recipient_spend_pub: &PublicKey,
+        payload: Payload,
+        ttl: u32,
+        pow_difficulty: u32,
+    ) -> Self {
+        let eph_secret = StaticSecret::random_from_rng(&mut OsRng);
+        let eph_public = PublicKey::from(&eph_secret);
+        let epk_bytes  = *eph_public.as_bytes();
+
+        let view_shared  = eph_secret.diffie_hellman(recipient_view_pub);
+        let spend_shared = eph_secret.diffie_hellman(recipient_spend_pub);
+
+        let tag_hkdf = Hkdf::<Sha256>::new(None, view_shared.as_bytes());
+        let mut tag_key = [0u8; 32];
+        tag_hkdf.expand(TAG_HKDF_INFO, &mut tag_key).expect("HKDF tag");
+        let mut tag_mac = <Hmac<Sha256> as Mac>::new_from_slice(&tag_key).expect("HMAC key");
+        tag_mac.update(&epk_bytes);
+        let tag: [u8; 32] = tag_mac.finalize().into_bytes().into();
+
+        let enc_hkdf = Hkdf::<Sha256>::new(None, spend_shared.as_bytes());
+        let mut enc_key = [0u8; 32];
+        enc_hkdf.expand(ENC_HKDF_INFO, &mut enc_key).expect("HKDF enc");
+
+        let payload_bytes = payload.to_bytes();
+
+        let mut nonce = [0u8; 24];
+        OsRng.fill_bytes(&mut nonce);
+
+        let cipher = XChaCha20Poly1305::new_from_slice(&enc_key).expect("Cipher init");
+        let ciphertext = cipher
+            .encrypt(XNonce::from_slice(&nonce), AeadPayload {
+                msg: &payload_bytes,
+                aad: &tag,
+            })
+            .expect("Encryption failed");
+
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -227,20 +452,63 @@ impl Envelope {
         ttl: u32,
         pow_difficulty: u32,
     ) -> Self {
+        Self::seal_hybrid(
+            recipient_view_pub,
+            recipient_hybrid_pub,
+            Payload::classic(msg_id, ratchet_header, encrypted_body),
+            ttl,
+            pow_difficulty,
+        )
+    }
+
+    /// Sealed-Sender PQXDH-hybrid envelope. Same wire shape as
+    /// [`new_hybrid`], but the inner [`Payload`] carries a [`SealedSender`]
+    /// signed with the caller's Ed25519 [`PhantomSigningKey`].
+    pub fn new_hybrid_sealed(
+        recipient_view_pub: &PublicKey,
+        recipient_hybrid_pub: &HybridPublicKey,
+        sender_signing_key: &PhantomSigningKey,
+        msg_id: u128,
+        ratchet_header: Vec<u8>,
+        encrypted_body: Vec<u8>,
+        ttl: u32,
+        pow_difficulty: u32,
+    ) -> Self {
+        let attribution = SealedSender::new(sender_signing_key, &ratchet_header, &encrypted_body);
+        Self::seal_hybrid(
+            recipient_view_pub,
+            recipient_hybrid_pub,
+            Payload {
+                msg_id,
+                ratchet_header,
+                encrypted_body,
+                sender_attribution: Some(attribution),
+                padding: Vec::new(),
+            },
+            ttl,
+            pow_difficulty,
+        )
+    }
+
+    /// Low-level PQXDH-hybrid constructor that takes an already-assembled
+    /// [`Payload`]. See [`seal_classic`] for the v1 counterpart.
+    pub fn seal_hybrid(
+        recipient_view_pub: &PublicKey,
+        recipient_hybrid_pub: &HybridPublicKey,
+        payload: Payload,
+        ttl: u32,
+        pow_difficulty: u32,
+    ) -> Self {
         let eph_secret = StaticSecret::random_from_rng(&mut OsRng);
         let eph_public = PublicKey::from(&eph_secret);
         let epk_bytes  = *eph_public.as_bytes();
 
-        // X25519 paths (tag still uses view_shared exactly like the classic
-        // flow so the existing scanner keeps working unchanged).
         let view_shared  = eph_secret.diffie_hellman(recipient_view_pub);
         let spend_shared = eph_secret.diffie_hellman(&recipient_hybrid_pub.x25519);
 
-        // Post-quantum encapsulation.
         let (mlkem_shared, mlkem_ct) = mlkem1024::encapsulate(&recipient_hybrid_pub.mlkem);
         let mlkem_ct_bytes = mlkem_ct.as_bytes().to_vec();
 
-        // Stealth tag — view-key-only, same as classic.
         let tag_hkdf = Hkdf::<Sha256>::new(None, view_shared.as_bytes());
         let mut tag_key = [0u8; 32];
         tag_hkdf.expand(TAG_HKDF_INFO, &mut tag_key).expect("HKDF tag");
@@ -248,7 +516,6 @@ impl Envelope {
         tag_mac.update(&epk_bytes);
         let tag: [u8; 32] = tag_mac.finalize().into_bytes().into();
 
-        // Hybrid enc_key = HKDF(spend_shared || mlkem_shared, "...Hybrid...").
         let mut combined = Vec::with_capacity(32 + mlkem_shared.as_bytes().len());
         combined.extend_from_slice(spend_shared.as_bytes());
         combined.extend_from_slice(mlkem_shared.as_bytes());
@@ -256,7 +523,6 @@ impl Envelope {
         let mut enc_key = [0u8; 32];
         enc_hkdf.expand(HYBRID_ENC_HKDF_INFO, &mut enc_key).expect("HKDF hybrid");
 
-        let payload = Payload { msg_id, ratchet_header, encrypted_body };
         let payload_bytes = payload.to_bytes();
 
         let mut nonce = [0u8; 24];

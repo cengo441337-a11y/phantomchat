@@ -36,12 +36,25 @@ use sha2::Sha256;
 use x25519_dalek::PublicKey;
 
 use crate::address::PhantomAddress;
-use crate::envelope::{Envelope, VERSION_HYBRID};
-use crate::keys::{HybridPublicKey, HybridSecretKey, SpendKey, ViewKey};
+use crate::envelope::{Envelope, SealedSender, VERSION_HYBRID};
+use crate::keys::{HybridPublicKey, HybridSecretKey, PhantomSigningKey, SpendKey, ViewKey};
 use crate::ratchet::{RatchetError, RatchetState};
 use crate::scanner::scan_envelope_tag_ok;
 
 const SESSION_HKDF_INFO: &[u8] = b"PhantomChat-v1-Session";
+
+/// Outcome of a successful [`SessionStore::receive_full`] call — the
+/// plaintext plus, if the sender opted into Sealed Sender, verifying
+/// signature material.
+#[derive(Debug, Clone)]
+pub struct ReceivedMessage {
+    pub plaintext: Vec<u8>,
+    /// `Some((sender_pub, true))` when the envelope carried a Sealed-Sender
+    /// block and the signature verified. `Some((sender_pub, false))` on a
+    /// present-but-invalid signature (receiver should log and discard).
+    /// `None` when the envelope was unauthenticated.
+    pub sender: Option<(SealedSender, bool)>,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -157,6 +170,57 @@ impl SessionStore {
         }
     }
 
+    /// Sealed-Sender variant of [`send`]. Additionally signs
+    /// `ratchet_header || encrypted_body` with the caller's
+    /// [`PhantomSigningKey`] and embeds the signature in the inner payload.
+    /// Automatically picks classic or hybrid envelope based on the
+    /// recipient address.
+    pub fn send_sealed(
+        &mut self,
+        recipient: &PhantomAddress,
+        plaintext: &[u8],
+        signing_key: &PhantomSigningKey,
+        pow_difficulty: u32,
+    ) -> Envelope {
+        let session = self.sessions.entry(recipient.short_id()).or_insert_with(|| {
+            let bootstrap = initial_shared_from_spend_pub(&recipient.spend_pub());
+            RatchetState::initialize_as_sender(bootstrap, recipient.spend_pub())
+        });
+        let (header, inner_ciphertext) = session.encrypt(plaintext);
+        let msg_id = rand::random::<u128>();
+
+        match &recipient.mlkem_pub {
+            None => Envelope::new_sealed(
+                &recipient.view_pub(),
+                &recipient.spend_pub(),
+                signing_key,
+                msg_id, header, inner_ciphertext, 300, pow_difficulty,
+            ),
+            Some(mlkem_bytes) => {
+                use pqcrypto_mlkem::mlkem1024::PublicKey as MlKemPublicKey;
+                let mlkem_pk = match MlKemPublicKey::from_bytes(mlkem_bytes) {
+                    Ok(pk) => pk,
+                    Err(_) => return Envelope::new_sealed(
+                        &recipient.view_pub(),
+                        &recipient.spend_pub(),
+                        signing_key,
+                        msg_id, header, inner_ciphertext, 300, pow_difficulty,
+                    ),
+                };
+                let hybrid_pub = HybridPublicKey {
+                    x25519: recipient.spend_pub(),
+                    mlkem: mlkem_pk,
+                };
+                Envelope::new_hybrid_sealed(
+                    &recipient.view_pub(),
+                    &hybrid_pub,
+                    signing_key,
+                    msg_id, header, inner_ciphertext, 300, pow_difficulty,
+                )
+            }
+        }
+    }
+
     /// Classic X25519-only receive — see [`receive_hybrid`] for the PQXDH
     /// variant. Returns `Ok(None)` when the envelope simply isn't for us
     /// (silent drop — the common case on a relay stream).
@@ -245,6 +309,85 @@ impl SessionStore {
 
         let plaintext = session.decrypt(&payload.ratchet_header, &payload.encrypted_body)?;
         Ok(Some(plaintext))
+    }
+
+    /// Full-fat receive that surfaces sealed-sender attribution.
+    ///
+    /// Runs the same tag → decrypt → ratchet pipeline as [`receive`] /
+    /// [`receive_hybrid`], but returns [`ReceivedMessage`] — the plaintext
+    /// plus, if present, the attached [`SealedSender`] and whether its
+    /// Ed25519 signature verified against `ratchet_header || encrypted_body`.
+    pub fn receive_full(
+        &mut self,
+        envelope: &Envelope,
+        view_key: &ViewKey,
+        spend_key: &SpendKey,
+        hybrid_secret: Option<&HybridSecretKey>,
+    ) -> Result<Option<ReceivedMessage>, SessionError> {
+        if !scan_envelope_tag_ok(envelope, view_key) {
+            return Ok(None);
+        }
+
+        let payload = if envelope.ver == VERSION_HYBRID {
+            match hybrid_secret {
+                Some(hk) => envelope
+                    .open_hybrid(hk)
+                    .ok_or(SessionError::OuterDecryptFailed)?,
+                None => return Ok(None),
+            }
+        } else {
+            envelope
+                .open(spend_key)
+                .ok_or(SessionError::OuterDecryptFailed)?
+        };
+
+        if payload.ratchet_header.len() < 32 {
+            return Err(SessionError::MissingHeader);
+        }
+
+        // Ratchet decrypt (same rotation-tolerant search as receive_inner).
+        let plaintext = {
+            let mut found = None;
+            for session in self.sessions.values_mut() {
+                let mut candidate = session.clone();
+                candidate.restore_secret();
+                if let Ok(plain) = candidate.decrypt(
+                    &payload.ratchet_header,
+                    &payload.encrypted_body,
+                ) {
+                    *session = candidate;
+                    found = Some(plain);
+                    break;
+                }
+            }
+            match found {
+                Some(p) => p,
+                None => {
+                    let peer_ratchet_bytes: [u8; 32] = payload.ratchet_header[0..32]
+                        .try_into()
+                        .map_err(|_| SessionError::MissingHeader)?;
+                    let peer_ratchet_pub = x25519_dalek::PublicKey::from(peer_ratchet_bytes);
+                    let bootstrap = initial_shared_from_spend_pub(&spend_key.public);
+                    let session_key = format!("peer:{}", hex::encode(&peer_ratchet_bytes[..8]));
+                    let session = self.sessions.entry(session_key).or_insert_with(|| {
+                        RatchetState::initialize_as_receiver(
+                            bootstrap,
+                            &spend_key.secret,
+                            peer_ratchet_pub,
+                        )
+                    });
+                    session.decrypt(&payload.ratchet_header, &payload.encrypted_body)?
+                }
+            }
+        };
+
+        // Verify sealed-sender signature over the *pre-ratchet* wire bytes.
+        let sender = payload.sender_attribution.map(|attr| {
+            let ok = attr.verify(&payload.ratchet_header, &payload.encrypted_body);
+            (attr, ok)
+        });
+
+        Ok(Some(ReceivedMessage { plaintext, sender }))
     }
 }
 

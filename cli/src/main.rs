@@ -18,7 +18,10 @@ use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 use phantomchat_core::{
     address::PhantomAddress,
-    keys::{HybridKeyPair, IdentityKey, ViewKey, SpendKey},
+    fingerprint::safety_number,
+    group::PhantomGroup,
+    keys::{HybridKeyPair, IdentityKey, PhantomSigningKey, SpendKey, ViewKey},
+    prekey::PrekeyMaterial,
     privacy::{PrivacyConfig, PrivacyMode, ProxyConfig, ProxyKind},
     session::SessionStore,
 };
@@ -296,12 +299,179 @@ fn cmd_selftest() -> anyhow::Result<()> {
         report_result(dir, plain, result, &mut passed, &mut failed);
     }
 
+    // ── Phase 3: Sealed Sender (identity authentication) ────────────────
+    println!();
+    dimline("Phase 3 — Sealed Sender (Ed25519 identity attribution)");
+
+    let eve_view  = ViewKey::generate();
+    let eve_spend = SpendKey::generate();
+    let eve_addr  = PhantomAddress::new(eve_view.public, eve_spend.public);
+    let frank_view  = ViewKey::generate();
+    let frank_spend = SpendKey::generate();
+    let frank_addr  = PhantomAddress::new(frank_view.public, frank_spend.public);
+    let eve_sign = PhantomSigningKey::generate();
+
+    let mut eve_store   = SessionStore::new();
+    let mut frank_store = SessionStore::new();
+
+    let sealed_env = eve_store.send_sealed(&frank_addr, b"signed hello", &eve_sign, 0);
+    match frank_store.receive_full(&sealed_env, &frank_view, &frank_spend, None) {
+        Ok(Some(msg)) => {
+            let plaintext_ok = msg.plaintext == b"signed hello";
+            let (attr, sig_ok) = msg.sender.clone().unwrap_or_else(|| (
+                phantomchat_core::SealedSender { sender_pub: [0u8; 32], signature: [0u8; 64] },
+                false,
+            ));
+            let identity_ok = attr.sender_pub == eve_sign.public_bytes();
+            if plaintext_ok && sig_ok && identity_ok {
+                println!(
+                    "  {}{}✓ sealed-sender round-trip{}              plaintext ok · sig ok · identity={}",
+                    B, G, R,
+                    &hex::encode(&attr.sender_pub)[..8],
+                );
+                passed += 1;
+            } else {
+                println!("  {}{}✗ sealed-sender round-trip{}              plaintext={} sig={} identity={}",
+                    B, M, R, plaintext_ok, sig_ok, identity_ok);
+                failed += 1;
+            }
+        }
+        other => {
+            println!("  {}{}✗ sealed-sender receive failed{}  {:?}", B, M, R, other);
+            failed += 1;
+        }
+    }
+    let _ = eve_addr;
+
+    // ── Phase 4: Safety Numbers (Signal-style MITM detection) ────────────
+    println!();
+    dimline("Phase 4 — Safety Numbers (60-digit session fingerprint)");
+
+    let number = safety_number(&alice_addr, &bob_addr);
+    let reverse = safety_number(&bob_addr, &alice_addr);
+    if number == reverse && number.split(' ').count() == 12 {
+        println!("  {}{}✓ fingerprint is symmetric + 12-group format{}", B, G, R);
+        println!("  {}  Alice↔Bob: {}{}", DIM, number, R);
+        passed += 1;
+    } else {
+        println!("  {}{}✗ fingerprint malformed{}", B, M, R);
+        failed += 1;
+    }
+
+    // ── Phase 5: X3DH Prekey Bundle signature chain ──────────────────────
+    println!();
+    dimline("Phase 5 — X3DH Prekey Bundle");
+
+    let identity = PhantomSigningKey::generate();
+    let (_material, bundle) = PrekeyMaterial::fresh(&identity);
+    let self_verifies = bundle.verify();
+    let fp = bundle.fingerprint();
+
+    if self_verifies {
+        println!(
+            "  {}{}✓ prekey bundle signed + verifies{}         fingerprint={}",
+            B, G, R, hex::encode(fp),
+        );
+        passed += 1;
+    } else {
+        println!("  {}{}✗ bundle signature did not verify{}", B, M, R);
+        failed += 1;
+    }
+
+    // Tamper check — a foreign identity replacing the identity pub must fail.
+    let mut forged = bundle.clone();
+    let impostor = PhantomSigningKey::generate();
+    forged.identity_pub = hex::encode(impostor.public_bytes());
+    if !forged.verify() {
+        println!("  {}{}✓ forged bundle (swapped identity) rejected{}", B, G, R);
+        passed += 1;
+    } else {
+        println!("  {}{}✗ forged bundle verifies — signature oracle bug{}", B, M, R);
+        failed += 1;
+    }
+
+    // ── Phase 6: Group chat via Sender Keys ──────────────────────────────
+    println!();
+    dimline("Phase 6 — Group chat (Sender Keys, 3 senders × 2 msgs)");
+
+    let g_alice_sign = PhantomSigningKey::generate();
+    let g_bob_sign   = PhantomSigningKey::generate();
+    let g_carol_sign = PhantomSigningKey::generate();
+
+    let roster = vec![
+        PhantomAddress::new(ViewKey::generate().public, SpendKey::generate().public),
+        PhantomAddress::new(ViewKey::generate().public, SpendKey::generate().public),
+        PhantomAddress::new(ViewKey::generate().public, SpendKey::generate().public),
+    ];
+
+    let mut g_alice = PhantomGroup::new(roster.clone(), &g_alice_sign);
+    let mut g_bob   = PhantomGroup::new(roster.clone(), &g_bob_sign);
+    let mut g_carol = PhantomGroup::new(roster.clone(), &g_carol_sign);
+    // Sync group_ids — the `new()` randomises one per instance; in a real
+    // deployment the organiser sends it out as part of the invite.
+    g_bob.group_id   = g_alice.group_id;
+    g_carol.group_id = g_alice.group_id;
+
+    // Distribute every sender's key to every other member via 1-to-1.
+    g_bob.accept_distribution(g_alice.own_distribution(&g_alice_sign));
+    g_carol.accept_distribution(g_alice.own_distribution(&g_alice_sign));
+    g_alice.accept_distribution(g_bob.own_distribution(&g_bob_sign));
+    g_carol.accept_distribution(g_bob.own_distribution(&g_bob_sign));
+    g_alice.accept_distribution(g_carol.own_distribution(&g_carol_sign));
+    g_bob.accept_distribution(g_carol.own_distribution(&g_carol_sign));
+
+    let group_script: &[(&str, &PhantomSigningKey, &[u8])] = &[
+        ("Alice→grp", &g_alice_sign, b"hi everyone"),
+        ("Bob→grp",   &g_bob_sign,   b"hey"),
+        ("Carol→grp", &g_carol_sign, b"joined"),
+        ("Alice→grp", &g_alice_sign, b"second"),
+        ("Bob→grp",   &g_bob_sign,   b"here"),
+        ("Carol→grp", &g_carol_sign, b"also here"),
+    ];
+
+    for (label, sign, plain) in group_script {
+        // Each sender encrypts with their own state; the other two members
+        // decrypt. We'll assert at least both of the non-senders succeed.
+        let wire = match *label {
+            "Alice→grp" => g_alice.encrypt(sign, plain),
+            "Bob→grp"   => g_bob.encrypt(sign, plain),
+            "Carol→grp" => g_carol.encrypt(sign, plain),
+            _ => continue,
+        };
+
+        let (pb, pc) = match *label {
+            "Alice→grp" => (g_bob.decrypt(&wire), g_carol.decrypt(&wire)),
+            "Bob→grp"   => (g_alice.decrypt(&wire), g_carol.decrypt(&wire)),
+            "Carol→grp" => (g_alice.decrypt(&wire), g_bob.decrypt(&wire)),
+            _ => continue,
+        };
+
+        let ok_a = pb.as_ref().map(|v| v == *plain).unwrap_or(false);
+        let ok_b = pc.as_ref().map(|v| v == *plain).unwrap_or(false);
+        if ok_a && ok_b {
+            println!(
+                "  {}{}✓ {} {:<20}{}  both receivers decoded ({} B)",
+                B, G, label, String::from_utf8_lossy(plain), R, plain.len(),
+            );
+            passed += 1;
+        } else {
+            println!(
+                "  {}{}✗ {} {:<20}{}  r1={:?} r2={:?}",
+                B, M, label, String::from_utf8_lossy(plain), R,
+                pb.err(), pc.err(),
+            );
+            failed += 1;
+        }
+    }
+
     // ── Summary ─────────────────────────────────────────────────────────
-    let total = classic_script.len() + hybrid_script.len();
+    let total = classic_script.len() + hybrid_script.len()
+        + 1 /* sealed */ + 1 /* safety number */ + 2 /* prekey */
+        + group_script.len();
     println!();
     if failed == 0 {
         ok(&format!(
-            "SELF-TEST PASSED — {}/{} messages (classic+hybrid) round-tripped",
+            "SELF-TEST PASSED — {}/{} checks across 6 phases",
             passed, total
         ));
         Ok(())

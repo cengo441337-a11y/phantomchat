@@ -9,20 +9,37 @@ pub mod storage;
 
 pub mod address;
 pub mod envelope;
+pub mod fingerprint;
+pub mod group;
 pub mod keys;
 pub mod pow;
+pub mod prekey;
 pub mod privacy;
-pub mod dandelion;
-pub mod cover_traffic;
 pub mod ratchet;
 pub mod scanner;
 pub mod session;
 pub mod util;
 
+// ── Native-runtime modules ───────────────────────────────────────────────────
+// These pull tokio + libp2p and therefore only compile on hosts with a real
+// OS. WASM / embedded builds (`--no-default-features`, optional `wasm`) still
+// get the full Envelope + Session + PQXDH + SealedSender + prekey + safety
+// number stack — just no peer discovery or traffic generation.
+#[cfg(feature = "net")]
+pub mod cover_traffic;
+#[cfg(feature = "net")]
+pub mod dandelion;
+
 pub use address::PhantomAddress;
-pub use keys::{IdentityKey, ViewKey, SpendKey, HybridKeyPair, HybridPublicKey};
-pub use envelope::{Envelope, Payload};
+pub use envelope::{Envelope, Payload, SealedSender};
+pub use fingerprint::safety_number;
+pub use group::{GroupError, PhantomGroup, SenderKeyDistribution};
+pub use keys::{
+    verify_ed25519, HybridKeyPair, HybridPublicKey, HybridSecretKey, IdentityKey,
+    PhantomSigningKey, SpendKey, ViewKey,
+};
 pub use pow::Hashcash;
-pub use ratchet::{RatchetState, RatchetError};
-pub use scanner::{scan_envelope, scan_batch, ScanResult};
-pub use session::{SessionStore, SessionError};
+pub use prekey::{OneTimePrekey, PrekeyBundle, PrekeyMaterial, SignedPrekey};
+pub use ratchet::{RatchetError, RatchetState};
+pub use scanner::{scan_batch, scan_envelope, ScanResult};
+pub use session::{ReceivedMessage, SessionError, SessionStore};

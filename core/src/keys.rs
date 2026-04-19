@@ -21,12 +21,70 @@ use pqcrypto_mlkem::mlkem1024::{
 };
 use pqcrypto_traits::kem::{PublicKey as KemPubTrait,
     Ciphertext as KemCtTrait, SharedSecret as KemSSTrait};
+use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey, Signature as Ed25519Signature};
 
 /// Identity‑Keypair.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdentityKey {
     pub public: [u8; 32],
     pub private: [u8; 32],
+}
+
+/// Ed25519 signing keypair — used by the Sealed-Sender flow to
+/// authenticate envelopes to their receiver.
+///
+/// `Debug` is intentionally *not* derived — the 32-byte scalar must never
+/// leak into logs or panic traces.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PhantomSigningKey {
+    /// Raw 32-byte seed. Rehydrated into an `ed25519_dalek::SigningKey` on
+    /// demand so the live key material does not live in long-lived globals.
+    bytes: [u8; 32],
+}
+
+impl PhantomSigningKey {
+    pub fn generate() -> Self {
+        let mut bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut bytes);
+        Self { bytes }
+    }
+
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self { bytes }
+    }
+
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.bytes
+    }
+
+    pub fn signing_key(&self) -> SigningKey {
+        SigningKey::from_bytes(&self.bytes)
+    }
+
+    pub fn verifying_key(&self) -> VerifyingKey {
+        self.signing_key().verifying_key()
+    }
+
+    /// Raw 32-byte encoding of the public key — what peers see and verify
+    /// against.
+    pub fn public_bytes(&self) -> [u8; 32] {
+        self.verifying_key().to_bytes()
+    }
+
+    /// Sign arbitrary bytes. Produces a 64-byte Ed25519 signature.
+    pub fn sign(&self, message: &[u8]) -> [u8; 64] {
+        self.signing_key().sign(message).to_bytes()
+    }
+}
+
+/// Verify an Ed25519 signature produced by [`PhantomSigningKey::sign`].
+///
+/// `public_bytes` must be the 32-byte encoding of the signer's verifying
+/// key — typically pulled out of [`SealedSender`] in the decrypted payload.
+pub fn verify_ed25519(public_bytes: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool {
+    let Ok(verifying) = VerifyingKey::from_bytes(public_bytes) else { return false; };
+    let Ok(sig) = Ed25519Signature::try_from(&signature[..]) else { return false; };
+    verifying.verify(message, &sig).is_ok()
 }
 
 /// View‑Keypair (X25519).

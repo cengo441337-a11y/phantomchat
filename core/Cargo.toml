@@ -28,11 +28,18 @@ lazy_static = "1.4"
 pqcrypto-mlkem = "0.1.1"
 pqcrypto-traits = "0.3.5"
 base64 = "0.22"
-bs58 = "0.5"
-tokio = { version = "1.40", features = ["full"] }
-futures-util = "0.3"
-libp2p = { version = "0.56.0", features = ["tcp", "dns", "noise", "yamux", "kad", "request-response", "json", "tokio", "macros", "gossipsub"] }
-tracing = "0.1"
+ed25519-dalek = { version = "2.1", features = ["rand_core", "serde"] }
+subtle = "2.5"
+
+# ── Optional: async runtime + networking stack ───────────────────────────────
+# libp2p + tokio pull native OS primitives that don't exist on wasm32. They
+# only compile when the `net` feature (default) is on; WASM builds turn it
+# off and get a crypto-only core.
+bs58 = { version = "0.5", optional = true }
+tokio = { version = "1.40", features = ["full"], optional = true }
+futures-util = { version = "0.3", optional = true }
+libp2p = { version = "0.56.0", features = ["tcp", "dns", "noise", "yamux", "kad", "request-response", "json", "tokio", "macros", "gossipsub"], optional = true }
+tracing = { version = "0.1", optional = true }
 
 # ── Optional FFI/storage dependencies ────────────────────────────────────────
 # These only compile when the `ffi` feature is active (default for the Flutter
@@ -42,6 +49,25 @@ flutter_rust_bridge = { version = "=2.12.0", optional = true }
 rusqlite = { version = "0.31", features = ["bundled-sqlcipher"], optional = true }
 
 [features]
-default = ["ffi"]
-ffi = ["dep:flutter_rust_bridge", "dep:rusqlite"]
+# Default build = Flutter bridge target: everything on.
+default = ["ffi", "net"]
+# Native async networking stack (libp2p, tokio, dandelion router, cover
+# traffic generator). Turn off for wasm32-unknown-unknown.
+net = ["dep:bs58", "dep:tokio", "dep:futures-util", "dep:libp2p", "dep:tracing"]
+# Flutter bridge + SQLCipher storage. Requires `net`.
+ffi = ["net", "dep:flutter_rust_bridge", "dep:rusqlite"]
+# Crypto-only build for WASM / embedded: no native runtime, no FFI.
+# `cargo check --target wasm32-unknown-unknown --no-default-features --features wasm`
+wasm = []
 pqc = []
+
+# ── Integration tests that require the native-runtime feature ────────────────
+[[test]]
+name = "dandelion_tests"
+required-features = ["net"]
+
+# ── WASM: force getrandom to use the browser's crypto.getRandomValues() ──────
+# Transitively pulled by rand / rand_core / ed25519-dalek. Without the `js`
+# feature the wasm32 build errors at compile time.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
