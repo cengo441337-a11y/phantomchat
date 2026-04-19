@@ -120,8 +120,9 @@ SQLCipher AES-256    Lokale Datenbankversclüsselung
 | Panic Wipe | ✓ |
 | Flutter Mobile App (Android / iOS) | ✓ |
 | Cyberpunk CLI | ✓ |
-| Post-Quantum Hybrid vollständig (ML-KEM / Kyber) | In Progress |
-| App-Lock PIN / Biometrie | Geplant |
+| Post-Quantum Hybrid vollständig (ML-KEM / Kyber) | ✓ |
+| App-Lock PIN (PBKDF2) + Biometrie + Panic-Wipe | ✓ |
+| Core integration-test suite (32 tests) | ✓ |
 | Externer Krypto-Audit | Vor Produktion |
 
 ---

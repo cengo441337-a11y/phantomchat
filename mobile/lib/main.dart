@@ -4,6 +4,7 @@ import 'services/storage_service.dart';
 import 'screens/onboarding.dart';
 import 'screens/home.dart';
 import 'theme.dart';
+import 'widgets/app_lock_gate.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -31,7 +32,9 @@ class PhantomApp extends StatelessWidget {
       title: 'PhantomChat',
       theme: phantomTheme(),
       debugShowCheckedModeBanner: false,
-      home: hasIdentity ? const HomeScreen() : const OnboardingScreen(),
+      home: AppLockGate(
+        child: hasIdentity ? const HomeScreen() : const OnboardingScreen(),
+      ),
     );
   }
 }

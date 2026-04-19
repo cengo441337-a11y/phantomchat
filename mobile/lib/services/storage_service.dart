@@ -74,4 +74,22 @@ class StorageService {
     messages.add(message);
     await saveMessages(message.contactId, messages);
   }
+
+  /// Erase every piece of PhantomChat state from the device. Called by the
+  /// panic-wipe path in [AppLockService] after too many failed PINs and by
+  /// the manual "Wipe device" button in the security settings.
+  ///
+  /// Scrubs, in order:
+  /// 1. The identity blob from `FlutterSecureStorage`.
+  /// 2. Contacts + all per-contact message histories from `SharedPreferences`.
+  static Future<void> wipe() async {
+    await _storage.delete(key: _identityKey);
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_contactsKey);
+    final msgKeys = prefs.getKeys().where((k) => k.startsWith(_messagesPrefix));
+    for (final k in msgKeys) {
+      await prefs.remove(k);
+    }
+  }
 }

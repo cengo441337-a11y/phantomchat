@@ -5,6 +5,108 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.1.0] — 2026-04-19
+
+### Fixed — Cryptographic correctness
+
+- **Envelope ↔ scanner stealth-tag model unified.** The previous
+  implementation derived the tag from `ECDH(eph, spend_pub)` on the sender
+  but from `ECDH(view_secret, epk)` on the receiver, using different HKDF
+  info strings and different HMAC inputs (16-byte `msg_id` vs 8-byte `ts`).
+  No envelope could ever round-trip end-to-end. `Envelope::new` now takes
+  **both** `recipient_view_pub` and `recipient_spend_pub`:
+  - `view_shared` → `HKDF(info = "PhantomChat-v1-ViewTag")` → HMAC over `epk` → stealth tag
+  - `spend_shared` → `HKDF(info = "PhantomChat-v1-Envelope")` → XChaCha20 key
+  - Scanner derives the same `tag_key` from `view_secret × epk` and
+    constant-time-compares, then `Envelope::open` re-derives the encryption
+    key from `spend_shared`. This matches the Monero stealth-address model
+    the README advertises.
+- **`keys.rs`** — `ViewKey` / `SpendKey` no longer derive `Debug` (prevents
+  accidental secret-scalar leakage into logs); replaced deprecated
+  `StaticSecret::new(&mut OsRng)` with `::random_from_rng`.
+- **`x25519-dalek` features** — added the missing `static_secrets` + `serde`
+  features so the crate actually builds.
+
+### Added — Test coverage
+
+Thirty-two integration tests in `core/tests/` — the crate previously had
+exactly one `cfg(test)` unit test.
+
+- `envelope_tests.rs` (10) — round-trip correctness, foreign-ViewKey
+  rejection, two-key-split validation (wrong ViewKey ⇒ NotMine even with
+  correct SpendKey), mismatched-SpendKey ⇒ Corrupted, wire serialisation
+  round-trip, truncated-bytes graceful failure, tag/ciphertext tampering
+  breaks decryption, dummy-envelope wire validity vs scanner rejection,
+  per-dummy entropy check.
+- `scanner_tests.rs` (3) — batch scanning returns only matching payloads,
+  PoW verifier accepts at-or-below difficulty and rejects dummies.
+- `pow_tests.rs` (5) — compute/verify symmetry, wrong-nonce rejection,
+  difficulty-zero shortcut, difficulty-ladder behaviour, input-dependent
+  nonce uniqueness.
+- `keys_tests.rs` (7) — PQXDH round-trip (sender and receiver derive
+  identical 32-byte session key), two independent encapsulations differ,
+  `HybridPublicKey` 1600-byte wire round-trip, short-input rejection,
+  View/Spend independence, `IdentityKey` size + uniqueness, X25519 ECDH
+  commutativity.
+- `dandelion_tests.rs` (6) — empty-router falls back to Fluff, peer-update
+  selects a stem, stem-removal triggers rotation, `force_rotate` on empty
+  router is safe, first-peer-add initialises stem, statistical stem/fluff
+  distribution (FLUFF_PROB = 0.1, tolerance 5–20 %).
+
+All green: `cargo test --no-default-features` → **33 passed, 0 failed**.
+
+### Added — Flutter app-lock
+
+- `services/app_lock_service.dart` — PBKDF2-HMAC-SHA256 (100 000 iterations,
+  16-byte CSPRNG salt) PIN derivation backed by `FlutterSecureStorage`;
+  biometric quick-unlock via `local_auth`; configurable auto-lock timeout
+  (default 60 s inactivity); **panic-wipe after 10 consecutive wrong PINs**
+  that erases identity, contacts, messages, preferences, and the SQLCipher
+  DB password.
+- `screens/lock_screen.dart` — cyberpunk PIN-Pad UI, unlock + setup-mode,
+  biometric button, attempts-remaining warning.
+- `widgets/app_lock_gate.dart` — `WidgetsBindingObserver` gate that
+  re-checks the lock state on lifecycle resume and forces setup for any
+  existing identity that has no PIN configured yet (migration path for
+  pre-2.1 installs).
+- `services/storage_service.dart` — `StorageService.wipe()` added, used by
+  the panic-wipe pipeline.
+- `screens/onboarding.dart` — identity-creation flow now hands off to a
+  mandatory PIN setup before the home screen becomes reachable.
+- `main.dart` — wraps the app in `AppLockGate`.
+
+### Fixed — Build / workspace plumbing
+
+- `core/Cargo.toml` — new `ffi` feature (default on) gates
+  `flutter_rust_bridge` + `rusqlite` (SQLCipher) so pure-crypto tests run
+  with `cargo test --no-default-features` on hosts without OpenSSL dev
+  headers.
+- `core/src/lib.rs` — `api`, `storage`, `network`, and `frb_generated`
+  modules moved behind `#[cfg(feature = "ffi")]`.
+- `cli/Cargo.toml`, `relays/Cargo.toml` — depend on core with
+  `default-features = false`; relays gains its own `ffi` feature that
+  reactivates `start_stealth_cover_consumer`.
+- `relays/src/lib.rs` / `nostr.rs` — API upgrades for newer crate
+  versions: `Keypair` → `KeyPair`, `Message::from_digest` →
+  `Message::from_slice`, added `use futures::SinkExt`, `BridgeProvider`
+  made dyn-compatible by replacing generic `subscribe<F>` with
+  `subscribe(Box<dyn Fn(Envelope) + Send + Sync + 'static>)`, JSON macro
+  `[] as Vec<Vec<String>>` rewritten with a typed binding.
+- `cli/src/main.rs` — recipient address now parsed as
+  `view_pub_hex:spend_pub_hex` (matches the `phantom pair` QR payload);
+  `listen` re-wired onto `scan_envelope`/`ScanResult` instead of brute-
+  forcing every envelope with the SpendKey; borrow-checker temporaries
+  lifted into `let` bindings; format-string arity corrected.
+
+### Changed
+
+- `Envelope::new` signature — now `(view_pub, spend_pub, msg_id, …)`
+  instead of `(spend_pub, msg_id, …)`. All callers updated.
+- Scanner HKDF info label: `"PhantomChat-v1-Tag"` → `"PhantomChat-v1-ViewTag"`
+  (matches `envelope.rs`).
+
+---
+
 ## [2.0.0] — 2026-04-04
 
 ### Added

@@ -10,6 +10,7 @@ import '../theme.dart';
 import '../widgets/glitch_text.dart';
 import '../widgets/cyber_card.dart';
 import 'home.dart';
+import 'lock_screen.dart';
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
@@ -104,9 +105,24 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   }
 
   void _finish() {
+    // Force a PIN to be configured before the main app becomes reachable.
+    // The lock screen in setupMode double-enters + confirms the PIN and
+    // calls onUnlocked once it's stored in secure storage.
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
-        pageBuilder: (_, __, ___) => const HomeScreen(),
+        pageBuilder: (_, __, ___) => LockScreen(
+          setupMode: true,
+          onUnlocked: () {
+            Navigator.of(context).pushReplacement(
+              PageRouteBuilder(
+                pageBuilder: (_, __, ___) => const HomeScreen(),
+                transitionDuration: const Duration(milliseconds: 400),
+                transitionsBuilder: (_, anim, __, child) =>
+                    FadeTransition(opacity: anim, child: child),
+              ),
+            );
+          },
+        ),
         transitionDuration: const Duration(milliseconds: 400),
         transitionsBuilder: (_, anim, __, child) =>
             FadeTransition(opacity: anim, child: child),
