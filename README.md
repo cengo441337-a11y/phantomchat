@@ -1,10 +1,56 @@
 # PhantomChat
 
-![Status](https://img.shields.io/badge/Status-v2.0.0-brightgreen)
+![Status](https://img.shields.io/badge/Status-v2.6.0-brightgreen)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![Crypto](https://img.shields.io/badge/Crypto-PQXDH_%2B_XChaCha20--Poly1305-red)
 ![PQ](https://img.shields.io/badge/Post--Quantum-ML--KEM--1024-blueviolet)
+![MLS](https://img.shields.io/badge/Groups-MLS_RFC_9420-brightgreen)
 ![Network](https://img.shields.io/badge/Network-libp2p_%2F_Nostr_%2F_Tor-orange)
+![Tests](https://img.shields.io/badge/Tests-64_%2F_64-success)
+
+**Dezentrales, Post-Quantum-sicheres, metadatenarmes Messaging.** Monero-Stealth-Adressen + Double Ratchet + ML-KEM-1024 + MLS-Gruppen + Onion-Mixnet + PSI-Contact-Discovery, wrapping in ein Envelope-Format das sich auf dem Wire nicht von Cover Traffic unterscheiden lässt.
+
+> **⚠️ Pre-Audit.** PhantomChat ist ein Forschungs- und Portfolio-Projekt von [DC INFOSEC](https://dc-infosec.de). Der Krypto-Stack ist spec-implementiert und integrationstest-abgedeckt, aber **nicht extern auditiert**. Für High-Stakes-Einsatz (Aktivismus, Whistleblowing, journalistische Quellenarbeit) bitte auf den Abschluss des Audits warten.
+
+---
+
+## Quick Start
+
+```bash
+# Build
+cargo build --release -p phantomchat_cli
+
+# Pipeline self-test — exercises all 9 cryptographic phases in one process,
+# no network required
+./target/release/phantomchat_cli selftest
+
+# Generate an identity + view the shareable address
+./target/release/phantomchat_cli keygen -o alice.json
+./target/release/phantomchat_cli pair   -f alice.json
+
+# Send an encrypted message (classic or PQXDH hybrid, auto-detected from
+# the recipient address; the `phantom:` vs `phantomx:` prefix decides)
+./target/release/phantomchat_cli send \
+  -f alice.json \
+  -r "phantom:<view_hex>:<spend_hex>" \
+  -m "first ghost message" \
+  -u wss://relay.damus.io
+
+# Listen for incoming envelopes (view-key stealth-scanning against every
+# envelope the relay broadcasts)
+./target/release/phantomchat_cli listen -f alice.json -u wss://relay.damus.io
+
+# Switch to MaximumStealth (requires a local Tor / Nym SOCKS5 listener)
+./target/release/phantomchat_cli mode stealth --proxy 127.0.0.1:9050
+```
+
+The full test suite runs without a network:
+
+```bash
+cargo test --no-default-features --features net,mls
+# 64 tests across envelope, scanner, pow, ratchet, session, sealed sender,
+# hybrid PQXDH, fingerprint, prekey, group (Sender Keys), mixnet, PSI, MLS
+```
 
 ---
 
@@ -248,11 +294,74 @@ Vollständige Dokumentation: [docs/SECURITY.md](docs/SECURITY.md)
 
 ---
 
-## Sicherheitshinweis
+## Repository-Layout
 
-PhantomChat ist ein Forschungs- und Portfolio-Projekt von **DC INFOSEC**. Der Krypto-Code ist nicht extern auditiert. Vor einem produktiven Einsatz in Hochrisiko-Szenarien ist ein unabhängiger kryptografischer Audit erforderlich.
+```
+phantomchat/
+├── core/              Rust-Kernbibliothek — die gesamte Krypto lebt hier
+│   ├── src/
+│   │   ├── envelope.rs    Envelope (v1 classic, v2 PQXDH-hybrid)
+│   │   ├── scanner.rs     ViewKey-Stealth-Scanner
+│   │   ├── ratchet.rs     Signal-style Double Ratchet
+│   │   ├── session.rs     SessionStore + send/receive/receive_full
+│   │   ├── keys.rs        X25519, Ed25519, HybridKeyPair (ML-KEM-1024)
+│   │   ├── address.rs     PhantomAddress + phantomx: extended form
+│   │   ├── fingerprint.rs Safety Numbers (60-digit)
+│   │   ├── prekey.rs      X3DH Prekey Bundle
+│   │   ├── group.rs       Sender Keys group chat
+│   │   ├── mls.rs         RFC 9420 MLS via openmls (`mls` feature)
+│   │   ├── mixnet.rs      Sphinx-style layered onion routing
+│   │   ├── psi.rs         DDH-Ristretto Private Set Intersection
+│   │   ├── wasm.rs        wasm-bindgen JS surface (`wasm` feature)
+│   │   ├── dandelion.rs   Dandelion++ router (native `net` feature)
+│   │   ├── cover_traffic.rs  Light + Aggressive generators
+│   │   └── network.rs     libp2p GossipSub bindings
+│   └── tests/             9 integration-test suites, 64 tests
+├── cli/               phantom — the cyberpunk CLI
+├── relays/            Nostr + SOCKS5 relay adapters
+├── mobile/            Flutter App (Android / iOS) via flutter_rust_bridge
+├── docs/              SPEC.md, PRIVACY.md, SECURITY.md
+├── infra/             docker-compose for hosting your own Nostr relay
+└── CHANGELOG.md
+```
 
-Sicherheitslücken direkt an DC INFOSEC melden — nicht öffentlich.
+---
+
+## Build-Matrix
+
+| Ziel | Kommando | Hinweise |
+|------|----------|----------|
+| Classic CLI (`phantom`) | `cargo build --release -p phantomchat_cli` | Zieht `net` + `mls` per Default |
+| Core ohne Network-Stack | `cargo test -p phantomchat_core --no-default-features` | Lean build, nur Krypto |
+| Core mit MLS | `cargo test -p phantomchat_core --no-default-features --features mls` | openmls 0.8 transitive |
+| Core für Browser | `RUSTFLAGS='--cfg getrandom_backend="wasm_js"' cargo build -p phantomchat_core --no-default-features --features wasm --target wasm32-unknown-unknown` | Dann `wasm-bindgen --target web --out-dir pkg` |
+| Flutter Mobile | `cd mobile && flutter pub get && flutter run` | Nach FFI-Regen: `flutter_rust_bridge_codegen generate` |
+| Dauer-Listener (systemd) | `infra/systemd/phantom-listener.service` | Startet nach `tor.service` |
+
+---
+
+## Contributing
+
+Pull Requests und Issues sind willkommen, besonders für:
+
+- **Externer Krypto-Audit** — wenn du Kryptograph:in bist und PhantomChat auditieren willst, melde dich.
+- **MLS-Migrationshelfer** — Sender-Keys → MLS Übergangs-Tooling für bestehende Gruppen.
+- **Flutter UI-Port** von den `lib/src/ui/*` Dateien auf den echten Rust-FFI-Pfad (FFI-Bridge ist bereits live in `core/src/api.rs`).
+- **Android APK Release-Signing + F-Droid Metadata**.
+- **iOS Build + App-Store-Review** (braucht Apple-Developer-Account).
+
+Code-Style: `cargo fmt` auf `core/` + `cli/` vor jedem Commit; `cargo clippy --all` sollte sauber laufen. Tests sind Pflicht für alle neuen Krypto-Pfade.
+
+---
+
+## License
+
+Dual-Perspektive:
+
+- **Code:** MIT — siehe [LICENSE](LICENSE).
+- **Krypto-Claims:** PhantomChat ist **nicht extern auditiert**. Verlasse dich nicht auf diese Codebase für Hochrisiko-Kommunikation bis ein qualifizierter Auditor die Implementation freigegeben hat.
+
+Sicherheitslücken bitte privat an **security@dc-infosec.de** melden, nicht über öffentliche Issues.
 
 ---
 
@@ -260,4 +369,4 @@ Sicherheitslücken direkt an DC INFOSEC melden — nicht öffentlich.
 
 ---
 
-© 2026 **DC INFOSEC** · [github.com/N0L3X](https://github.com/N0L3X)
+© 2026 **DC INFOSEC** · [dc-infosec.de](https://dc-infosec.de)
