@@ -5,6 +5,69 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.6.0] — 2026-04-20 — MLS (RFC 9420) live
+
+### Added — Real MLS group messaging via openmls 0.8
+
+Replaces the v2.4 roadmap stub with a working integration.
+
+- `core/src/mls.rs` — `PhantomMlsMember` + `PhantomMlsGroup<'_>` wrapping
+  `openmls::MlsGroup`. Pins ciphersuite
+  `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519` so the MLS layer reuses
+  the same X25519 + Ed25519 primitives the rest of PhantomChat already
+  has. Uses `OpenMlsRustCrypto` as the persistent storage + crypto
+  provider; the signing key is `openmls_basic_credential::SignatureKeyPair`.
+- Public API:
+  - `PhantomMlsMember::new(identity)` — bootstrap a local member.
+  - `publish_key_package()` → serialised bytes another member invites us with.
+  - `create_group()` → `PhantomMlsGroup` holding the fresh MlsGroup.
+  - `PhantomMlsGroup::add_member(bytes)` → `(commit_bytes, welcome_bytes)`;
+    automatically calls `merge_pending_commit` so our epoch view advances.
+  - `join_via_welcome(welcome_bytes)` — joiner-side, uses
+    `StagedWelcome::new_from_welcome(..., into_group(...))` as required
+    by openmls 0.6+.
+  - `encrypt(plaintext)` / `decrypt(wire)` — application messages.
+    `decrypt` transparently merges staged commits from other members so
+    the group stays in sync across epoch changes.
+- Wire version byte `GROUP_VERSION_MLS = 2` reserved (Sender-Keys stays
+  `1`) — receivers can dispatch by format.
+- **4 tests** (`cargo test --features mls mls::`): two-member end-to-end
+  flow with Welcome + application message, bidirectional messaging
+  wellformedness, malformed-welcome rejection, byte-exact payload
+  round-trip (including non-ASCII bytes).
+
+### Selftest: 8 → 9 phases, 30 checks
+
+Phase 9 drives the full MLS pipeline in one process: two members,
+seven steps (two init, publish_key_package, create_group, add_member,
+encrypt, join_via_welcome, decrypt + byte-compare).  Live on Hostinger
+VPS: **30/30 passed.**
+
+### Deps (`mls` feature only — zero impact on classic builds)
+
+```toml
+openmls                  = "0.8"   # 0.8.1 — the post-audit release
+openmls_rust_crypto      = "0.5"   # crypto + storage provider
+openmls_traits           = "0.5"
+openmls_basic_credential = "0.5"   # SignatureKeyPair lives here in 0.5+
+tls_codec                = "0.4"   # features = ["derive", "serde", "mls"]
+```
+
+The `mls` feature is gated entirely behind `#[cfg(feature = "mls")]` so
+cargo builds without it never pull the ~50 transitive crates
+(`hpke-rs`, `tls_codec`, p256/p384, `rustls`-ish machinery).
+
+### Fixed
+
+- `core/src/mixnet.rs` test — borrow-order issue (`pkt.layer.len()`
+  called inside `pkt.layer[..]` subscript) surfaced by the newer rustc
+  on the VPS. Extracted to a local.
+- `cli/Cargo.toml` — CLI now depends on `phantomchat_core` with
+  `features = ["net", "mls"]` so `phantom selftest` can demonstrate the
+  full Tier-2 stack.
+
+---
+
 ## [2.5.0] — 2026-04-20 — Tier 2 fertig
 
 ### Added — Onion-routed mixnet

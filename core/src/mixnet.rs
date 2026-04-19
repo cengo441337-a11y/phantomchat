@@ -293,7 +293,8 @@ mod tests {
         let h1 = random_hop();
         let mut pkt = pack_onion(&[h1.hop.clone()], b"fragile");
         // Flip a byte inside the sealed layer (not the nonce) — AEAD MAC breaks.
-        pkt.layer[pkt.layer.len() - 4] ^= 0xFF;
+        let idx = pkt.layer.len() - 4;
+        pkt.layer[idx] ^= 0xFF;
         assert!(peel_onion(&pkt, &h1.secret).is_err());
     }
 

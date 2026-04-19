@@ -13,6 +13,7 @@ pub mod fingerprint;
 pub mod group;
 pub mod keys;
 pub mod mixnet;
+#[cfg(feature = "mls")]
 pub mod mls;
 pub mod pow;
 pub mod prekey;

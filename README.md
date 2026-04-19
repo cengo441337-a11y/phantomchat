@@ -134,7 +134,7 @@ SQLCipher AES-256    Lokale Datenbankversclüsselung
 | **Onion-Mixnet** (Sphinx-style layered AEAD, N-Hop Routing) | ✓ |
 | **PSI Contact Discovery** (DDH-Ristretto, no-leakage) | ✓ |
 | **WASM Browser-Bindings** (wasm-bindgen für JS-Client) | ✓ |
-| MLS Gruppen (RFC 9420 via `openmls`) | Geplant (roadmap in `mls.rs`) |
+| **MLS Gruppen** (RFC 9420 via openmls 0.8, TreeKEM) | ✓ |
 | Externer Krypto-Audit | Vor Produktion |
 
 ---

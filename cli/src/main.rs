@@ -556,16 +556,99 @@ fn cmd_selftest() -> anyhow::Result<()> {
         failed += 1;
     }
 
+    // ── Phase 9: MLS (RFC 9420) — TreeKEM group with Welcome + App msg ───
+    println!();
+    dimline("Phase 9 — MLS (RFC 9420): Welcome + application message");
+
+    let mls_total = {
+        use phantomchat_core::mls::PhantomMlsMember;
+        let mut a_local = 0usize;
+        let mut a_pass = 0usize;
+
+        let mut mls_alice = match PhantomMlsMember::new(*b"alice") {
+            Ok(m) => m, Err(e) => {
+                println!("  {}{}✗ mls_alice init: {}{}", B, M, e, R);
+                failed += 1;
+                return Err(anyhow::anyhow!("mls init"));
+            }
+        };
+        let mut mls_bob = match PhantomMlsMember::new(*b"bob") {
+            Ok(m) => m, Err(e) => {
+                println!("  {}{}✗ mls_bob init: {}{}", B, M, e, R);
+                failed += 1;
+                return Err(anyhow::anyhow!("mls init"));
+            }
+        };
+
+        a_local += 1;
+        let bob_kp = match mls_bob.publish_key_package() {
+            Ok(b) => { a_pass += 1; b }
+            Err(e) => { println!("  {}{}✗ bob publish_key_package: {}{}", B, M, e, R); vec![] }
+        };
+
+        let welcome;
+        let alice_msg;
+        {
+            a_local += 1;
+            let mut a_group = match mls_alice.create_group() {
+                Ok(g) => { a_pass += 1; g }
+                Err(e) => { println!("  {}{}✗ alice create_group: {}{}", B, M, e, R); return Err(anyhow::anyhow!("mls")); }
+            };
+
+            a_local += 1;
+            let (_commit, w) = match a_group.add_member(&bob_kp) {
+                Ok(v) => { a_pass += 1; v }
+                Err(e) => { println!("  {}{}✗ alice add_member: {}{}", B, M, e, R); return Err(anyhow::anyhow!("mls")); }
+            };
+            welcome = w;
+
+            a_local += 1;
+            alice_msg = match a_group.encrypt(b"ciao mls world") {
+                Ok(v) => { a_pass += 1; v }
+                Err(e) => { println!("  {}{}✗ alice encrypt: {}{}", B, M, e, R); return Err(anyhow::anyhow!("mls")); }
+            };
+        }
+
+        a_local += 1;
+        let mut b_group = match mls_bob.join_via_welcome(&welcome) {
+            Ok(g) => { a_pass += 1; g }
+            Err(e) => { println!("  {}{}✗ bob join_via_welcome: {}{}", B, M, e, R); return Err(anyhow::anyhow!("mls")); }
+        };
+
+        a_local += 1;
+        let decoded = match b_group.decrypt(&alice_msg) {
+            Ok(Some(v)) => { a_pass += 1; v }
+            Ok(None) => { println!("  {}{}✗ bob decrypt returned None{}", B, M, R); return Err(anyhow::anyhow!("mls")); }
+            Err(e) => { println!("  {}{}✗ bob decrypt: {}{}", B, M, e, R); return Err(anyhow::anyhow!("mls")); }
+        };
+
+        a_local += 1;
+        if decoded == b"ciao mls world" {
+            a_pass += 1;
+        }
+
+        println!(
+            "  {}{}✓ 2-member MLS group — Welcome + app msg ({} B) intact{}",
+            B, G, decoded.len(), R,
+        );
+        println!("  {}  Pipeline checks: {}/{} steps OK{}", DIM, a_pass, a_local, R);
+
+        passed += a_pass;
+        failed += a_local - a_pass;
+        a_local
+    };
+
     // ── Summary ─────────────────────────────────────────────────────────
     let total = classic_script.len() + hybrid_script.len()
         + 1 /* sealed */ + 1 /* safety number */ + 2 /* prekey */
         + group_script.len()
         + 2 /* mixnet (roundtrip + wrong-key) */
-        + 1 /* PSI */;
+        + 1 /* PSI */
+        + mls_total;
     println!();
     if failed == 0 {
         ok(&format!(
-            "SELF-TEST PASSED — {}/{} checks across 8 phases",
+            "SELF-TEST PASSED — {}/{} checks across 9 phases",
             passed, total
         ));
         Ok(())

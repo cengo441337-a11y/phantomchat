@@ -20,5 +20,11 @@ x25519-dalek = "2.0"
 rand_core   = "0.6"
 # The CLI only needs envelope/keys/scanner/privacy — not the Flutter bridge
 # nor SQLCipher storage, so we build core without its default `ffi` feature.
-phantomchat_core   = { path = "../core", default-features = false }
+# The `net` feature pulls the libp2p / dandelion / cover-traffic stack;
+# `mls` pulls openmls. Both are enabled by default for the CLI since the
+# CLI is the demo surface for those features.
+phantomchat_core   = { path = "../core", default-features = false, features = ["net", "mls"] }
 phantomchat_relays = { path = "../relays" }
+
+[features]
+default = []
