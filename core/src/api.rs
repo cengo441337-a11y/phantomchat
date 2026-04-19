@@ -1,10 +1,12 @@
+use crate::address::PhantomAddress;
 use crate::cover_traffic::{CoverTrafficGenerator, CoverTrafficMode};
 use crate::envelope::Envelope;
+use crate::keys::{SpendKey, ViewKey};
 use crate::privacy::{PrivacyConfig, PrivacyMode, ProxyConfig, ProxyKind};
+use crate::session::SessionStore;
 use crate::storage;
 use crate::frb_generated::StreamSink;
 use crate::network::{run_swarm, NetworkCommand, NetworkEvent, PhantomBehaviour};
-use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
 use flutter_rust_bridge::frb;
 use libp2p::{identity, PeerId, SwarmBuilder};
 use rand_core::{OsRng, RngCore};
@@ -13,12 +15,28 @@ use tokio::sync::mpsc;
 use std::time::Duration;
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use x25519_dalek::{PublicKey, StaticSecret};
 
 // ── global state ──────────────────────────────────────────────────────────────
 
 static COMMAND_TX: OnceLock<mpsc::Sender<NetworkCommand>> = OnceLock::new();
 static PRIVACY_CONFIG: OnceLock<RwLock<PrivacyConfig>> = OnceLock::new();
 static COVER_TX: OnceLock<mpsc::Sender<Envelope>> = OnceLock::new();
+
+/// The long-term keypair of the local user. Set once during
+/// [`start_network_node`]; required by [`send_secure_message`] and
+/// [`scan_incoming_envelope`] so they can drive the Envelope + Ratchet
+/// pipeline without asking the Flutter layer for secrets on every call.
+static LOCAL_VIEW:  OnceLock<RwLock<Option<ViewKey>>>  = OnceLock::new();
+static LOCAL_SPEND: OnceLock<RwLock<Option<SpendKey>>> = OnceLock::new();
+
+/// Per-peer Double-Ratchet session state. Persisted through the same FFI
+/// entry-points Flutter already calls when a chat screen opens or closes.
+static SESSIONS: OnceLock<Mutex<SessionStore>> = OnceLock::new();
+
+fn sessions() -> &'static Mutex<SessionStore> {
+    SESSIONS.get_or_init(|| Mutex::new(SessionStore::new()))
+}
 
 /// In MaximumStealth mode cover dummies are routed here instead of into libp2p.
 /// The relays crate calls `take_stealth_cover_rx()` once at startup to consume them.
@@ -213,24 +231,100 @@ pub fn start_network_node(sink: StreamSink<NetworkEvent>, avatar_cid: Option<Str
     }
 }
 
-pub async fn send_secure_message(target_peer_id: String, phantom_id: String, message: String) {
-    if let Some(tx) = COMMAND_TX.get() {
-        let mut key_bytes = [0u8; 32];
-        for (i, b) in phantom_id.as_bytes().iter().enumerate().take(32) {
-            key_bytes[i] = *b;
-        }
-        let cipher = Aes256Gcm::new_from_slice(&key_bytes).unwrap();
-        let mut nonce_bytes = [0u8; 12];
-        OsRng.fill_bytes(&mut nonce_bytes);
-        let nonce = Nonce::from_slice(&nonce_bytes);
+/// Import the caller's long-term identity into the Rust side so the
+/// envelope pipeline can sign/scan on their behalf.
+///
+/// `view_secret_hex` and `spend_secret_hex` are 64-char hex encodings of
+/// the 32-byte X25519 secrets written by `PhantomIdentity` on the Dart side.
+pub fn load_local_identity(
+    view_secret_hex: String,
+    spend_secret_hex: String,
+) -> String {
+    let parse = |s: &str| -> Option<StaticSecret> {
+        let bytes: [u8; 32] = hex::decode(s).ok()?.try_into().ok()?;
+        Some(StaticSecret::from(bytes))
+    };
+    let view_secret  = match parse(&view_secret_hex)  {
+        Some(s) => s, None => return "ERROR: view_secret parse".to_string(),
+    };
+    let spend_secret = match parse(&spend_secret_hex) {
+        Some(s) => s, None => return "ERROR: spend_secret parse".to_string(),
+    };
 
-        if let Ok(ciphertext) = cipher.encrypt(nonce, message.as_ref()) {
-            let _ = storage::save_message(&target_peer_id, &message);
-            let physical_msg = PhysicalSecureMessage { ciphertext, nonce: nonce_bytes, sender_id: phantom_id };
-            let json_msg = serde_json::to_string(&physical_msg).unwrap();
-            let _ = tx.send(NetworkCommand::SendMessage { target_peer_id, message: json_msg }).await;
-        }
+    let view_key  = ViewKey  { public: PublicKey::from(&view_secret),  secret: view_secret  };
+    let spend_key = SpendKey { public: PublicKey::from(&spend_secret), secret: spend_secret };
+
+    let _ = LOCAL_VIEW
+        .get_or_init(|| RwLock::new(None))
+        .write()
+        .map(|mut g| *g = Some(view_key));
+    let _ = LOCAL_SPEND
+        .get_or_init(|| RwLock::new(None))
+        .write()
+        .map(|mut g| *g = Some(spend_key));
+
+    "OK: identity loaded".to_string()
+}
+
+/// Send a real encrypted message.
+///
+/// Replaces the legacy AES-GCM demo pipeline. Takes a PhantomChat address
+/// (`phantom:view:spend` or `view:spend`), wraps the plaintext in a
+/// [`SessionStore::send`] → [`Envelope`] pair, and hands the serialised
+/// bytes off to the network layer for publishing.
+///
+/// The 3-parameter signature is kept for backwards-compat with the
+/// auto-generated Flutter bridge (`flutter_rust_bridge`) — the middle
+/// `_local_phantom_id` argument is no longer used internally but removing
+/// it would require regenerating `frb_generated.rs` from a machine that
+/// has the Flutter toolchain installed.
+pub async fn send_secure_message(
+    recipient_address: String,
+    _local_phantom_id: String,
+    plaintext: String,
+) -> String {
+    let recipient = match PhantomAddress::parse(&recipient_address) {
+        Some(a) => a,
+        None => return "ERROR: invalid recipient address".to_string(),
+    };
+
+    let envelope = {
+        let mut guard = match sessions().lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        guard.send(&recipient, plaintext.as_bytes(), 16)
+    };
+
+    let preview: String = plaintext.chars().take(64).collect();
+    let _ = storage::save_message(&recipient.short_id(), &preview);
+
+    let wire = envelope.to_bytes();
+    if let Some(tx) = COMMAND_TX.get() {
+        let _ = tx.send(NetworkCommand::PublishRaw {
+            topic: "phantom-chat".to_string(),
+            data: wire,
+        }).await;
     }
+    "OK: envelope sealed + published".to_string()
+}
+
+/// Try to decrypt an incoming envelope using the loaded local identity.
+///
+/// Called by the network listener for every envelope the node observes.
+/// Returns:
+/// - `Some(plaintext)` when the envelope is ours and decrypts cleanly
+/// - `None` when it belongs to someone else (cover traffic, other peer)
+pub fn scan_incoming_envelope(wire_bytes: Vec<u8>) -> Option<Vec<u8>> {
+    let envelope = Envelope::from_bytes(&wire_bytes)?;
+
+    let view_guard  = LOCAL_VIEW.get()?.read().ok()?;
+    let spend_guard = LOCAL_SPEND.get()?.read().ok()?;
+    let view_key  = view_guard.as_ref()?;
+    let spend_key = spend_guard.as_ref()?;
+
+    let mut guard = sessions().lock().ok()?;
+    guard.receive(&envelope, view_key, spend_key).ok().flatten()
 }
 
 pub async fn join_group(group_id: String) {

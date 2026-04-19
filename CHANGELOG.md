@@ -5,6 +5,67 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.2.0] — 2026-04-20 — Stufe A: daily-driver
+
+### Added — Real message pipeline
+
+- `core/src/address.rs` — `PhantomAddress` helper (`view_pub + spend_pub`,
+  parse/format `phantom:view:spend` wire form).
+- `core/src/session.rs` — `SessionStore` combining envelope + scanner +
+  ratchet into one `send(address, plaintext) → Envelope` /
+  `receive(envelope, view, spend) → Option<Vec<u8>>` pair. Persists to
+  JSON so conversations survive CLI restarts.
+- `cli`: new `phantom selftest` subcommand exercises a full A↔B exchange
+  (including post-rotation traffic) in one process, no relay required.
+
+### Changed — Double Ratchet actually wired up
+
+- `core/src/ratchet.rs` fully rewritten for the Signal-style symmetric
+  bootstrap:
+  - `initialize_as_sender(initial_shared, recipient_spend_pub)` — picks
+    a fresh ratchet secret, seeds root + send chains from
+    `ratchet_secret × spend_pub`.
+  - `initialize_as_receiver(initial_shared, own_spend_secret,
+    peer_ratchet_pub)` — mirrors the sender's DH commutatively, then
+    immediately initialises the outbound send chain so the first reply
+    can be encrypted.
+  - Per-message `encrypt` / `decrypt`, DH-ratchet rotation on incoming
+    new peer-ratchet publics.
+  - `Serialize` + `Deserialize` + `restore_secret()` so the full state
+    round-trips through SessionStore's JSON persistence without losing
+    the live DH secret (the 32-byte scalar is persisted alongside but
+    never leaks through `Debug`).
+- `core/src/api.rs` Flutter bridge:
+  - Dead: the AES-GCM-with-phantom_id-as-key demo code.
+  - Live: `load_local_identity(view_hex, spend_hex)`,
+    `send_secure_message(recipient, _phantom_id, plaintext)` routed
+    through SessionStore + network `PublishRaw`,
+    `scan_incoming_envelope(wire_bytes) → Option<plaintext>` consumed
+    by the listener loop.
+- `cli/src/main.rs` — `send` and `listen` now run through
+  `SessionStore::send` / `::receive` with `<keyfile>.sessions.json`
+  persistence per identity.
+- `mobile/lib/services/crypto_service.dart` — annotated `@Deprecated`,
+  new code must use the Rust FFI path (`lib/src/rust/api.dart`).
+
+### Tests
+
+Added `core/tests/ratchet_tests.rs` (5) and `core/tests/session_tests.rs`
+(5): first-message roundtrip, multi-message chains, bidirectional
+exchange with rotation, serde roundtrip mid-conversation, tampered
+ciphertext failure, address wire roundtrip, foreign-identity rejection,
+and on-disk persistence across process restarts. Together with the
+earlier suites: **42 / 42 tests green** under
+`cargo test --no-default-features`.
+
+### Verified on VPS
+
+`phantom selftest` on Hostinger Ubuntu — 6 / 6 messages round-tripped
+through the full envelope + ratchet stack, including the DH-ratchet
+rotation triggered by the first B→A reply.
+
+---
+
 ## [2.1.0] — 2026-04-19
 
 ### Fixed — Cryptographic correctness

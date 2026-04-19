@@ -1,7 +1,25 @@
+// ⚠️  DEPRECATED — this file implements a **simplified one-shot** X25519+ChaCha20
+// flow that does NOT match the production PhantomChat wire format.
+//
+// The real pipeline lives in `phantomchat_core` (Rust) and is exposed to
+// Flutter via `flutter_rust_bridge`. Callers should use:
+//
+//   rust.loadLocalIdentity(viewSecretHex, spendSecretHex)
+//   rust.sendSecureMessage(recipientAddress, plaintext)
+//   rust.scanIncomingEnvelope(wireBytes)
+//
+// This Dart file remains only to satisfy existing imports during the
+// transition to the Rust path. New code **must not** call it.
+
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 
+@Deprecated(
+  'Use phantomchat_core via flutter_rust_bridge — see lib/src/rust/api.dart.'
+  ' This service uses a simplified crypto scheme that is NOT wire-compatible'
+  ' with the production Envelope+Ratchet pipeline.',
+)
 class CryptoService {
   static final _x25519 = X25519();
   static final _chacha = Chacha20.poly1305Aead();

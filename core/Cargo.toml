@@ -6,7 +6,9 @@ edition = "2021"
 [lib]
 name = "phantomchat_core"
 path = "src/lib.rs"
-crate-type = ["lib", "staticlib", "cdylib"]
+# `rlib` is required for `cargo test` to link integration tests against us;
+# `staticlib` + `cdylib` are used by the Flutter bridge build on mobile.
+crate-type = ["rlib", "staticlib", "cdylib"]
 
 [dependencies]
 rand = "0.8"

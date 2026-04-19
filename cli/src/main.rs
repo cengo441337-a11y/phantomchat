@@ -17,15 +17,15 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 use phantomchat_core::{
-    envelope::Envelope,
+    address::PhantomAddress,
     keys::{IdentityKey, ViewKey, SpendKey},
     privacy::{PrivacyConfig, PrivacyMode, ProxyConfig, ProxyKind},
+    session::SessionStore,
 };
 use phantomchat_relays::make_relay;
 use qrcodegen::{QrCode, QrCodeEcc};
-use rand::random;
 use rand_core::{OsRng, RngCore};
-use std::{fs, path::PathBuf, time::Duration};
+use std::{fs, path::PathBuf, sync::{Arc, Mutex}, time::Duration};
 use x25519_dalek::{PublicKey, StaticSecret};
 
 // ── ANSI palette (matches Flutter CyberpunkTheme) ────────────────────────────
@@ -165,6 +165,10 @@ enum Commands {
         #[arg(short, long, default_value = "keys.json")]
         file: PathBuf,
     },
+    /// End-to-end pipeline self-test — generates two ephemeral identities,
+    /// exchanges messages through the full Envelope+Ratchet stack in one
+    /// process and reports pass/fail. No network or keyfile required.
+    Selftest,
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────
@@ -188,8 +192,105 @@ async fn main() -> anyhow::Result<()> {
             cmd_relay_health(&url, &cfg).await?,
         Commands::Status { file }                         =>
             cmd_status(file, &cfg)?,
+        Commands::Selftest                                => cmd_selftest()?,
     }
     Ok(())
+}
+
+// ── selftest ──────────────────────────────────────────────────────────────────
+
+fn cmd_selftest() -> anyhow::Result<()> {
+    section("PIPELINE SELF-TEST");
+
+    // Ephemeral identities — nothing is persisted.
+    let alice_view  = ViewKey::generate();
+    let alice_spend = SpendKey::generate();
+    let alice_addr  = PhantomAddress::new(alice_view.public, alice_spend.public);
+
+    let bob_view  = ViewKey::generate();
+    let bob_spend = SpendKey::generate();
+    let bob_addr  = PhantomAddress::new(bob_view.public, bob_spend.public);
+
+    field("Alice",  &alice_addr.short_id());
+    field("Bob",    &bob_addr.short_id());
+    println!();
+
+    let mut alice_store = SessionStore::new();
+    let mut bob_store   = SessionStore::new();
+
+    let script: &[(&str, &[u8])] = &[
+        ("A→B", b"handshake"),
+        ("A→B", b"chain continues"),
+        ("B→A", b"reply"),
+        ("A→B", b"post-rotation"),
+        ("B→A", b"same here"),
+        ("A→B", b"sealed"),
+    ];
+
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+
+    for (dir, plain) in script {
+        let result = match *dir {
+            "A→B" => {
+                let env = alice_store.send(&bob_addr, plain, 0);
+                bob_store.receive(&env, &bob_view, &bob_spend)
+            }
+            "B→A" => {
+                let env = bob_store.send(&alice_addr, plain, 0);
+                alice_store.receive(&env, &alice_view, &alice_spend)
+            }
+            other => {
+                eprintln!("unknown direction '{}'", other);
+                continue;
+            }
+        };
+
+        match result {
+            Ok(Some(got)) if got == *plain => {
+                println!(
+                    "  {}{}✓ {} {:<32}{}  plaintext matched ({} B)",
+                    B, G, dir, String::from_utf8_lossy(plain), R,
+                    got.len(),
+                );
+                passed += 1;
+            }
+            Ok(Some(got)) => {
+                println!(
+                    "  {}{}✗ {} {:<32}{}  mismatch: got {:?}",
+                    B, M, dir, String::from_utf8_lossy(plain), R,
+                    String::from_utf8_lossy(&got),
+                );
+                failed += 1;
+            }
+            Ok(None) => {
+                println!(
+                    "  {}{}✗ {} {:<32}{}  silently dropped (scanner miss)",
+                    B, M, dir, String::from_utf8_lossy(plain), R,
+                );
+                failed += 1;
+            }
+            Err(e) => {
+                println!(
+                    "  {}{}✗ {} {:<32}{}  error: {}",
+                    B, M, dir, String::from_utf8_lossy(plain), R, e,
+                );
+                failed += 1;
+            }
+        }
+    }
+
+    println!();
+    if failed == 0 {
+        ok(&format!("SELF-TEST PASSED — {} / {} messages round-tripped", passed, script.len()));
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "self-test failed: {} passed, {} failed",
+            passed,
+            failed
+        ))
+    }
 }
 
 // ── keygen ────────────────────────────────────────────────────────────────────
@@ -249,64 +350,41 @@ fn cmd_pair(file: PathBuf) -> anyhow::Result<()> {
 // ── send ──────────────────────────────────────────────────────────────────────
 
 async fn cmd_send(
-    _file: PathBuf,
+    file: PathBuf,
     recipient_hex: &str,
     message: &str,
     relay_url: &str,
     cfg: &PrivacyConfig,
 ) -> anyhow::Result<()> {
-    // `_file` is currently unused — the send flow only needs the recipient's
-    // public address (which is passed via -r). Kept on the signature so the
-    // CLI surface stays backward-compatible.
-
-    // Parse recipient address: "view_pub_hex:spend_pub_hex" (or a legacy
-    // `phantom:view:spend` pairing string — we tolerate the prefix).
-    let raw = recipient_hex.strip_prefix("phantom:").unwrap_or(recipient_hex);
-    let (view_hex, spend_hex) = raw
-        .split_once(':')
+    // Parse recipient — accepts "phantom:view:spend", "view:spend", or
+    // either form copied straight out of `phantom pair` output.
+    let recipient = PhantomAddress::parse(recipient_hex)
         .context("recipient must be 'view_pub_hex:spend_pub_hex'")?;
 
-    let view_bytes: [u8; 32] = hex::decode(view_hex)
-        .context("view_pub must be 64-char hex")?
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("view_pub must be 32 bytes"))?;
-    let spend_bytes: [u8; 32] = hex::decode(spend_hex)
-        .context("spend_pub must be 64-char hex")?
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("spend_pub must be 32 bytes"))?;
-    let recipient_view_pub  = PublicKey::from(view_bytes);
-    let recipient_spend_pub = PublicKey::from(spend_bytes);
+    // Load / create the per-identity session store. Persisting next to the
+    // keyfile keeps alice's and bob's ratchet state cleanly separated when
+    // running multiple identities on the same box.
+    let sessions_path = sessions_path_for(&file);
+    let mut store = SessionStore::load(&sessions_path)
+        .with_context(|| format!("loading sessions from {}", sessions_path.display()))?;
 
-    let msg_id: u128 = random();
+    let pb = spinner(&format!("Sealing envelope ({} mode)", mode_str(cfg)));
 
-    let pb = spinner(&format!(
-        "Building envelope (mode: {})",
-        mode_str(cfg)
-    ));
-
-    // Build envelope — message bytes as encrypted_body, empty ratchet header
-    let envelope = Envelope::new(
-        &recipient_view_pub,
-        &recipient_spend_pub,
-        msg_id,
-        vec![],                       // ratchet header (simplified for CLI)
-        message.as_bytes().to_vec(),
-        300,                          // TTL 5 min
-        16,                           // PoW difficulty
-    );
+    // SessionStore::send wraps the plaintext through the per-contact
+    // Double Ratchet and produces a fully signed + PoW'd Envelope ready
+    // to publish. PoW difficulty stays moderate for the CLI.
+    let envelope = store.send(&recipient, message.as_bytes(), 16);
 
     pb.finish_and_clear();
     ok("ENVELOPE SEALED");
-    field("Msg-ID",     &format!("{:#x}", msg_id));
-    field("Ciphertext", &format!("{} bytes", envelope.ciphertext.len()));
-    field("TTL",        "300 s");
+    field("Recipient",   &recipient.short_id());
+    field("Ciphertext",  &format!("{} bytes", envelope.ciphertext.len()));
+    field("TTL",         "300 s");
 
-    // Dandelion++ routing decision display
     let phase = if rand::random::<f64>() < 0.1 { "FLUFF (broadcast)" } else { "STEM (single-hop)" };
     field("Dandelion++", phase);
     println!();
 
-    // Choose relay based on privacy mode
     let stealth = cfg.mode == PrivacyMode::MaximumStealth;
     let proxy   = cfg.proxy_addr();
 
@@ -317,20 +395,37 @@ async fn cmd_send(
     ));
 
     let relay = make_relay(relay_url, stealth, proxy);
-    relay.publish(envelope).await
-        .map_err(|e| { pb2.finish_and_clear(); e })?;
-
+    let publish_result = relay.publish(envelope).await;
     pb2.finish_and_clear();
+    publish_result?;
+
+    // Persist the now-advanced ratchet state. Skipping this would cause the
+    // next send to reuse the same chain key and defeat forward secrecy.
+    store
+        .save(&sessions_path)
+        .with_context(|| format!("saving sessions to {}", sessions_path.display()))?;
+
     ok("TRANSMITTED");
-    field("Relay",   relay_url);
+    field("Relay", relay_url);
     let via = if stealth {
         format!("SOCKS5 {}", cfg.proxy.addr)
     } else {
         "direct TLS".to_string()
     };
     field("Via", &via);
+    field("Sessions", &format!("saved to {}", sessions_path.display()));
     println!();
     Ok(())
+}
+
+/// Sessions file lives next to the keyfile: `keys.json` → `keys.sessions.json`.
+fn sessions_path_for(keyfile: &std::path::Path) -> PathBuf {
+    let parent = keyfile.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let stem = keyfile
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("keys");
+    parent.join(format!("{}.sessions.json", stem))
 }
 
 // ── listen ────────────────────────────────────────────────────────────────────
@@ -384,30 +479,47 @@ async fn cmd_listen(
 
     let relay = make_relay(relay_url, stealth, proxy);
 
-    let view_key_clone = view_key.clone();
+    // Load or initialise the persistent session store. Every incoming
+    // envelope gets pushed through `SessionStore::receive`, which runs the
+    // full pipeline: scanner tag check → envelope open → ratchet decrypt.
+    let sessions_path = sessions_path_for(&file);
+    let store = Arc::new(Mutex::new(
+        SessionStore::load(&sessions_path)
+            .with_context(|| format!("loading sessions from {}", sessions_path.display()))?,
+    ));
+
+    let view_key_clone  = view_key.clone();
     let spend_key_clone = spend_key.clone();
+    let store_clone     = Arc::clone(&store);
+    let save_path       = sessions_path.clone();
+
     relay.subscribe(Box::new(move |env| {
-        match phantomchat_core::scan_envelope(&env, &view_key_clone, &spend_key_clone) {
-            phantomchat_core::ScanResult::Mine(payload) => {
-                let body = String::from_utf8_lossy(&payload.encrypted_body);
+        let mut guard = match store_clone.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        match guard.receive(&env, &view_key_clone, &spend_key_clone) {
+            Ok(Some(plaintext)) => {
+                let body = String::from_utf8_lossy(&plaintext);
                 println!(
-                    "{}{}  ► DECRYPTED{}  msg_id={:#x}  body={}",
+                    "{}{}  ► DECRYPTED{}  {}",
                     B, G, R,
-                    payload.msg_id,
                     body.bright_green()
                 );
+                if let Err(e) = guard.save(&save_path) {
+                    eprintln!("{}warning: could not persist sessions: {}{}", DIM, e, R);
+                }
             }
-            phantomchat_core::ScanResult::Corrupted => {
-                eprintln!(
-                    "{}{}  ► TAG-MATCH but decrypt failed (corrupted / replay){}",
-                    B, M, R
-                );
-            }
-            phantomchat_core::ScanResult::NotMine => {
-                // Not for us — expected for every cover-traffic dummy and for
-                // real messages destined to other identities. Dot shows activity.
+            Ok(None) => {
+                // Not for us — expected for cover traffic and other peers.
                 print!("{}·{}", DIM, R);
                 let _ = std::io::Write::flush(&mut std::io::stdout());
+            }
+            Err(e) => {
+                eprintln!(
+                    "{}{}  ► DECRYPT ERROR{}  {}",
+                    B, M, R, e
+                );
             }
         }
     })).await?;
