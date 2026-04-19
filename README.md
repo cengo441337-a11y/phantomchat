@@ -361,7 +361,7 @@ Dual-Perspektive:
 - **Code:** MIT — siehe [LICENSE](LICENSE).
 - **Krypto-Claims:** PhantomChat ist **nicht extern auditiert**. Verlasse dich nicht auf diese Codebase für Hochrisiko-Kommunikation bis ein qualifizierter Auditor die Implementation freigegeben hat.
 
-Sicherheitslücken bitte privat an **security@dc-infosec.de** melden, nicht über öffentliche Issues.
+Sicherheitslücken bitte privat an **admin@dc-infosec.de** melden, nicht über öffentliche Issues.
 
 ---
 

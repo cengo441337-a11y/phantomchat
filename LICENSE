@@ -29,5 +29,5 @@ address model — is implemented to spec and has an internal integration
 test suite, but **must not** be relied upon in life-critical threat
 models until a qualified third-party audit is complete.
 
-Report vulnerabilities privately to security@dc-infosec.de before public
+Report vulnerabilities privately to admin@dc-infosec.de before public
 disclosure.
