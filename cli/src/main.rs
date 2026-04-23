@@ -13,6 +13,7 @@
 //! ```
 
 mod group_cmd;
+mod demo_cmd;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
@@ -156,6 +157,8 @@ enum Commands {
         #[command(subcommand)]
         action: group_cmd::GroupAction,
     },
+    /// End-to-end crypto demo (in-process, no network)
+    Demo,
     /// Show or change the active privacy mode
     Mode {
         /// daily | stealth
@@ -194,6 +197,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Group  { action }                       => group_cmd::run(action)?,
+        Commands::Demo                                    => demo_cmd::run()?,
         Commands::Keygen { out }                          => cmd_keygen(out)?,
         Commands::Pair   { file }                         => cmd_pair(file)?,
         Commands::Send   { file, recipient, message, relay } =>
