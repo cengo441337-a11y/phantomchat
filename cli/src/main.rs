@@ -12,6 +12,8 @@
 //! phantom status                       # node status overview
 //! ```
 
+mod group_cmd;
+
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
@@ -50,33 +52,33 @@ fn banner(cfg: &PrivacyConfig) {
         PrivacyMode::DailyUse       => format!("{}[ DAILY USE ]{}", G, R),
         PrivacyMode::MaximumStealth => format!("{}[ MAXIMUM STEALTH ]{}", M, R),
     };
-    println!();
-    println!("{}", format!(
+    eprintln!();
+    eprintln!("{}", format!(
 "{}{}██████╗ ██╗  ██╗ █████╗ ███╗   ██╗████████╗ ██████╗ ███╗   ███╗{}",
     B, G, R));
-    println!("{}", format!(
+    eprintln!("{}", format!(
 "{}{}██╔══██╗██║  ██║██╔══██╗████╗  ██║╚══██╔══╝██╔═══██╗████╗ ████║{}",
     B, G, R));
-    println!("{}", format!(
+    eprintln!("{}", format!(
 "{}{}██████╔╝███████║███████║██╔██╗ ██║   ██║   ██║   ██║██╔████╔██║{}",
     B, G, R));
-    println!("{}", format!(
+    eprintln!("{}", format!(
 "{}{}██╔═══╝ ██╔══██║██╔══██║██║╚██╗██║   ██║   ██║   ██║██║╚██╔╝██║{}",
     B, M, R));
-    println!("{}", format!(
+    eprintln!("{}", format!(
 "{}{}██║     ██║  ██║██║  ██║██║ ╚████║   ██║   ╚██████╔╝██║ ╚═╝ ██║{}",
     B, M, R));
-    println!("{}", format!(
+    eprintln!("{}", format!(
 "{}{}╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝ ╚═╝     ╚═╝{}",
     B, M, R));
-    println!();
-    println!(
+    eprintln!();
+    eprintln!(
         "{}{}  C H A T  {}{}│{} DC INFOSEC 2026 {}│{} {}",
         B, C, R, DIM, R, DIM, R, mode_label
     );
-    println!("{}{}  ─────────────────────────────────────────────────────────────{}",
+    eprintln!("{}{}  ─────────────────────────────────────────────────────────────{}",
         DIM, G, R);
-    println!();
+    eprintln!();
 }
 
 // ── Privacy config persistence (CLI-local ~/.phantom_config.json) ─────────────
@@ -149,6 +151,11 @@ enum Commands {
         #[arg(short = 'u', long, default_value = "wss://relay.damus.io")]
         relay: String,
     },
+        /// Sender-Keys group chat (create, distribute, encrypt, decrypt)
+    Group {
+        #[command(subcommand)]
+        action: group_cmd::GroupAction,
+    },
     /// Show or change the active privacy mode
     Mode {
         /// daily | stealth
@@ -186,6 +193,7 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
+        Commands::Group  { action }                       => group_cmd::run(action)?,
         Commands::Keygen { out }                          => cmd_keygen(out)?,
         Commands::Pair   { file }                         => cmd_pair(file)?,
         Commands::Send   { file, recipient, message, relay } =>
