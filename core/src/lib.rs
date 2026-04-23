@@ -18,6 +18,7 @@ pub mod mls;
 pub mod pow;
 pub mod prekey;
 pub mod privacy;
+pub mod file_transfer;
 pub mod psi;
 pub mod ratchet;
 pub mod scanner;

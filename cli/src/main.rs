@@ -14,6 +14,7 @@
 
 mod group_cmd;
 mod demo_cmd;
+mod file_cmd;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
@@ -159,6 +160,11 @@ enum Commands {
     },
     /// End-to-end crypto demo (in-process, no network)
     Demo,
+    /// File transfer: pack a file for a group, or unpack a received archive
+    File {
+        #[command(subcommand)]
+        action: file_cmd::FileAction,
+    },
     /// Show or change the active privacy mode
     Mode {
         /// daily | stealth
@@ -198,6 +204,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Group  { action }                       => group_cmd::run(action)?,
         Commands::Demo                                    => demo_cmd::run()?,
+        Commands::File   { action }                       => file_cmd::run(action)?,
         Commands::Keygen { out }                          => cmd_keygen(out)?,
         Commands::Pair   { file }                         => cmd_pair(file)?,
         Commands::Send   { file, recipient, message, relay } =>
