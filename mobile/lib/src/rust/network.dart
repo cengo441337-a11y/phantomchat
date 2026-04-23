@@ -12,9 +12,8 @@ part 'network.freezed.dart';
 sealed class NetworkEvent with _$NetworkEvent {
   const NetworkEvent._();
 
-  const factory NetworkEvent.nodeStarted({
-    required String peerId,
-  }) = NetworkEvent_NodeStarted;
+  const factory NetworkEvent.nodeStarted({required String peerId}) =
+      NetworkEvent_NodeStarted;
   const factory NetworkEvent.peerDiscovered({
     required String peerId,
     String? avatarCid,
@@ -28,7 +27,6 @@ sealed class NetworkEvent with _$NetworkEvent {
     required String from,
     required String message,
   }) = NetworkEvent_GroupMessageReceived;
-  const factory NetworkEvent.error({
-    required String message,
-  }) = NetworkEvent_Error;
+  const factory NetworkEvent.error({required String message}) =
+      NetworkEvent_Error;
 }

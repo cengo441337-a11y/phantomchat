@@ -36,12 +36,8 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 
   /// Initialize flutter_rust_bridge in mock mode.
   /// No libraries for FFI are loaded.
-  static void initMock({
-    required RustLibApi api,
-  }) {
-    instance.initMockImpl(
-      api: api,
-    );
+  static void initMock({required RustLibApi api}) {
+    instance.initMockImpl(api: api);
   }
 
   /// Dispose flutter_rust_bridge
@@ -69,34 +65,56 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 597586265;
+  int get rustContentHash => -1417881935;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
-    stem: 'phantomchat_core',
-    ioDirectory: '../core/target/release/',
-    webPrefix: 'pkg/',
-    wasmBindgenName: 'wasm_bindgen',
-  );
+        stem: 'phantomchat_core',
+        ioDirectory: '../core/target/release/',
+        webPrefix: 'pkg/',
+        wasmBindgenName: 'wasm_bindgen',
+      );
 }
 
 abstract class RustLibApi extends BaseApi {
   Future<String> crateApiGeneratePhantomId();
 
-  Future<String> crateApiInitSecureStorage(
-      {required String dbPath, required String password});
+  String crateApiGetPrivacyMode();
+
+  Future<String> crateApiInitSecureStorage({
+    required String dbPath,
+    required String password,
+  });
 
   Future<void> crateApiJoinGroup({required String groupId});
 
+  Future<String> crateApiLoadLocalIdentity({
+    required String viewSecretHex,
+    required String spendSecretHex,
+  });
+
   Future<void> crateApiPerformPanicWipe({required String dbPath});
 
-  Future<void> crateApiSendGroupMessage(
-      {required String groupId, required String message});
+  Future<Uint8List?> crateApiScanIncomingEnvelope({
+    required List<int> wireBytes,
+  });
 
-  Future<void> crateApiSendSecureMessage(
-      {required String targetPeerId,
-      required String phantomId,
-      required String message});
+  Future<void> crateApiSendGroupMessage({
+    required String groupId,
+    required String message,
+  });
+
+  Future<String> crateApiSendSecureMessage({
+    required String recipientAddress,
+    required String localPhantomId,
+    required String plaintext,
+  });
+
+  String crateApiSetPrivacyMode({
+    required String modeStr,
+    String? proxyAddr,
+    required bool useNym,
+  });
 
   Stream<NetworkEvent> crateApiStartNetworkNode({String? avatarCid});
 
@@ -113,205 +131,368 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   Future<String> crateApiGeneratePhantomId() {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 1, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
-        decodeErrorData: null,
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 1,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiGeneratePhantomIdConstMeta,
+        argValues: [],
+        apiImpl: this,
       ),
-      constMeta: kCrateApiGeneratePhantomIdConstMeta,
-      argValues: [],
-      apiImpl: this,
-    ));
+    );
   }
 
-  TaskConstMeta get kCrateApiGeneratePhantomIdConstMeta => const TaskConstMeta(
-        debugName: "generate_phantom_id",
-        argNames: [],
-      );
+  TaskConstMeta get kCrateApiGeneratePhantomIdConstMeta =>
+      const TaskConstMeta(debugName: "generate_phantom_id", argNames: []);
 
   @override
-  Future<String> crateApiInitSecureStorage(
-      {required String dbPath, required String password}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(dbPath, serializer);
-        sse_encode_String(password, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 2, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
-        decodeErrorData: null,
+  String crateApiGetPrivacyMode() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 2)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiGetPrivacyModeConstMeta,
+        argValues: [],
+        apiImpl: this,
       ),
-      constMeta: kCrateApiInitSecureStorageConstMeta,
-      argValues: [dbPath, password],
-      apiImpl: this,
-    ));
+    );
+  }
+
+  TaskConstMeta get kCrateApiGetPrivacyModeConstMeta =>
+      const TaskConstMeta(debugName: "get_privacy_mode", argNames: []);
+
+  @override
+  Future<String> crateApiInitSecureStorage({
+    required String dbPath,
+    required String password,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(dbPath, serializer);
+          sse_encode_String(password, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 3,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiInitSecureStorageConstMeta,
+        argValues: [dbPath, password],
+        apiImpl: this,
+      ),
+    );
   }
 
   TaskConstMeta get kCrateApiInitSecureStorageConstMeta => const TaskConstMeta(
-        debugName: "init_secure_storage",
-        argNames: ["dbPath", "password"],
-      );
+    debugName: "init_secure_storage",
+    argNames: ["dbPath", "password"],
+  );
 
   @override
   Future<void> crateApiJoinGroup({required String groupId}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(groupId, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 3, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(groupId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 4,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiJoinGroupConstMeta,
+        argValues: [groupId],
+        apiImpl: this,
       ),
-      constMeta: kCrateApiJoinGroupConstMeta,
-      argValues: [groupId],
-      apiImpl: this,
-    ));
+    );
   }
 
-  TaskConstMeta get kCrateApiJoinGroupConstMeta => const TaskConstMeta(
-        debugName: "join_group",
-        argNames: ["groupId"],
-      );
+  TaskConstMeta get kCrateApiJoinGroupConstMeta =>
+      const TaskConstMeta(debugName: "join_group", argNames: ["groupId"]);
+
+  @override
+  Future<String> crateApiLoadLocalIdentity({
+    required String viewSecretHex,
+    required String spendSecretHex,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(viewSecretHex, serializer);
+          sse_encode_String(spendSecretHex, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 5,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiLoadLocalIdentityConstMeta,
+        argValues: [viewSecretHex, spendSecretHex],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiLoadLocalIdentityConstMeta => const TaskConstMeta(
+    debugName: "load_local_identity",
+    argNames: ["viewSecretHex", "spendSecretHex"],
+  );
 
   @override
   Future<void> crateApiPerformPanicWipe({required String dbPath}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(dbPath, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 4, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(dbPath, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 6,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiPerformPanicWipeConstMeta,
+        argValues: [dbPath],
+        apiImpl: this,
       ),
-      constMeta: kCrateApiPerformPanicWipeConstMeta,
-      argValues: [dbPath],
-      apiImpl: this,
-    ));
+    );
   }
 
   TaskConstMeta get kCrateApiPerformPanicWipeConstMeta => const TaskConstMeta(
-        debugName: "perform_panic_wipe",
-        argNames: ["dbPath"],
+    debugName: "perform_panic_wipe",
+    argNames: ["dbPath"],
+  );
+
+  @override
+  Future<Uint8List?> crateApiScanIncomingEnvelope({
+    required List<int> wireBytes,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_prim_u_8_loose(wireBytes, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 7,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_list_prim_u_8_strict,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiScanIncomingEnvelopeConstMeta,
+        argValues: [wireBytes],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiScanIncomingEnvelopeConstMeta =>
+      const TaskConstMeta(
+        debugName: "scan_incoming_envelope",
+        argNames: ["wireBytes"],
       );
 
   @override
-  Future<void> crateApiSendGroupMessage(
-      {required String groupId, required String message}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(groupId, serializer);
-        sse_encode_String(message, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 5, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
+  Future<void> crateApiSendGroupMessage({
+    required String groupId,
+    required String message,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(groupId, serializer);
+          sse_encode_String(message, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 8,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSendGroupMessageConstMeta,
+        argValues: [groupId, message],
+        apiImpl: this,
       ),
-      constMeta: kCrateApiSendGroupMessageConstMeta,
-      argValues: [groupId, message],
-      apiImpl: this,
-    ));
+    );
   }
 
   TaskConstMeta get kCrateApiSendGroupMessageConstMeta => const TaskConstMeta(
-        debugName: "send_group_message",
-        argNames: ["groupId", "message"],
-      );
+    debugName: "send_group_message",
+    argNames: ["groupId", "message"],
+  );
 
   @override
-  Future<void> crateApiSendSecureMessage(
-      {required String targetPeerId,
-      required String phantomId,
-      required String message}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(targetPeerId, serializer);
-        sse_encode_String(phantomId, serializer);
-        sse_encode_String(message, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 6, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
+  Future<String> crateApiSendSecureMessage({
+    required String recipientAddress,
+    required String localPhantomId,
+    required String plaintext,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(recipientAddress, serializer);
+          sse_encode_String(localPhantomId, serializer);
+          sse_encode_String(plaintext, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 9,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSendSecureMessageConstMeta,
+        argValues: [recipientAddress, localPhantomId, plaintext],
+        apiImpl: this,
       ),
-      constMeta: kCrateApiSendSecureMessageConstMeta,
-      argValues: [targetPeerId, phantomId, message],
-      apiImpl: this,
-    ));
+    );
   }
 
   TaskConstMeta get kCrateApiSendSecureMessageConstMeta => const TaskConstMeta(
-        debugName: "send_secure_message",
-        argNames: ["targetPeerId", "phantomId", "message"],
-      );
+    debugName: "send_secure_message",
+    argNames: ["recipientAddress", "localPhantomId", "plaintext"],
+  );
+
+  @override
+  String crateApiSetPrivacyMode({
+    required String modeStr,
+    String? proxyAddr,
+    required bool useNym,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(modeStr, serializer);
+          sse_encode_opt_String(proxyAddr, serializer);
+          sse_encode_bool(useNym, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 10)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSetPrivacyModeConstMeta,
+        argValues: [modeStr, proxyAddr, useNym],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSetPrivacyModeConstMeta => const TaskConstMeta(
+    debugName: "set_privacy_mode",
+    argNames: ["modeStr", "proxyAddr", "useNym"],
+  );
 
   @override
   Stream<NetworkEvent> crateApiStartNetworkNode({String? avatarCid}) {
     final sink = RustStreamSink<NetworkEvent>();
-    handler.executeSync(SyncTask(
-      callFfi: () {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_StreamSink_network_event_Sse(sink, serializer);
-        sse_encode_opt_String(avatarCid, serializer);
-        return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
+    handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_StreamSink_network_event_Sse(sink, serializer);
+          sse_encode_opt_String(avatarCid, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiStartNetworkNodeConstMeta,
+        argValues: [sink, avatarCid],
+        apiImpl: this,
       ),
-      constMeta: kCrateApiStartNetworkNodeConstMeta,
-      argValues: [sink, avatarCid],
-      apiImpl: this,
-    ));
+    );
     return sink.stream;
   }
 
   TaskConstMeta get kCrateApiStartNetworkNodeConstMeta => const TaskConstMeta(
-        debugName: "start_network_node",
-        argNames: ["sink", "avatarCid"],
-      );
+    debugName: "start_network_node",
+    argNames: ["sink", "avatarCid"],
+  );
 
   @override
   Future<void> crateApiUpdateAvatarCid({required String cid}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(cid, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 8, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: null,
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(cid, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 12,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiUpdateAvatarCidConstMeta,
+        argValues: [cid],
+        apiImpl: this,
       ),
-      constMeta: kCrateApiUpdateAvatarCidConstMeta,
-      argValues: [cid],
-      apiImpl: this,
-    ));
+    );
   }
 
-  TaskConstMeta get kCrateApiUpdateAvatarCidConstMeta => const TaskConstMeta(
-        debugName: "update_avatar_cid",
-        argNames: ["cid"],
-      );
+  TaskConstMeta get kCrateApiUpdateAvatarCidConstMeta =>
+      const TaskConstMeta(debugName: "update_avatar_cid", argNames: ["cid"]);
 
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw) {
@@ -321,7 +502,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   RustStreamSink<NetworkEvent> dco_decode_StreamSink_network_event_Sse(
-      dynamic raw) {
+    dynamic raw,
+  ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     throw UnimplementedError();
   }
@@ -330,6 +512,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   String dco_decode_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as String;
+  }
+
+  @protected
+  bool dco_decode_bool(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as bool;
+  }
+
+  @protected
+  List<int> dco_decode_list_prim_u_8_loose(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as List<int>;
   }
 
   @protected
@@ -343,9 +537,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     switch (raw[0]) {
       case 0:
-        return NetworkEvent_NodeStarted(
-          peerId: dco_decode_String(raw[1]),
-        );
+        return NetworkEvent_NodeStarted(peerId: dco_decode_String(raw[1]));
       case 1:
         return NetworkEvent_PeerDiscovered(
           peerId: dco_decode_String(raw[1]),
@@ -363,9 +555,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           message: dco_decode_String(raw[3]),
         );
       case 4:
-        return NetworkEvent_Error(
-          message: dco_decode_String(raw[1]),
-        );
+        return NetworkEvent_Error(message: dco_decode_String(raw[1]));
       default:
         throw Exception("unreachable");
     }
@@ -375,6 +565,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   String? dco_decode_opt_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_String(raw);
+  }
+
+  @protected
+  Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_list_prim_u_8_strict(raw);
   }
 
   @protected
@@ -398,7 +594,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   RustStreamSink<NetworkEvent> sse_decode_StreamSink_network_event_Sse(
-      SseDeserializer deserializer) {
+    SseDeserializer deserializer,
+  ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     throw UnimplementedError('Unreachable ()');
   }
@@ -408,6 +605,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_list_prim_u_8_strict(deserializer);
     return utf8.decoder.convert(inner);
+  }
+
+  @protected
+  bool sse_decode_bool(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getUint8() != 0;
+  }
+
+  @protected
+  List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var len_ = sse_decode_i_32(deserializer);
+    return deserializer.buffer.getUint8List(len_);
   }
 
   @protected
@@ -430,18 +640,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         var var_peerId = sse_decode_String(deserializer);
         var var_avatarCid = sse_decode_opt_String(deserializer);
         return NetworkEvent_PeerDiscovered(
-            peerId: var_peerId, avatarCid: var_avatarCid);
+          peerId: var_peerId,
+          avatarCid: var_avatarCid,
+        );
       case 2:
         var var_from = sse_decode_String(deserializer);
         var var_message = sse_decode_String(deserializer);
         return NetworkEvent_MessageReceived(
-            from: var_from, message: var_message);
+          from: var_from,
+          message: var_message,
+        );
       case 3:
         var var_groupId = sse_decode_String(deserializer);
         var var_from = sse_decode_String(deserializer);
         var var_message = sse_decode_String(deserializer);
         return NetworkEvent_GroupMessageReceived(
-            groupId: var_groupId, from: var_from, message: var_message);
+          groupId: var_groupId,
+          from: var_from,
+          message: var_message,
+        );
       case 4:
         var var_message = sse_decode_String(deserializer);
         return NetworkEvent_Error(message: var_message);
@@ -456,6 +673,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_String(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_list_prim_u_8_strict(deserializer));
     } else {
       return null;
     }
@@ -479,29 +707,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  bool sse_decode_bool(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return deserializer.buffer.getUint8() != 0;
-  }
-
-  @protected
   void sse_encode_AnyhowException(
-      AnyhowException self, SseSerializer serializer) {
+    AnyhowException self,
+    SseSerializer serializer,
+  ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.message, serializer);
   }
 
   @protected
   void sse_encode_StreamSink_network_event_Sse(
-      RustStreamSink<NetworkEvent> self, SseSerializer serializer) {
+    RustStreamSink<NetworkEvent> self,
+    SseSerializer serializer,
+  ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(
-        self.setupAndSerialize(
-            codec: SseCodec(
+      self.setupAndSerialize(
+        codec: SseCodec(
           decodeSuccessData: sse_decode_network_event,
           decodeErrorData: sse_decode_AnyhowException,
-        )),
-        serializer);
+        ),
+      ),
+      serializer,
+    );
   }
 
   @protected
@@ -511,8 +739,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_bool(bool self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putUint8(self ? 1 : 0);
+  }
+
+  @protected
+  void sse_encode_list_prim_u_8_loose(
+    List<int> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    serializer.buffer.putUint8List(
+      self is Uint8List ? self : Uint8List.fromList(self),
+    );
+  }
+
+  @protected
   void sse_encode_list_prim_u_8_strict(
-      Uint8List self, SseSerializer serializer) {
+    Uint8List self,
+    SseSerializer serializer,
+  ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
@@ -526,24 +774,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_i_32(0, serializer);
         sse_encode_String(peerId, serializer);
       case NetworkEvent_PeerDiscovered(
-          peerId: final peerId,
-          avatarCid: final avatarCid
-        ):
+        peerId: final peerId,
+        avatarCid: final avatarCid,
+      ):
         sse_encode_i_32(1, serializer);
         sse_encode_String(peerId, serializer);
         sse_encode_opt_String(avatarCid, serializer);
       case NetworkEvent_MessageReceived(
-          from: final from,
-          message: final message
-        ):
+        from: final from,
+        message: final message,
+      ):
         sse_encode_i_32(2, serializer);
         sse_encode_String(from, serializer);
         sse_encode_String(message, serializer);
       case NetworkEvent_GroupMessageReceived(
-          groupId: final groupId,
-          from: final from,
-          message: final message
-        ):
+        groupId: final groupId,
+        from: final from,
+        message: final message,
+      ):
         sse_encode_i_32(3, serializer);
         sse_encode_String(groupId, serializer);
         sse_encode_String(from, serializer);
@@ -565,6 +813,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_list_prim_u_8_strict(
+    Uint8List? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_list_prim_u_8_strict(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_u_8(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint8(self);
@@ -579,11 +840,5 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_i_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putInt32(self);
-  }
-
-  @protected
-  void sse_encode_bool(bool self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    serializer.buffer.putUint8(self ? 1 : 0);
   }
 }

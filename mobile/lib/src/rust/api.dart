@@ -7,34 +7,97 @@ import 'frb_generated.dart';
 import 'network.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+// These functions are ignored because they are not marked as `pub`: `privacy_config`, `sessions`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `IdentityKeys`, `PhysicalSecureMessage`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
+// These functions are ignored (category: IgnoreBecauseExplicitAttribute): `take_stealth_cover_rx`
 
-Future<String> initSecureStorage(
-        {required String dbPath, required String password}) =>
-    RustLib.instance.api
-        .crateApiInitSecureStorage(dbPath: dbPath, password: password);
+Future<String> initSecureStorage({
+  required String dbPath,
+  required String password,
+}) => RustLib.instance.api.crateApiInitSecureStorage(
+  dbPath: dbPath,
+  password: password,
+);
 
 Future<String> generatePhantomId() =>
     RustLib.instance.api.crateApiGeneratePhantomId();
 
+/// Switch the privacy mode at runtime.
+///
+/// `mode_str`  — `"daily"` | `"stealth"`
+/// `proxy_addr` — optional SOCKS5, e.g. `"127.0.0.1:9050"` (Tor) or `"127.0.0.1:1080"` (Nym)
+/// `use_nym`   — `true` → Nym, `false` → Tor
+String setPrivacyMode({
+  required String modeStr,
+  String? proxyAddr,
+  required bool useNym,
+}) => RustLib.instance.api.crateApiSetPrivacyMode(
+  modeStr: modeStr,
+  proxyAddr: proxyAddr,
+  useNym: useNym,
+);
+
+/// Returns the currently active privacy mode as a string (`"DailyUse"` or `"MaximumStealth"`).
+String getPrivacyMode() => RustLib.instance.api.crateApiGetPrivacyMode();
+
 Stream<NetworkEvent> startNetworkNode({String? avatarCid}) =>
     RustLib.instance.api.crateApiStartNetworkNode(avatarCid: avatarCid);
 
-Future<void> sendSecureMessage(
-        {required String targetPeerId,
-        required String phantomId,
-        required String message}) =>
-    RustLib.instance.api.crateApiSendSecureMessage(
-        targetPeerId: targetPeerId, phantomId: phantomId, message: message);
+/// Import the caller's long-term identity into the Rust side so the
+/// envelope pipeline can sign/scan on their behalf.
+///
+/// `view_secret_hex` and `spend_secret_hex` are 64-char hex encodings of
+/// the 32-byte X25519 secrets written by `PhantomIdentity` on the Dart side.
+Future<String> loadLocalIdentity({
+  required String viewSecretHex,
+  required String spendSecretHex,
+}) => RustLib.instance.api.crateApiLoadLocalIdentity(
+  viewSecretHex: viewSecretHex,
+  spendSecretHex: spendSecretHex,
+);
+
+/// Send a real encrypted message.
+///
+/// Replaces the legacy AES-GCM demo pipeline. Takes a PhantomChat address
+/// (`phantom:view:spend` or `view:spend`), wraps the plaintext in a
+/// [`SessionStore::send`] → [`Envelope`] pair, and hands the serialised
+/// bytes off to the network layer for publishing.
+///
+/// The 3-parameter signature is kept for backwards-compat with the
+/// auto-generated Flutter bridge (`flutter_rust_bridge`) — the middle
+/// `_local_phantom_id` argument is no longer used internally but removing
+/// it would require regenerating `frb_generated.rs` from a machine that
+/// has the Flutter toolchain installed.
+Future<String> sendSecureMessage({
+  required String recipientAddress,
+  required String localPhantomId,
+  required String plaintext,
+}) => RustLib.instance.api.crateApiSendSecureMessage(
+  recipientAddress: recipientAddress,
+  localPhantomId: localPhantomId,
+  plaintext: plaintext,
+);
+
+/// Try to decrypt an incoming envelope using the loaded local identity.
+///
+/// Called by the network listener for every envelope the node observes.
+/// Returns:
+/// - `Some(plaintext)` when the envelope is ours and decrypts cleanly
+/// - `None` when it belongs to someone else (cover traffic, other peer)
+Future<Uint8List?> scanIncomingEnvelope({required List<int> wireBytes}) =>
+    RustLib.instance.api.crateApiScanIncomingEnvelope(wireBytes: wireBytes);
 
 Future<void> joinGroup({required String groupId}) =>
     RustLib.instance.api.crateApiJoinGroup(groupId: groupId);
 
-Future<void> sendGroupMessage(
-        {required String groupId, required String message}) =>
-    RustLib.instance.api
-        .crateApiSendGroupMessage(groupId: groupId, message: message);
+Future<void> sendGroupMessage({
+  required String groupId,
+  required String message,
+}) => RustLib.instance.api.crateApiSendGroupMessage(
+  groupId: groupId,
+  message: message,
+);
 
 Future<void> updateAvatarCid({required String cid}) =>
     RustLib.instance.api.crateApiUpdateAvatarCid(cid: cid);

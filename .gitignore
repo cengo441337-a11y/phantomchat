@@ -4,3 +4,6 @@ node_modules/
 .env
 dist/
 *.log
+
+# Native libs built by cargo-ndk — rebuild via scripts/build-android.sh
+mobile/android/app/src/main/jniLibs/

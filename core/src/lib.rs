@@ -1,10 +1,11 @@
-#[cfg(feature = "ffi")]
+#[cfg(any(feature = "ffi", feature = "ffi-mobile"))]
 mod frb_generated; /* AUTO INJECTED BY flutter_rust_bridge. This line may not be accurate, and you can change it according to your needs. */
-#[cfg(feature = "ffi")]
+#[cfg(any(feature = "ffi", feature = "ffi-mobile"))]
 pub mod api;
-#[cfg(feature = "ffi")]
+#[cfg(any(feature = "ffi", feature = "ffi-mobile"))]
 pub mod network;
 #[cfg(feature = "ffi")]
+#[cfg(feature = "rusqlite")]
 pub mod storage;
 
 pub mod address;

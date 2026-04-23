@@ -69,7 +69,11 @@ default = ["ffi", "net"]
 # traffic generator). Turn off for wasm32-unknown-unknown.
 net = ["dep:bs58", "dep:tokio", "dep:futures-util", "dep:libp2p", "dep:tracing"]
 # Flutter bridge + SQLCipher storage. Requires `net`.
-ffi = ["net", "dep:flutter_rust_bridge", "dep:rusqlite"]
+ffi = ["net", "dep:flutter_rust_bridge", "rusqlite"]
+rusqlite = ["dep:rusqlite"]
+# Same as  but skips rusqlite+SQLCipher (OpenSSL headers not available on
+# plain Android NDK). Enables FRB-bridged APIs that do not touch SQLCipher.
+ffi-mobile = ["net", "dep:flutter_rust_bridge"]
 # Crypto-only build for WASM / embedded: no native runtime, no FFI.
 # `cargo check --target wasm32-unknown-unknown --no-default-features --features wasm`
 wasm = ["dep:wasm-bindgen", "dep:serde-wasm-bindgen"]

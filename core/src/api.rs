@@ -4,6 +4,7 @@ use crate::envelope::Envelope;
 use crate::keys::{SpendKey, ViewKey};
 use crate::privacy::{PrivacyConfig, PrivacyMode, ProxyConfig, ProxyKind};
 use crate::session::SessionStore;
+#[cfg(feature = "rusqlite")]
 use crate::storage;
 use crate::frb_generated::StreamSink;
 use crate::network::{run_swarm, NetworkCommand, NetworkEvent, PhantomBehaviour};
@@ -49,6 +50,8 @@ fn privacy_config() -> &'static RwLock<PrivacyConfig> {
 
 /// Called by the relays crate to obtain the stealth-mode cover traffic stream.
 /// Returns `None` if already taken or P2P mode is active.
+#[cfg_attr(feature = "ffi", flutter_rust_bridge::frb(ignore))]
+#[cfg_attr(feature = "ffi-mobile", flutter_rust_bridge::frb(ignore))]
 pub fn take_stealth_cover_rx() -> Option<mpsc::Receiver<Vec<u8>>> {
     STEALTH_COVER_RX.get()?.lock().ok()?.take()
 }
@@ -69,12 +72,19 @@ pub struct IdentityKeys {
 
 // ── public API ────────────────────────────────────────────────────────────────
 
+#[cfg(feature = "rusqlite")]
 pub async fn init_secure_storage(db_path: String, password: String) -> String {
     match storage::init_db(PathBuf::from(db_path), &password) {
         Ok(_) => "SUCCESS: SECURE CORE INITIALIZED".to_string(),
         Err(e) => format!("ERROR: SECURE CORE FAILURE: {}", e),
     }
 }
+
+#[cfg(not(feature = "rusqlite"))]
+pub async fn init_secure_storage(_db_path: String, _password: String) -> String {
+    "ERROR: secure storage not available on this build (rusqlite feature disabled)".to_string()
+}
+
 
 pub fn generate_phantom_id() -> String {
     let mut id_bytes = [0u8; 32];
@@ -296,8 +306,11 @@ pub async fn send_secure_message(
         guard.send(&recipient, plaintext.as_bytes(), 16)
     };
 
-    let preview: String = plaintext.chars().take(64).collect();
-    let _ = storage::save_message(&recipient.short_id(), &preview);
+    #[cfg(feature = "rusqlite")]
+    {
+        let preview: String = plaintext.chars().take(64).collect();
+        let _ = storage::save_message(&recipient.short_id(), &preview);
+    }
 
     let wire = envelope.to_bytes();
     if let Some(tx) = COMMAND_TX.get() {
@@ -348,6 +361,11 @@ pub async fn update_avatar_cid(cid: String) {
     }
 }
 
+#[cfg(feature = "rusqlite")]
 pub async fn perform_panic_wipe(db_path: String) {
     storage::panic_wipe(PathBuf::from(db_path));
 }
+
+#[cfg(not(feature = "rusqlite"))]
+pub async fn perform_panic_wipe(_db_path: String) {}
+
