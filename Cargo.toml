@@ -2,6 +2,7 @@
 members = [
     "core",
     "cli",
-    "relays"
+    "relays",
+    "desktop/src-tauri"
 ]
 resolver = "2"

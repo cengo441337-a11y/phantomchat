@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Sha256, Digest};
-use secp256k1::{Secp256k1, SecretKey, Message};
+use secp256k1::{Secp256k1, Message};
 use rand::rngs::OsRng;
 
 /// Nostr event kind used for PhantomChat envelopes.

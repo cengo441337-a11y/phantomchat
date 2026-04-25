@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PhantomChat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Orbitron:wght@500;700;900&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body class="bg-bg-deep text-neon-green font-mono">
+    <!--
+      Fixed CRT background layer — sits behind everything via z-index.
+      Pure CSS scanlines + grid + slow vertical drift. See styles.css for
+      the .pc-bg keyframes.
+    -->
+    <div class="pc-bg" aria-hidden="true"></div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

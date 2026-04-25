@@ -15,6 +15,7 @@
 mod group_cmd;
 mod demo_cmd;
 mod file_cmd;
+mod tui;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
@@ -34,7 +35,8 @@ use phantomchat_core::{
 use x25519_dalek::StaticSecret as MixnetSecret;
 use phantomchat_relays::make_relay;
 use qrcodegen::{QrCode, QrCodeEcc};
-use rand_core::{OsRng, RngCore};
+use rand_core::OsRng;
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use std::{fs, path::PathBuf, sync::{Arc, Mutex}, time::Duration};
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -191,6 +193,16 @@ enum Commands {
     /// exchanges messages through the full Envelope+Ratchet stack in one
     /// process and reports pass/fail. No network or keyfile required.
     Selftest,
+    /// Interactive cyberpunk chat TUI — three-pane (contacts / messages /
+    /// input) live view backed by the same SessionStore + relay plumbing
+    /// the headless `send` and `listen` commands use.
+    Chat {
+        #[arg(short, long, default_value = "keys.json")]
+        file: PathBuf,
+        /// Nostr relay URL
+        #[arg(short = 'u', long, default_value = "wss://relay.damus.io")]
+        relay: String,
+    },
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────
@@ -218,6 +230,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Status { file }                         =>
             cmd_status(file, &cfg)?,
         Commands::Selftest                                => cmd_selftest()?,
+        Commands::Chat   { file, relay }                  =>
+            tui::run_chat(file, relay, &cfg).await?,
     }
     Ok(())
 }
@@ -503,12 +517,12 @@ fn cmd_selftest() -> anyhow::Result<()> {
     let peeled1 = peel_onion(&packet, &h1_sec);
     let after_h1 = match peeled1 {
         Ok(Peeled::Forward { packet: p, .. }) => p,
-        _ => { println!("  {}{}✗ hop1 did not forward{}", B, M, R); failed += 1; return Err(anyhow::anyhow!("mixnet")); }
+        _ => { println!("  {}{}✗ hop1 did not forward{}", B, M, R); return Err(anyhow::anyhow!("mixnet")); }
     };
     let peeled2 = peel_onion(&after_h1, &h2_sec);
     let after_h2 = match peeled2 {
         Ok(Peeled::Forward { packet: p, .. }) => p,
-        _ => { println!("  {}{}✗ hop2 did not forward{}", B, M, R); failed += 1; return Err(anyhow::anyhow!("mixnet")); }
+        _ => { println!("  {}{}✗ hop2 did not forward{}", B, M, R); return Err(anyhow::anyhow!("mixnet")); }
     };
     match peel_onion(&after_h2, &h3_sec) {
         Ok(Peeled::Final { payload }) if payload == b"onion-delivered" => {
@@ -587,14 +601,12 @@ fn cmd_selftest() -> anyhow::Result<()> {
         let mut mls_alice = match PhantomMlsMember::new(*b"alice") {
             Ok(m) => m, Err(e) => {
                 println!("  {}{}✗ mls_alice init: {}{}", B, M, e, R);
-                failed += 1;
                 return Err(anyhow::anyhow!("mls init"));
             }
         };
         let mut mls_bob = match PhantomMlsMember::new(*b"bob") {
             Ok(m) => m, Err(e) => {
                 println!("  {}{}✗ mls_bob init: {}{}", B, M, e, R);
-                failed += 1;
                 return Err(anyhow::anyhow!("mls init"));
             }
         };
@@ -728,23 +740,27 @@ fn cmd_keygen(out: PathBuf) -> anyhow::Result<()> {
     let id    = IdentityKey::generate();
     let view  = ViewKey::generate();
     let spend = SpendKey::generate();
+    let signing = PhantomSigningKey::generate();
 
     let json = serde_json::json!({
-        "identity_private": base64::encode(id.private),
-        "identity_public":  base64::encode(id.public),
-        "view_private":     base64::encode(view.secret.to_bytes()),
+        "identity_private": B64.encode(id.private),
+        "identity_public":  B64.encode(id.public),
+        "view_private":     B64.encode(view.secret.to_bytes()),
         "view_public":      hex::encode(view.public.as_bytes()),
-        "spend_private":    base64::encode(spend.secret.to_bytes()),
+        "spend_private":    B64.encode(spend.secret.to_bytes()),
         "spend_public":     hex::encode(spend.public.as_bytes()),
+        "signing_private":  B64.encode(signing.to_bytes()),
+        "signing_public":   hex::encode(signing.public_bytes()),
     });
 
     fs::write(&out, serde_json::to_vec_pretty(&json)?)?;
     pb.finish_and_clear();
 
     ok("KEYPAIR GENERATED");
-    field("Identity public",  &base64::encode(id.public)[..16]);
+    field("Identity public",  &B64.encode(id.public)[..16]);
     field("View public",      &hex::encode(view.public.as_bytes())[..16]);
     field("Spend public",     &hex::encode(spend.public.as_bytes())[..16]);
+    field("Signing public",   &hex::encode(signing.public_bytes())[..16]);
     field("Saved to",         &out.display().to_string());
     println!();
     warn("Keep spend_private secret — it decrypts all your messages.");
@@ -866,7 +882,7 @@ async fn cmd_listen(
 
     // Reconstruct ViewKey (for stealth-scanning) and SpendKey (for decryption)
     // from the keyfile produced by `cmd_keygen`.
-    let view_bytes = base64::decode(
+    let view_bytes = B64.decode(
         json["view_private"].as_str().context("missing view_private")?
     )?;
     let view_secret = StaticSecret::from(
@@ -878,7 +894,7 @@ async fn cmd_listen(
         secret: view_secret,
     };
 
-    let spend_bytes = base64::decode(
+    let spend_bytes = B64.decode(
         json["spend_private"].as_str().context("missing spend_private")?
     )?;
     let spend_secret = StaticSecret::from(

@@ -1,0 +1,355 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+    /* Slightly deeper than bg-deep to keep the scanline overlay readable. */
+    background-color: #070710;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Anchor the fixed `.pc-bg` layer beneath the React tree without
+       creating a stacking trap. */
+    position: relative;
+    overflow: hidden;
+  }
+  #root {
+    /* Pull the app above the .pc-bg overlay. */
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Neon scrollbar — barely visible, glows on hover. */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: #0A0A0F; }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(0, 255, 159, 0.25);
+    border-radius: 4px;
+    transition: background 0.2s ease;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 255, 159, 0.6);
+    box-shadow: 0 0 6px rgba(0, 255, 159, 0.5);
+  }
+
+  /* Subtle text-selection neon. */
+  ::selection {
+    background: rgba(0, 255, 159, 0.25);
+    color: #00FF9F;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   .pc-bg — fixed CRT background.
+   Layered:
+     1. Base dark blue-black fill (#070710).
+     2. 2px horizontal scanlines @ ~5% opacity, 4px period.
+     3. Faint 60px grid @ ~3% opacity (vertical + horizontal lines).
+     4. Slow vertical CRT-roll drift (60s, max 4px shift).
+   Pure CSS — no canvas, no JS. Sits behind everything via z-index: 0.
+   ───────────────────────────────────────────────────────────────────────── */
+.pc-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-color: #070710;
+  background-image:
+    /* Scanlines: 2px on, 2px off — alternating dark line. */
+    repeating-linear-gradient(
+      0deg,
+      rgba(0, 255, 159, 0.05) 0px,
+      rgba(0, 255, 159, 0.05) 1px,
+      transparent 1px,
+      transparent 4px
+    ),
+    /* Vertical grid: 1px line every 60px. */
+    repeating-linear-gradient(
+      90deg,
+      rgba(0, 255, 255, 0.03) 0px,
+      rgba(0, 255, 255, 0.03) 1px,
+      transparent 1px,
+      transparent 60px
+    ),
+    /* Horizontal grid: 1px line every 60px. */
+    repeating-linear-gradient(
+      0deg,
+      rgba(0, 255, 255, 0.03) 0px,
+      rgba(0, 255, 255, 0.03) 1px,
+      transparent 1px,
+      transparent 60px
+    );
+  /* Slight vignette via radial overlay so the corners feel darker. */
+  background-blend-mode: normal;
+  animation: pc-bg-drift 60s linear infinite;
+}
+
+@keyframes pc-bg-drift {
+  0%   { background-position: 0 0,    0 0,    0 0; }
+  50%  { background-position: 0 4px,  0 0,    0 0; }
+  100% { background-position: 0 0,    0 0,    0 0; }
+}
+
+@layer components {
+  .panel-border {
+    @apply border border-dim-green/60 rounded-md;
+  }
+  .panel-border-active {
+    @apply border border-neon-green rounded-md shadow-neon-green;
+  }
+  .neon-input {
+    @apply bg-bg-panel text-neon-green placeholder:text-soft-grey/60
+           border border-dim-green/60 focus:border-neon-green
+           focus:shadow-neon-green focus:outline-none
+           rounded-md px-3 py-2 font-mono;
+    transition: border-color 0.15s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+  }
+  .neon-input:focus {
+    background-color: rgba(0, 255, 159, 0.04);
+  }
+  .neon-button {
+    @apply bg-bg-elevated text-neon-green border border-neon-green/70
+           hover:bg-neon-green/10 hover:shadow-neon-green
+           transition-all duration-150 rounded-md px-4 py-2
+           font-mono uppercase tracking-wider text-sm;
+    /* Subtle resting glow + hover-lift. */
+    box-shadow: 0 0 0 0 rgba(0, 255, 159, 0);
+  }
+  .neon-button:hover {
+    filter: brightness(1.15);
+    transform: translateY(-1px);
+  }
+  .neon-button:active {
+    transform: translateY(0);
+    filter: brightness(0.95);
+  }
+
+  /* Magenta variant for the Bind button on ?<hex> rows. */
+  .neon-button-magenta {
+    @apply bg-bg-elevated text-neon-magenta border border-neon-magenta/70
+           hover:bg-neon-magenta/10 hover:shadow-neon-magenta
+           transition-all duration-150 rounded-md px-3 py-1
+           font-mono uppercase tracking-wider text-xs;
+  }
+  .neon-button-magenta:hover {
+    filter: brightness(1.2);
+    box-shadow: 0 0 14px rgba(255, 0, 255, 0.6),
+                inset 0 0 6px rgba(255, 0, 255, 0.2);
+  }
+
+  /* Pane focus glow — applied via :focus-within or explicit className. */
+  .pane-focused-green {
+    box-shadow: 0 0 12px 0 rgba(0, 255, 159, 0.5),
+                inset 0 0 6px 0 rgba(0, 255, 159, 0.2);
+  }
+  .pane-focused-magenta {
+    box-shadow: 0 0 12px 0 rgba(255, 0, 255, 0.5),
+                inset 0 0 6px 0 rgba(255, 0, 255, 0.2);
+  }
+  .pane-focused-cyan {
+    box-shadow: 0 0 12px 0 rgba(0, 255, 255, 0.5),
+                inset 0 0 6px 0 rgba(0, 255, 255, 0.2);
+  }
+  /* Auto-glow when keyboard focus lands inside any element marked
+     with `.pc-pane`. Cheap and works without state plumbing. */
+  .pc-pane {
+    transition: box-shadow 0.25s ease;
+  }
+  .pc-pane:focus-within {
+    box-shadow: 0 0 12px 0 rgba(0, 255, 159, 0.35),
+                inset 0 0 6px 0 rgba(0, 255, 159, 0.15);
+  }
+  .pc-pane-magenta:focus-within {
+    box-shadow: 0 0 12px 0 rgba(255, 0, 255, 0.35),
+                inset 0 0 6px 0 rgba(255, 0, 255, 0.15);
+  }
+
+  /* Display font helper. */
+  .font-display {
+    font-family: "Orbitron", "JetBrains Mono", monospace;
+    letter-spacing: 0.18em;
+  }
+
+  /* ──────── Glitch effect for tampered messages ──────────────────────────
+     Apply `.pc-glitch` to a span with `data-text` set to the same body.
+     The before/after pseudos paint the same string in cyan and magenta,
+     nudged ±1-2px. Animation runs every ~6s for ~0.3s — subtle hint,
+     not a constant flicker. */
+  .pc-glitch {
+    position: relative;
+    display: inline-block;
+  }
+  .pc-glitch::before,
+  .pc-glitch::after {
+    content: attr(data-text);
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    overflow: hidden;
+    pointer-events: none;
+    opacity: 0.85;
+  }
+  .pc-glitch::before {
+    color: #00FFFF;
+    animation: pc-glitch-cyan 6s infinite steps(1);
+    mix-blend-mode: screen;
+  }
+  .pc-glitch::after {
+    color: #FF00FF;
+    animation: pc-glitch-magenta 6s infinite steps(1);
+    mix-blend-mode: screen;
+  }
+
+  /* ──────── Cursor for InputBar ──────────────────────────────────────────
+     Tiny ▮ glyph rendered next to the placeholder hint when the input is
+     empty. Blinks via .animate-cursor-blink (2-step). */
+  .pc-cursor {
+    display: inline-block;
+    color: #00FF9F;
+    font-weight: 700;
+    text-shadow: 0 0 6px rgba(0, 255, 159, 0.7);
+  }
+  .pc-cursor-dim {
+    color: rgba(0, 255, 159, 0.35);
+    text-shadow: none;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Utilities — keyframes the Tailwind `animate-*` classes hook into.
+   Declared at the utilities layer so they survive PurgeCSS regardless of
+   whether a className references them through Tailwind or direct.
+   ───────────────────────────────────────────────────────────────────────── */
+@layer utilities {
+  /* Connection pill — three speeds / colors. */
+  @keyframes pc-pulse-connecting {
+    0%, 100% { opacity: 0.5; filter: drop-shadow(0 0 0 transparent); color: #9696A0; }
+    50%      { opacity: 1.0; filter: drop-shadow(0 0 6px rgba(255, 215, 0, 0.7)); color: #FFD700; }
+  }
+  @keyframes pc-pulse-connected {
+    0%, 100% { opacity: 0.7; filter: drop-shadow(0 0 2px rgba(0, 255, 159, 0.4)); }
+    50%      { opacity: 1.0; filter: drop-shadow(0 0 8px rgba(0, 255, 159, 0.9)); }
+  }
+  @keyframes pc-pulse-disconnected {
+    0%, 100% { opacity: 0.3; }
+    50%      { opacity: 1.0; filter: drop-shadow(0 0 6px rgba(255, 50, 50, 0.8)); }
+  }
+
+  /* Message-row enter — slide + fade + brief border-highlight (the border
+     is an inline box-shadow on the row that fades over 800ms via a
+     dedicated keyframe). */
+  @keyframes pc-row-in-incoming {
+    0%   { opacity: 0; transform: translateX(12px); box-shadow: inset 3px 0 0 0 rgba(0, 255, 255, 0.9); }
+    60%  { opacity: 1; transform: translateX(0);    box-shadow: inset 3px 0 0 0 rgba(0, 255, 255, 0.6); }
+    100% { opacity: 1; transform: translateX(0);    box-shadow: inset 3px 0 0 0 rgba(0, 255, 255, 0); }
+  }
+  @keyframes pc-row-in-outgoing {
+    0%   { opacity: 0; transform: translateX(-12px); box-shadow: inset 3px 0 0 0 rgba(0, 255, 159, 0.9); }
+    60%  { opacity: 1; transform: translateX(0);     box-shadow: inset 3px 0 0 0 rgba(0, 255, 159, 0.6); }
+    100% { opacity: 1; transform: translateX(0);     box-shadow: inset 3px 0 0 0 rgba(0, 255, 159, 0); }
+  }
+  /* Tweak duration: rows take 200ms slide, then border decays over the
+     remaining 600ms → total 800ms. Implemented by overriding the
+     base `animation-duration` for the actual rows in MessageStream. */
+  .pc-row-in-incoming {
+    animation: pc-row-in-incoming 0.8s ease-out both;
+  }
+  .pc-row-in-outgoing {
+    animation: pc-row-in-outgoing 0.8s ease-out both;
+  }
+
+  /* Glitch — ~95% of cycle the offset is 0 (invisible). Brief jitter
+     bursts at 80%-85% of every 6s loop. Magenta/cyan shift in opposite
+     directions so the eye reads "torn pixels". */
+  @keyframes pc-glitch-cyan {
+    0%, 79%, 86%, 100% { transform: translate(0, 0); opacity: 0; clip-path: inset(0 0 0 0); }
+    80% { transform: translate(-2px, -1px); opacity: 0.85; clip-path: inset(20% 0 30% 0); }
+    82% { transform: translate(2px, 1px);   opacity: 0.85; clip-path: inset(45% 0 10% 0); }
+    84% { transform: translate(-1px, 0);    opacity: 0.85; clip-path: inset(60% 0 25% 0); }
+  }
+  @keyframes pc-glitch-magenta {
+    0%, 79%, 86%, 100% { transform: translate(0, 0); opacity: 0; clip-path: inset(0 0 0 0); }
+    80% { transform: translate(2px, 1px);   opacity: 0.85; clip-path: inset(25% 0 35% 0); }
+    82% { transform: translate(-2px, -1px); opacity: 0.85; clip-path: inset(10% 0 50% 0); }
+    84% { transform: translate(1px, 0);     opacity: 0.85; clip-path: inset(55% 0 15% 0); }
+  }
+
+  /* Modal — fade + scale-in. Backdrop fades, panel scales from 0.97. */
+  @keyframes pc-modal-in {
+    0%   { opacity: 0; transform: scale(0.97) translateY(4px); }
+    100% { opacity: 1; transform: scale(1)    translateY(0); }
+  }
+  @keyframes pc-modal-backdrop-in {
+    0%   { opacity: 0; backdrop-filter: blur(0px) saturate(1); }
+    100% { opacity: 1; backdrop-filter: blur(8px) saturate(1.2); }
+  }
+  .pc-modal-backdrop {
+    animation: pc-modal-backdrop-in 0.2s ease-out both;
+    backdrop-filter: blur(8px) saturate(1.2);
+    -webkit-backdrop-filter: blur(8px) saturate(1.2);
+  }
+  .pc-modal-panel {
+    animation: pc-modal-in 0.2s ease-out both;
+    background-color: rgba(10, 10, 20, 0.95);
+    box-shadow: 0 0 30px rgba(255, 0, 255, 0.4),
+                inset 0 0 12px rgba(255, 0, 255, 0.08);
+  }
+
+  /* Cursor blink — 2-step so the box just toggles. */
+  @keyframes pc-cursor-blink {
+    0%, 49%   { opacity: 1; }
+    50%, 100% { opacity: 0; }
+  }
+
+  /* Tab-switch cross-fade. Apply to the root of either pane on mount. */
+  @keyframes pc-tab-fade-in {
+    0%   { opacity: 0; transform: translateY(2px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  .pc-tab-fade-in {
+    animation: pc-tab-fade-in 0.2s ease-out both;
+  }
+
+  /* Contact row hover — animated left-border extension. The border is
+     drawn as an inset box-shadow that scales from 0px to 2px on hover. */
+  .pc-contact-row {
+    position: relative;
+    transition: background-color 0.18s ease, box-shadow 0.18s ease;
+  }
+  .pc-contact-row:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+    box-shadow: inset 2px 0 0 0 rgba(0, 255, 159, 0.7);
+  }
+  .pc-contact-row.is-active {
+    background-color: rgba(0, 255, 159, 0.06);
+    box-shadow: inset 2px 0 0 0 #00FF9F,
+                0 0 12px rgba(0, 255, 159, 0.15);
+  }
+
+  /* Header brand glow. */
+  .pc-brand-glow {
+    text-shadow: 0 0 8px rgba(0, 255, 159, 0.6),
+                 0 0 18px rgba(0, 255, 159, 0.25);
+  }
+  .pc-brand-glow-magenta {
+    text-shadow: 0 0 8px rgba(255, 0, 255, 0.7),
+                 0 0 18px rgba(255, 0, 255, 0.3);
+  }
+
+  /* Search-result jump highlight. Applied for ~1.5s on the row that the
+     SearchPanel scrolled into view via onJumpTo, so the user can see at
+     a glance which row matched the click. Magenta to match the search
+     panel's substring highlight color. */
+  @keyframes pc-search-pulse {
+    0%   { background: rgba(255, 0, 255, 0.20); }
+    100% { background: transparent; }
+  }
+  .pc-search-pulse {
+    animation: pc-search-pulse 1.5s ease-out;
+  }
+}

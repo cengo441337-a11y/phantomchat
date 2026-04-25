@@ -21,15 +21,14 @@
 pub mod nostr;
 
 use async_trait::async_trait;
-use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use futures::{SinkExt, StreamExt};
 use phantomchat_core::envelope::Envelope;
 use rand::rngs::OsRng;
 use secp256k1::{KeyPair, Message, Secp256k1, SecretKey};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
-use std::collections::VecDeque;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::collections::{HashSet, VecDeque};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as WsMessage};
 use url::Url;
@@ -131,12 +130,50 @@ pub struct BridgeHealth {
 /// stays dyn-compatible and `make_relay()` can return `Box<dyn BridgeProvider>`.
 pub type EnvelopeHandler = Box<dyn Fn(Envelope) + Send + Sync + 'static>;
 
+/// Lifecycle events surfaced by `subscribe_with_state`. The frontend's pill
+/// maps these onto the existing three-state vocabulary
+/// (`connecting | connected | disconnected`); `Reconnecting` is a richer
+/// payload so a tooltip can show the next backoff window.
+#[derive(Debug, Clone)]
+pub enum ConnectionEvent {
+    Connecting,
+    Connected,
+    Disconnected(String),
+    Reconnecting { attempt: u32, backoff_secs: u32 },
+}
+
+/// Callback for `subscribe_with_state`. Same Boxed-Fn shape as
+/// `EnvelopeHandler` so the trait stays dyn-compatible.
+pub type StateHandler = Box<dyn Fn(ConnectionEvent) + Send + Sync + 'static>;
+
 #[async_trait]
 pub trait BridgeProvider: Send + Sync {
     fn id(&self) -> &str;
     async fn publish(&self, env: Envelope) -> anyhow::Result<()>;
     async fn subscribe(&self, handler: EnvelopeHandler) -> anyhow::Result<()>;
     async fn health(&self) -> BridgeHealth;
+
+    /// Subscribe + receive lifecycle state events. Default implementation
+    /// wraps `subscribe` and emits a single `Connected` on success / a single
+    /// `Disconnected` on failure — adequate for providers that don't yet
+    /// have native reconnect (e.g. `InMemoryRelay`, `StealthNostrRelay`).
+    async fn subscribe_with_state(
+        &self,
+        envelope_handler: EnvelopeHandler,
+        state_handler: StateHandler,
+    ) -> anyhow::Result<()> {
+        state_handler(ConnectionEvent::Connecting);
+        match self.subscribe(envelope_handler).await {
+            Ok(()) => {
+                state_handler(ConnectionEvent::Connected);
+                Ok(())
+            }
+            Err(e) => {
+                state_handler(ConnectionEvent::Disconnected(e.to_string()));
+                Err(e)
+            }
+        }
+    }
 }
 
 // ── InMemoryRelay ─────────────────────────────────────────────────────────────
@@ -227,51 +264,105 @@ impl BridgeProvider for NostrRelay {
     }
 
     async fn subscribe(&self, handler: EnvelopeHandler) -> anyhow::Result<()> {
+        // Forward to the state-aware variant with a no-op state handler so
+        // the auto-reconnect lives in exactly one place.
+        self.subscribe_with_state(handler, Box::new(|_| {})).await
+    }
+
+    async fn subscribe_with_state(
+        &self,
+        envelope_handler: EnvelopeHandler,
+        state_handler: StateHandler,
+    ) -> anyhow::Result<()> {
         let url = self.url.clone();
         let (handler_tx, mut handler_rx) = mpsc::unbounded_channel::<Envelope>();
+        let state = Arc::new(state_handler);
 
+        // ── Reconnect-loop task ────────────────────────────────────────────
+        // Tries to connect, on success runs the inner WS read loop, on any
+        // exit (Err or stream-end) sleeps with exponential backoff and tries
+        // again. Successful connects reset the attempt counter so a flaky
+        // link that recovers doesn't keep escalating backoff.
+        let state_for_loop = Arc::clone(&state);
         tokio::spawn(async move {
             let parsed = match Url::parse(&url) {
                 Ok(u) => u,
                 Err(e) => {
                     tracing::error!("NostrRelay subscribe: bad URL: {}", e);
+                    state_for_loop(ConnectionEvent::Disconnected(format!("bad URL: {}", e)));
                     return;
                 }
             };
 
-            let (mut ws, _) = match connect_async(parsed).await {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::error!("NostrRelay subscribe connect: {}", e);
-                    return;
-                }
-            };
+            let mut attempt: u32 = 0;
+            loop {
+                state_for_loop(ConnectionEvent::Connecting);
+                match connect_async(parsed.clone()).await {
+                    Ok((mut ws, _)) => {
+                        attempt = 0;
+                        tracing::debug!("NostrRelay: subscribe connected to {}", url);
+                        state_for_loop(ConnectionEvent::Connected);
 
-            // Send subscription filter
-            let req = NostrEvent::subscription_req("phantom-sub-1");
-            if ws.send(WsMessage::Text(req)).await.is_err() {
-                return;
-            }
-
-            while let Some(Ok(msg)) = ws.next().await {
-                if let WsMessage::Text(text) = msg {
-                    // Nostr wire: ["EVENT", <sub_id>, <event>]
-                    if let Ok(arr) = serde_json::from_str::<serde_json::Value>(&text) {
-                        if arr[0] == "EVENT" {
-                            if let Ok(event) = serde_json::from_value::<NostrEvent>(arr[2].clone()) {
-                                if let Some(env) = event.to_envelope() {
-                                    let _ = handler_tx.send(env);
+                        // Subscription filter; if the very first send fails
+                        // we fall through to the reconnect arm.
+                        let req = NostrEvent::subscription_req("phantom-sub-1");
+                        if let Err(e) = ws.send(WsMessage::Text(req)).await {
+                            tracing::debug!("NostrRelay: send REQ failed: {}", e);
+                            state_for_loop(ConnectionEvent::Disconnected(format!("send REQ: {}", e)));
+                        } else {
+                            // Inner read loop. Exits cleanly on stream-end
+                            // (Some(Err) / None) so we can reconnect.
+                            let mut exit_reason = String::from("stream ended");
+                            while let Some(item) = ws.next().await {
+                                match item {
+                                    Ok(WsMessage::Text(text)) => {
+                                        if let Ok(arr) =
+                                            serde_json::from_str::<serde_json::Value>(&text)
+                                        {
+                                            if arr[0] == "EVENT" {
+                                                if let Ok(event) =
+                                                    serde_json::from_value::<NostrEvent>(arr[2].clone())
+                                                {
+                                                    if let Some(env) = event.to_envelope() {
+                                                        let _ = handler_tx.send(env);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Ok(_) => {} // ignore Ping/Pong/Binary
+                                    Err(e) => {
+                                        exit_reason = format!("ws error: {}", e);
+                                        break;
+                                    }
                                 }
                             }
+                            tracing::debug!("NostrRelay: ws exit ({})", exit_reason);
+                            state_for_loop(ConnectionEvent::Disconnected(exit_reason));
                         }
                     }
+                    Err(e) => {
+                        tracing::debug!("NostrRelay: connect failed (attempt {}): {}", attempt, e);
+                        state_for_loop(ConnectionEvent::Disconnected(format!("connect: {}", e)));
+                    }
                 }
+
+                // Exponential backoff with jitter, capped at 60s. Curve:
+                // attempt 0 → 1s, 1 → 2s, 2 → 4s, ... 6+ → 60s, all + 0..5s
+                // jitter so a fleet doesn't thunder-herd a recovering relay.
+                attempt = attempt.saturating_add(1);
+                let base = (1u32 << attempt.min(6)).min(60);
+                let jitter = rand::random::<u32>() % 5;
+                let backoff = base + jitter;
+                state_for_loop(ConnectionEvent::Reconnecting { attempt, backoff_secs: backoff });
+                tokio::time::sleep(Duration::from_secs(backoff as u64)).await;
             }
         });
 
+        // ── Envelope dispatch task ────────────────────────────────────────
         tokio::spawn(async move {
             while let Some(env) = handler_rx.recv().await {
-                handler(env);
+                envelope_handler(env);
             }
         });
 
@@ -446,6 +537,351 @@ pub fn make_relay(
         Box::new(StealthNostrRelay::new(relay_url, proxy))
     } else {
         Box::new(NostrRelay::new(relay_url))
+    }
+}
+
+/// Build a `MultiRelay` that fans publish out to every URL and dedupes
+/// envelopes coming back from the union of subscribes. Single-URL inputs
+/// short-circuit to `make_relay` so the wrapping overhead only kicks in
+/// when there's actually redundancy to exploit.
+pub fn make_multi_relay(
+    urls: &[&str],
+    stealth: bool,
+    proxy_addr: Option<&str>,
+) -> Box<dyn BridgeProvider> {
+    if urls.len() == 1 {
+        return make_relay(urls[0], stealth, proxy_addr);
+    }
+    let inners: Vec<Box<dyn BridgeProvider>> = urls
+        .iter()
+        .map(|u| make_relay(u, stealth, proxy_addr))
+        .collect();
+    Box::new(MultiRelay::new(inners))
+}
+
+// ── MultiRelay ───────────────────────────────────────────────────────────────
+//
+// Wraps N underlying providers, fans publishes out in parallel, and dedupes
+// the union of incoming envelopes via an LRU keyed on `Sha256(env.to_bytes())`.
+//
+// Dedupe-LRU implementation choice: `HashSet<[u8; 32]>` paired with a
+// `VecDeque<[u8; 32]>` of insertion order. O(1) contains, O(1) push, O(1)
+// evict-oldest. We avoided `linked-hash-map`/`lru` crates to keep the
+// dependency surface minimal — `sha2` + `std::collections` are already pulled
+// in by this crate, so no new transitive deps for the dedupe path.
+//
+// Cap is 4096 entries → ~128 KiB resident (32 B per hash × 2 containers),
+// which is the upper bound; on a normal traffic relay we never approach it.
+
+const DEDUPE_CAP: usize = 4096;
+
+struct DedupeLru {
+    set: HashSet<[u8; 32]>,
+    order: VecDeque<[u8; 32]>,
+    cap: usize,
+}
+
+impl DedupeLru {
+    fn new(cap: usize) -> Self {
+        Self {
+            set: HashSet::with_capacity(cap),
+            order: VecDeque::with_capacity(cap),
+            cap,
+        }
+    }
+
+    /// Returns `true` if this hash is new (handler should fire). `false`
+    /// means we've seen it already across some other relay.
+    fn insert_if_absent(&mut self, key: [u8; 32]) -> bool {
+        if self.set.contains(&key) {
+            return false;
+        }
+        if self.order.len() >= self.cap {
+            if let Some(evicted) = self.order.pop_front() {
+                self.set.remove(&evicted);
+            }
+        }
+        self.set.insert(key);
+        self.order.push_back(key);
+        true
+    }
+}
+
+/// Per-underlying connection state, used to compute the aggregate emitted
+/// to the caller's `state_handler`.
+#[derive(Debug, Clone)]
+enum UnderlyingState {
+    Connecting,
+    Connected,
+    Reconnecting,
+    /// Holds the timestamp at which the underlying first reported failed,
+    /// so the aggregator can wait 30s before flipping global state to
+    /// `Disconnected` (avoids flapping on a single relay's transient).
+    Failed(Instant),
+}
+
+/// Coarse aggregate state we report up to the application; mirrors the
+/// frontend's three-state pill plus `Reconnecting` for tooltip surface.
+#[derive(Debug, Clone, PartialEq)]
+enum AggregateState {
+    Connecting,
+    Connected,
+    Reconnecting,
+    Disconnected,
+}
+
+pub struct MultiRelay {
+    id: String,
+    inners: Vec<Arc<dyn BridgeProvider>>,
+}
+
+impl MultiRelay {
+    pub fn new(inners: Vec<Box<dyn BridgeProvider>>) -> Self {
+        let id = format!("multi:{}", inners.len());
+        // Convert Box → Arc so we can share each inner across the per-relay
+        // subscribe tasks without cloning their internal state.
+        let inners = inners.into_iter().map(Arc::from).collect();
+        Self { id, inners }
+    }
+
+    fn dedupe_key(env: &Envelope) -> [u8; 32] {
+        // Hashes the full padded envelope wire bytes. Identical envelopes
+        // sent through two relays will produce identical bytes (the Envelope
+        // has no random per-publish field), so the second arrival hits the
+        // LRU and is suppressed. `Sha256` is already a transitive dep of
+        // this crate via Nostr event-ID computation.
+        let bytes = env.to_bytes();
+        let digest = Sha256::digest(&bytes);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest);
+        out
+    }
+}
+
+#[async_trait]
+impl BridgeProvider for MultiRelay {
+    fn id(&self) -> &str { &self.id }
+
+    /// Fan out to every underlying relay in parallel. Success if AT LEAST
+    /// ONE succeeds — only return Err if every underlying failed.
+    async fn publish(&self, env: Envelope) -> anyhow::Result<()> {
+        let futs = self.inners.iter().map(|r| {
+            let r = Arc::clone(r);
+            let env = env.clone();
+            async move { r.publish(env).await }
+        });
+        let results = futures::future::join_all(futs).await;
+        let mut last_err: Option<String> = None;
+        let mut any_ok = false;
+        for (i, r) in results.into_iter().enumerate() {
+            match r {
+                Ok(()) => any_ok = true,
+                Err(e) => {
+                    tracing::debug!("MultiRelay publish: relay #{} failed: {}", i, e);
+                    last_err = Some(format!("relay #{}: {}", i, e));
+                }
+            }
+        }
+        if any_ok {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "all {} relays failed to publish (last: {})",
+                self.inners.len(),
+                last_err.unwrap_or_else(|| "no underlying relays".into())
+            ))
+        }
+    }
+
+    async fn subscribe(&self, handler: EnvelopeHandler) -> anyhow::Result<()> {
+        self.subscribe_with_state(handler, Box::new(|_| {})).await
+    }
+
+    async fn subscribe_with_state(
+        &self,
+        envelope_handler: EnvelopeHandler,
+        state_handler: StateHandler,
+    ) -> anyhow::Result<()> {
+        let lru = Arc::new(Mutex::new(DedupeLru::new(DEDUPE_CAP)));
+        let handler = Arc::new(envelope_handler);
+        let state_handler = Arc::new(state_handler);
+        let n = self.inners.len();
+
+        // Per-underlying state, all start in `Connecting`.
+        let states: Arc<Mutex<Vec<UnderlyingState>>> =
+            Arc::new(Mutex::new(vec![UnderlyingState::Connecting; n]));
+        // Last aggregate we emitted — guards against double-emit.
+        let last_agg: Arc<Mutex<AggregateState>> =
+            Arc::new(Mutex::new(AggregateState::Connecting));
+
+        // Emit the initial Connecting once so callers see SOMETHING before
+        // the first underlying transitions.
+        state_handler(ConnectionEvent::Connecting);
+
+        // Aggregator helper — recompute + emit on any per-relay change.
+        let recompute_and_emit = {
+            let states = Arc::clone(&states);
+            let last_agg = Arc::clone(&last_agg);
+            let state_handler = Arc::clone(&state_handler);
+            move || {
+                let snapshot = states.lock().unwrap().clone();
+                let now = Instant::now();
+                let mut any_connected = false;
+                let mut all_reconnecting = true;
+                let mut all_failed_long = true;
+                for s in &snapshot {
+                    match s {
+                        UnderlyingState::Connected => {
+                            any_connected = true;
+                            all_reconnecting = false;
+                            all_failed_long = false;
+                        }
+                        UnderlyingState::Reconnecting => {
+                            all_failed_long = false;
+                        }
+                        UnderlyingState::Connecting => {
+                            all_reconnecting = false;
+                            all_failed_long = false;
+                        }
+                        UnderlyingState::Failed(since) => {
+                            all_reconnecting = false;
+                            if now.duration_since(*since) < Duration::from_secs(30) {
+                                all_failed_long = false;
+                            }
+                        }
+                    }
+                }
+                let new_agg = if any_connected {
+                    AggregateState::Connected
+                } else if all_failed_long {
+                    AggregateState::Disconnected
+                } else if all_reconnecting {
+                    AggregateState::Reconnecting
+                } else {
+                    AggregateState::Connecting
+                };
+
+                let mut last = last_agg.lock().unwrap();
+                if *last != new_agg {
+                    *last = new_agg.clone();
+                    let event = match new_agg {
+                        AggregateState::Connecting => ConnectionEvent::Connecting,
+                        AggregateState::Connected => ConnectionEvent::Connected,
+                        AggregateState::Reconnecting => ConnectionEvent::Reconnecting {
+                            attempt: 0,
+                            backoff_secs: 0,
+                        },
+                        AggregateState::Disconnected => ConnectionEvent::Disconnected(
+                            "all underlying relays down >30s".into(),
+                        ),
+                    };
+                    state_handler(event);
+                }
+            }
+        };
+        let recompute_and_emit = Arc::new(recompute_and_emit);
+
+        // Spawn a subscribe task per underlying relay.
+        for (idx, inner) in self.inners.iter().enumerate() {
+            let inner = Arc::clone(inner);
+            let lru = Arc::clone(&lru);
+            let handler = Arc::clone(&handler);
+            let states = Arc::clone(&states);
+            let recompute = Arc::clone(&recompute_and_emit);
+
+            // Per-relay envelope handler: dedupe before invoking shared cb.
+            let dedupe_handler: EnvelopeHandler = {
+                let lru = Arc::clone(&lru);
+                let handler = Arc::clone(&handler);
+                Box::new(move |env: Envelope| {
+                    let key = MultiRelay::dedupe_key(&env);
+                    let fresh = {
+                        let mut g = lru.lock().unwrap();
+                        g.insert_if_absent(key)
+                    };
+                    if fresh {
+                        handler(env);
+                    } else {
+                        tracing::trace!("MultiRelay: dedup hit, suppressing duplicate");
+                    }
+                })
+            };
+
+            // Per-relay state handler: update slot + recompute aggregate.
+            let per_state_handler: StateHandler = {
+                let states = Arc::clone(&states);
+                let recompute = Arc::clone(&recompute);
+                Box::new(move |ev: ConnectionEvent| {
+                    {
+                        let mut s = states.lock().unwrap();
+                        if let Some(slot) = s.get_mut(idx) {
+                            *slot = match &ev {
+                                ConnectionEvent::Connecting => UnderlyingState::Connecting,
+                                ConnectionEvent::Connected => UnderlyingState::Connected,
+                                ConnectionEvent::Reconnecting { .. } => {
+                                    UnderlyingState::Reconnecting
+                                }
+                                ConnectionEvent::Disconnected(_) => {
+                                    // Preserve original `Failed` instant if
+                                    // we were already failed — we only want
+                                    // to start the 30s clock on the FIRST
+                                    // failure, not reset it on every retry.
+                                    match slot {
+                                        UnderlyingState::Failed(t) => {
+                                            UnderlyingState::Failed(*t)
+                                        }
+                                        _ => UnderlyingState::Failed(Instant::now()),
+                                    }
+                                }
+                            };
+                        }
+                    }
+                    recompute();
+                })
+            };
+
+            // Detached: a failing single subscribe shouldn't block us from
+            // keeping the others alive. The inner provider is responsible
+            // for its own reconnect (NostrRelay does, InMemory doesn't need
+            // to, Stealth deliberately doesn't per task brief).
+            tokio::spawn(async move {
+                if let Err(e) = inner
+                    .subscribe_with_state(dedupe_handler, per_state_handler)
+                    .await
+                {
+                    tracing::error!(
+                        "MultiRelay: relay #{} subscribe_with_state error: {}",
+                        idx,
+                        e
+                    );
+                }
+            });
+            // Suppress unused-warning if `states` isn't otherwise used here.
+            let _ = &states;
+        }
+
+        Ok(())
+    }
+
+    /// Aggregate health: latency = min, uptime = max, failure_rate = min
+    /// (i.e. report the "best" underlying — what the user effectively
+    /// experiences, since we only need ONE healthy relay).
+    async fn health(&self) -> BridgeHealth {
+        let healths = futures::future::join_all(self.inners.iter().map(|r| {
+            let r = Arc::clone(r);
+            async move { r.health().await }
+        }))
+        .await;
+        if healths.is_empty() {
+            return BridgeHealth { latency_ms: u32::MAX, uptime: 0.0, failure_rate: 1.0 };
+        }
+        let latency_ms = healths.iter().map(|h| h.latency_ms).min().unwrap_or(u32::MAX);
+        let uptime = healths.iter().map(|h| h.uptime).fold(0.0_f32, f32::max);
+        let failure_rate = healths
+            .iter()
+            .map(|h| h.failure_rate)
+            .fold(1.0_f32, f32::min);
+        BridgeHealth { latency_ms, uptime, failure_rate }
     }
 }
 

@@ -1,0 +1,306 @@
+{
+  "app": {
+    "header": {
+      "brand_subtitle": "DC INFOSEC 2026",
+      "you_label": "Sie:"
+    },
+    "tabs": {
+      "contacts": "Kontakte",
+      "channels": "Kanäle (MLS)"
+    },
+    "drop_overlay": "Loslassen, um an {{label}} zu senden",
+    "drop_overlay_no_contact": "(kein Kontakt)",
+    "system": {
+      "select_contact_first": "Bitte zuerst einen Kontakt auswählen",
+      "send_failed": "Senden fehlgeschlagen: {{error}}",
+      "file_send_failed": "Dateiversand fehlgeschlagen: {{error}}",
+      "open_folder_failed": "Ordner konnte nicht geöffnet werden: {{error}}",
+      "added_contact": "Kontakt '{{label}}' hinzugefügt",
+      "add_contact_failed": "Kontakt hinzufügen fehlgeschlagen: {{error}}",
+      "bound_sealed_sender": "Sealed-Sender-Schlüssel an '{{label}}' gebunden",
+      "bind_failed": "Bindung fehlgeschlagen: {{error}}",
+      "identity_generated": "Identität erzeugt",
+      "listener_failed": "Empfänger fehlgeschlagen: {{error}}",
+      "load_contacts_failed": "Kontakte konnten nicht geladen werden: {{error}}",
+      "relay_disconnected": "Relay getrennt: {{detail}}",
+      "error_prefix": "Fehler: {{message}}"
+    },
+    "update_banner": "Eine Aktualisierung ist verfügbar. Öffnen Sie Einstellungen → Über zur Installation."
+  },
+  "identity_gate": {
+    "title_a": "PHANTOM",
+    "title_b": "CHAT",
+    "subtitle": "Erststart · noch keine Identität",
+    "description": "PhantomChat benötigt eine kryptografische Identität, bevor Nachrichten gesendet oder empfangen werden können. Klicken Sie unten, um eine zu erzeugen — View-, Spend- und Signaturschlüssel werden lokal in Ihrem Anwendungsdaten-Verzeichnis gespeichert.",
+    "generate_button": "Identität erzeugen"
+  },
+  "onboarding": {
+    "step1": {
+      "subtitle": "Erststart · Einrichtungsassistent",
+      "description": "Ende-zu-Ende-verschlüsselter Messenger mit Stealth-Tag-Scanning, Double-Ratchet-Sitzungen und PQXDH-Hybrid-Briefumschlägen. Wir führen Sie durch Identität, Relays und das Teilen Ihrer Adresse — etwa eine Minute Aufwand."
+    },
+    "step2": {
+      "header": "Schritt 2 · Identität",
+      "generate_new": "Neu erzeugen",
+      "restore_from_keyfile": "Aus Schlüsseldatei wiederherstellen",
+      "generate_description": "Erzeugt frische View-, Spend-, Signatur- und Identitätsschlüssel. Lokal im Anwendungsdaten-Verzeichnis Ihres Systems gespeichert.",
+      "generate_button": "Identität erzeugen",
+      "generating": "Wird erzeugt…",
+      "restore_description": "Fügen Sie unten den Inhalt einer exportierten keys.json ein. Erforderliche Felder: View/Spend/Signatur/Identität (privat + öffentlich).",
+      "import_button": "Schlüsseldatei importieren",
+      "importing": "Wird importiert…",
+      "ready_message": "Identität bereit · klicken Sie auf Weiter, um fortzufahren"
+    },
+    "step3": {
+      "header": "Schritt 3 · Relays",
+      "description": "PhantomChat veröffentlicht Briefumschläge an einem oder mehreren Nostr-Relays. Wählen Sie die Standardrelays, denen Sie vertrauen, und/oder fügen Sie ein eigenes hinzu.",
+      "custom_label": "Eigenes Relay (optional)",
+      "save_button": "Relays speichern",
+      "saving": "Wird gespeichert…",
+      "saved_message": "Gespeichert · klicken Sie auf Weiter",
+      "pick_at_least_one": "Bitte wählen Sie mindestens ein Relay"
+    },
+    "step4": {
+      "header": "Schritt 4 · Adresse teilen",
+      "description": "Lassen Sie Ihren Kontakt diesen QR-Code scannen oder kopieren Sie die Klartext-Adresse — beide kodieren denselben phantom:view:spend-Inhalt. Kann bedenkenlos veröffentlicht werden: enthält keine Geheimnisse."
+    },
+    "step5": {
+      "header": "Bereit",
+      "description": "Sie können jetzt chatten. Der Empfänger wird auf Ihren konfigurierten Relays gestartet, und Sie können Kontakte über das Hauptfenster hinzufügen.",
+      "start_button": "PhantomChat starten",
+      "starting": "Wird gestartet…"
+    },
+    "nav": {
+      "back": "Zurück",
+      "next": "Weiter"
+    }
+  },
+  "settings": {
+    "title": "Einstellungen",
+    "close": "Einstellungen schließen",
+    "identity": {
+      "title": "Identität",
+      "fingerprint": "Fingerabdruck",
+      "signing_pub": "Signatur-Pub",
+      "display_name_label": "Ihr Anzeigename",
+      "display_name_placeholder": "(optional, z. B. alice)",
+      "display_name_saved": "gespeichert",
+      "display_name_hint": "Dieser Name wird Personen angezeigt, die Sie zu MLS-Gruppen einladen (im Welcome-Wrapper). Bei 1:1-Chats wird er nur in Ihrer eigenen Oberfläche verwendet.",
+      "backup_button": "Schlüsseldatei sichern"
+    },
+    "language": {
+      "title": "Sprache",
+      "auto": "Auto (Browser)",
+      "en": "English",
+      "de": "Deutsch"
+    },
+    "privacy": {
+      "title": "Privatsphäre",
+      "daily_use": "Alltagsnutzung",
+      "daily_use_hint": "(P2P + leichter Cover-Traffic)",
+      "max_stealth": "Maximale Tarnung",
+      "max_stealth_hint": "(Nur Tor / Nym SOCKS5)",
+      "proxy_addr_label": "SOCKS5-Proxy-Adresse",
+      "network_label": "Netzwerk",
+      "save": "Speichern",
+      "saving": "Wird gespeichert…",
+      "discard": "Verwerfen",
+      "msg_reconnecting": "Erneuter Verbindungsaufbau über {{kind}}…",
+      "msg_reconnecting_plain": "Verbindung wird wiederhergestellt…",
+      "msg_saved": "Gespeichert · Empfänger neu gestartet",
+      "msg_saved_restart_failed": "Gespeichert, Neustart fehlgeschlagen: {{error}}",
+      "msg_save_failed": "Speichern fehlgeschlagen: {{error}}",
+      "msg_discarded": "Verworfen"
+    },
+    "relays": {
+      "title": "Relays",
+      "remove": "entfernen",
+      "add": "+ Relay hinzufügen",
+      "save": "Speichern",
+      "saving": "Wird gespeichert…",
+      "discard": "Verwerfen",
+      "msg_saved": "Gespeichert · Empfänger zur Übernahme neu starten",
+      "msg_save_failed": "Speichern fehlgeschlagen: {{error}}",
+      "msg_discarded": "Verworfen",
+      "msg_load_failed": "Relays konnten nicht geladen werden: {{error}}"
+    },
+    "about": {
+      "title": "Über",
+      "version_label": "Version",
+      "by_line": "PhantomChat von",
+      "check_updates_button": "Auf Aktualisierungen prüfen",
+      "checking_updates": "Wird geprüft…",
+      "up_to_date": "Sie verwenden die aktuelle Version",
+      "update_available": "Aktualisierung verfügbar: v{{version}}",
+      "install_update_button": "Aktualisierung installieren",
+      "installing_update": "Wird installiert…",
+      "update_failed": "Aktualisierung fehlgeschlagen: {{error}}"
+    },
+    "audit": {
+      "title": "Audit-Protokoll",
+      "filter_label": "Filter",
+      "filter_all": "Alle Kategorien",
+      "export_button": "Exportieren",
+      "exported_path": "Pfad: {{path}}",
+      "empty": "(noch keine Audit-Einträge)",
+      "load_failed": "Audit-Protokoll konnte nicht geladen werden: {{error}}",
+      "col_ts": "Zeitstempel",
+      "col_category": "Kategorie",
+      "col_event": "Ereignis",
+      "col_details": "Details"
+    },
+    "danger": {
+      "title": "Gefahrenzone",
+      "description": "Alle lokalen Daten löschen: Identität, Kontakte, Sitzungen, Nachrichten und MLS-Status. Die Anwendung wird unmittelbar danach geschlossen.",
+      "wipe_button": "Alle lokalen Daten löschen",
+      "type_delete": "Geben Sie zur Bestätigung DELETE ein:",
+      "confirm_button": "Löschen bestätigen",
+      "cancel_button": "Abbrechen",
+      "must_type_delete": "Bitte geben Sie zur Bestätigung exakt DELETE ein",
+      "wipe_failed": "Löschen fehlgeschlagen: {{error}}"
+    }
+  },
+  "contacts_pane": {
+    "header": "# Kontakte",
+    "add_new": "+ neu",
+    "add_new_title": "Kontakt hinzufügen",
+    "unbound_pending_title": "Nicht gebundener Absender wartet",
+    "unbound_pending_hint": "Klicken, um an einen Kontakt zu binden",
+    "empty": "(keine Kontakte — klicken Sie auf \"+ neu\", um einen hinzuzufügen)",
+    "unbound_badge": "ungebunden",
+    "unbound_badge_title": "Kein Sealed-Sender-Schlüssel gebunden — eingehende versiegelte Nachrichten erscheinen als ?<hex>, bis Sie binden"
+  },
+  "channels_pane": {
+    "header": "# Kanäle (MLS)",
+    "refresh_title": "Status aktualisieren",
+    "status": {
+      "title": "Status",
+      "initialized": "initialisiert",
+      "in_group": "in Gruppe",
+      "members_mls": "Mitglieder (MLS)",
+      "directory": "Verzeichnis",
+      "identity": "Identität",
+      "yes": "ja",
+      "no": "nein",
+      "ram_only_hint": "MLS-Gruppenstatus nur im RAM · Verzeichnis bleibt erhalten"
+    },
+    "init": {
+      "title": "Initialisieren",
+      "label_placeholder": "Identitätsbezeichnung (z. B. alice)",
+      "init_button": "MLS initialisieren",
+      "init_failed": "Initialisierung fehlgeschlagen: {{error}}",
+      "initialized": "initialisiert als '{{label}}'"
+    },
+    "create": {
+      "title": "Gruppe starten",
+      "create_button": "Gruppe erstellen",
+      "wait_hint": "oder warten — eingehende Welcomes treten automatisch bei.",
+      "created": "Gruppe erstellt — Sie sind das einzige Mitglied",
+      "create_failed": "create_group fehlgeschlagen: {{error}}"
+    },
+    "share_kp": {
+      "title": "Schlüsselpaket teilen",
+      "show_button": "mein Schlüsselpaket anzeigen",
+      "regenerate_button": "Schlüsselpaket neu erzeugen",
+      "kp_label": "Schlüsselpaket (b64)",
+      "publish_failed": "publish_key_package fehlgeschlagen: {{error}}",
+      "kp_generated": "Schlüsselpaket erzeugt ({{chars}} b64-Zeichen)"
+    },
+    "invite": {
+      "title": "Teilnehmer einladen",
+      "kp_placeholder": "Schlüsselpaket des Teilnehmers (b64)…",
+      "label_placeholder": "Bezeichnung des Teilnehmers (z. B. bob)",
+      "address_placeholder": "phantom:view:spend des Teilnehmers",
+      "signing_placeholder": "Signatur-Pubkey des Teilnehmers (64-hex)",
+      "add_button": "Mitglied hinzufügen",
+      "auto_ship_hint": "Welcome + Commit werden automatisch via Sealed-Sender ausgeliefert.",
+      "invited": "'{{label}}' eingeladen — Welcome automatisch via Sealed-Sender ausgeliefert",
+      "add_failed": "add_member fehlgeschlagen: {{error}}"
+    },
+    "directory": {
+      "title": "Verzeichnis"
+    },
+    "send": {
+      "title": "Senden",
+      "placeholder": "Nachricht an die Gruppe…",
+      "send_button": "an Gruppe senden",
+      "fanout_hint_one": "wird automatisch an {{count}} Mitglied ausgeliefert.",
+      "fanout_hint_other": "wird automatisch an {{count}} Mitglieder ausgeliefert.",
+      "send_failed": "Senden an Gruppe fehlgeschlagen: {{error}}"
+    },
+    "log": {
+      "title": "Gruppennachrichten",
+      "empty": "(noch keine MLS-Aktivität)",
+      "joined": "Gruppe von {{label}} beigetreten · {{count}} Mitglied(er)",
+      "epoch_advanced": "Epoche fortgeschritten · {{count}} Mitglied(er)",
+      "status_error": "Statusfehler: {{error}}"
+    },
+    "copy": {
+      "copy": "kopieren",
+      "copied": "kopiert"
+    }
+  },
+  "message_stream": {
+    "title_default": "#stream",
+    "empty": "(warte auf erste Nachricht — unten tippen oder eingehende Nachricht abwarten)",
+    "tampered_title": "Signatur ungültig — Absenderzuordnung wurde manipuliert. Vertrauen Sie der Bezeichnung nicht.",
+    "hash_mismatch_title": "Hash-Abweichung — NICHT ÖFFNEN. Die SHA-256-Prüfsumme der Datei entspricht nicht dem Manifest.",
+    "warn_tampered": "Warnung: Signatur manipuliert",
+    "warn_hash": "Warnung: Hash-Abweichung",
+    "sent_label": "gesendet",
+    "received_label": "empfangen",
+    "open_folder_title": "Downloads/PhantomChat im Dateimanager öffnen",
+    "open_folder_button": "Ordner öffnen",
+    "saved_to": "Gespeichert unter {{path}}",
+    "bind_button": "binden",
+    "bind_button_title": "{{label}} an einen Kontakt binden"
+  },
+  "input_bar": {
+    "attach_title": "Datei an {{label}} anhängen (max. 5 MiB)",
+    "attach_title_no_contact": "Wählen Sie einen Kontakt, um eine Datei anzuhängen",
+    "attach_aria": "Datei anhängen",
+    "placeholder_uploading": "Wird hochgeladen…",
+    "placeholder_target": "→ {{label}}",
+    "placeholder_no_contact": "→ (kein Kontakt ausgewählt)",
+    "send_button": "Senden",
+    "sealing_button": "Wird versiegelt…",
+    "file_picker_title": "Datei an {{label}} senden",
+    "typing_pill": "{{label}} schreibt…"
+  },
+  "status_footer": {
+    "connected": "verbunden",
+    "disconnected": "getrennt",
+    "connecting": "Verbinde…",
+    "subscription_title": "Relay-Abonnement ist {{status}}",
+    "kbd_send": "Senden",
+    "kbd_add_contact": "Kontakt hinzufügen",
+    "scanned_decrypted": "gescannt {{scanned}} · entschlüsselt {{decrypted}}",
+    "settings_title": "Einstellungen",
+    "settings_aria": "Einstellungen öffnen"
+  },
+  "add_contact_modal": {
+    "title": "Kontakt hinzufügen",
+    "label": "Bezeichnung",
+    "label_placeholder": "alice",
+    "address_label": "Adresse (phantom:view:spend)",
+    "address_placeholder": "phantom:abcd…:1234…",
+    "cancel": "Abbrechen",
+    "save": "Speichern",
+    "saving": "Wird gespeichert…"
+  },
+  "bind_modal": {
+    "title": "Unbekannten Absender binden",
+    "description": "Wählen Sie den Kontakt, zu dem dieser Sealed-Sender-Schlüssel gehört. Künftige Nachrichten dieses Schlüssels werden auf den Namen dieses Kontakts aufgelöst.",
+    "pubkey_label": "Pubkey",
+    "empty": "(keine Kontakte — fügen Sie zuerst einen hinzu und öffnen Sie diesen Dialog erneut)",
+    "rebind_warning_title": "Warnung: Dieser Kontakt hat bereits einen gebundenen Schlüssel — Klicken überschreibt ihn.",
+    "will_rebind": "wird neu gebunden",
+    "cancel": "Abbrechen"
+  },
+  "address_qr": {
+    "aria": "Ihre PhantomChat-Adresse als QR-Code",
+    "loading": "QR-Code wird geladen…",
+    "copy": "Adresse kopieren",
+    "copied": "Kopiert!"
+  }
+}

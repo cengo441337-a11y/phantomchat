@@ -19,6 +19,12 @@ qrcodegen   = "1.5"
 dirs        = "5"
 x25519-dalek = "2.0"
 rand_core   = "0.6"
+ratatui     = "0.28"
+crossterm   = { version = "0.28", features = ["event-stream"] }
+tui-textarea = "0.6"
+unicode-width = "0.1"
+chrono      = { version = "0.4", default-features = false, features = ["clock"] }
+futures     = "0.3"
 # The CLI only needs envelope/keys/scanner/privacy — not the Flutter bridge
 # nor SQLCipher storage, so we build core without its default `ffi` feature.
 # The `net` feature pulls the libp2p / dandelion / cover-traffic stack;

@@ -1,0 +1,306 @@
+{
+  "app": {
+    "header": {
+      "brand_subtitle": "DC INFOSEC 2026",
+      "you_label": "you:"
+    },
+    "tabs": {
+      "contacts": "contacts",
+      "channels": "channels (mls)"
+    },
+    "drop_overlay": "Drop to send to {{label}}",
+    "drop_overlay_no_contact": "(no contact)",
+    "system": {
+      "select_contact_first": "select a contact first",
+      "send_failed": "send failed: {{error}}",
+      "file_send_failed": "file send failed: {{error}}",
+      "open_folder_failed": "open folder failed: {{error}}",
+      "added_contact": "added contact '{{label}}'",
+      "add_contact_failed": "add contact failed: {{error}}",
+      "bound_sealed_sender": "bound sealed-sender pubkey to '{{label}}'",
+      "bind_failed": "bind failed: {{error}}",
+      "identity_generated": "identity generated",
+      "listener_failed": "listener failed: {{error}}",
+      "load_contacts_failed": "failed to load contacts: {{error}}",
+      "relay_disconnected": "relay disconnected: {{detail}}",
+      "error_prefix": "error: {{message}}"
+    },
+    "update_banner": "An update is available. Open Settings → About to install."
+  },
+  "identity_gate": {
+    "title_a": "PHANTOM",
+    "title_b": "CHAT",
+    "subtitle": "first launch · no identity yet",
+    "description": "PhantomChat needs a cryptographic identity before it can send or receive. Click below to generate one — view, spend and signing keys are stored locally in your application data directory.",
+    "generate_button": "generate identity"
+  },
+  "onboarding": {
+    "step1": {
+      "subtitle": "first launch · setup wizard",
+      "description": "End-to-end encrypted messenger with stealth-tag scanning, double-ratchet sessions and PQXDH-hybrid envelopes. We will guide you through identity, relays and address sharing — about a minute of clicking."
+    },
+    "step2": {
+      "header": "step 2 · identity",
+      "generate_new": "generate new",
+      "restore_from_keyfile": "restore from keyfile",
+      "generate_description": "Generates fresh view, spend, signing and identity keys. Stored locally in your platform's application data directory.",
+      "generate_button": "generate identity",
+      "generating": "generating…",
+      "restore_description": "Paste the contents of an exported keys.json below. Required fields: view/spend/signing/identity (private + public).",
+      "import_button": "import keyfile",
+      "importing": "importing…",
+      "ready_message": "identity ready · click Next to continue"
+    },
+    "step3": {
+      "header": "step 3 · relays",
+      "description": "PhantomChat publishes envelopes to one or more Nostr relays. Pick the defaults you trust and / or add a custom one.",
+      "custom_label": "custom relay (optional)",
+      "save_button": "save relays",
+      "saving": "saving…",
+      "saved_message": "saved · click Next",
+      "pick_at_least_one": "please pick at least one relay"
+    },
+    "step4": {
+      "header": "step 4 · share your address",
+      "description": "Have your contact scan this QR or copy the raw address — both encode the same phantom:view:spend payload. Safe to publish: it contains no secrets."
+    },
+    "step5": {
+      "header": "all set",
+      "description": "You are ready to chat. The listener will start on your configured relays and you will be able to add contacts from the main panel.",
+      "start_button": "start using PhantomChat",
+      "starting": "starting…"
+    },
+    "nav": {
+      "back": "back",
+      "next": "next"
+    }
+  },
+  "settings": {
+    "title": "settings",
+    "close": "close settings",
+    "identity": {
+      "title": "identity",
+      "fingerprint": "fingerprint",
+      "signing_pub": "signing-pub",
+      "display_name_label": "your display name",
+      "display_name_placeholder": "(optional, e.g. alice)",
+      "display_name_saved": "saved",
+      "display_name_hint": "This name is shown to people you invite to MLS groups (in the welcome wrapper). For 1:1 chats it is only used in your own UI.",
+      "backup_button": "backup keyfile"
+    },
+    "language": {
+      "title": "language",
+      "auto": "Auto (browser)",
+      "en": "English",
+      "de": "Deutsch"
+    },
+    "privacy": {
+      "title": "privacy",
+      "daily_use": "Daily Use",
+      "daily_use_hint": "(P2P + light cover traffic)",
+      "max_stealth": "Maximum Stealth",
+      "max_stealth_hint": "(Tor / Nym SOCKS5 only)",
+      "proxy_addr_label": "SOCKS5 proxy address",
+      "network_label": "network",
+      "save": "save",
+      "saving": "saving…",
+      "discard": "discard",
+      "msg_reconnecting": "reconnecting via {{kind}}…",
+      "msg_reconnecting_plain": "reconnecting…",
+      "msg_saved": "saved · listener restarted",
+      "msg_saved_restart_failed": "saved, restart failed: {{error}}",
+      "msg_save_failed": "save failed: {{error}}",
+      "msg_discarded": "discarded"
+    },
+    "relays": {
+      "title": "relays",
+      "remove": "remove",
+      "add": "+ add relay",
+      "save": "save",
+      "saving": "saving…",
+      "discard": "discard",
+      "msg_saved": "saved · restart listener to apply",
+      "msg_save_failed": "save failed: {{error}}",
+      "msg_discarded": "discarded",
+      "msg_load_failed": "failed to load relays: {{error}}"
+    },
+    "about": {
+      "title": "about",
+      "version_label": "version",
+      "by_line": "PhantomChat by",
+      "check_updates_button": "check for updates",
+      "checking_updates": "checking…",
+      "up_to_date": "you are up to date",
+      "update_available": "Update available: v{{version}}",
+      "install_update_button": "install update",
+      "installing_update": "installing…",
+      "update_failed": "update failed: {{error}}"
+    },
+    "audit": {
+      "title": "audit log",
+      "filter_label": "filter",
+      "filter_all": "all categories",
+      "export_button": "export",
+      "exported_path": "Path: {{path}}",
+      "empty": "(no audit entries yet)",
+      "load_failed": "failed to load audit log: {{error}}",
+      "col_ts": "timestamp",
+      "col_category": "category",
+      "col_event": "event",
+      "col_details": "details"
+    },
+    "danger": {
+      "title": "danger zone",
+      "description": "Wipe all local data: identity, contacts, sessions, messages and MLS state. The app closes immediately afterwards.",
+      "wipe_button": "wipe all local data",
+      "type_delete": "type DELETE to confirm:",
+      "confirm_button": "confirm wipe",
+      "cancel_button": "cancel",
+      "must_type_delete": "type DELETE exactly to confirm",
+      "wipe_failed": "wipe failed: {{error}}"
+    }
+  },
+  "contacts_pane": {
+    "header": "# contacts",
+    "add_new": "+ new",
+    "add_new_title": "Add contact",
+    "unbound_pending_title": "unbound sender pending",
+    "unbound_pending_hint": "click to bind to a contact",
+    "empty": "(no contacts — click \"+ new\" to add one)",
+    "unbound_badge": "unbound",
+    "unbound_badge_title": "No sealed-sender pubkey bound — incoming sealed messages appear as ?<hex> until you bind"
+  },
+  "channels_pane": {
+    "header": "# channels (mls)",
+    "refresh_title": "Refresh status",
+    "status": {
+      "title": "status",
+      "initialized": "initialised",
+      "in_group": "in group",
+      "members_mls": "members (mls)",
+      "directory": "directory",
+      "identity": "identity",
+      "yes": "yes",
+      "no": "no",
+      "ram_only_hint": "MLS group state is RAM-only · directory persists"
+    },
+    "init": {
+      "title": "initialise",
+      "label_placeholder": "identity label (e.g. alice)",
+      "init_button": "init mls",
+      "init_failed": "init failed: {{error}}",
+      "initialized": "initialised as '{{label}}'"
+    },
+    "create": {
+      "title": "start a group",
+      "create_button": "create group",
+      "wait_hint": "or wait — incoming Welcomes auto-join.",
+      "created": "group created — you are the sole member",
+      "create_failed": "create_group failed: {{error}}"
+    },
+    "share_kp": {
+      "title": "share key package",
+      "show_button": "show my key package",
+      "regenerate_button": "regenerate key package",
+      "kp_label": "key package (b64)",
+      "publish_failed": "publish_key_package failed: {{error}}",
+      "kp_generated": "key package generated ({{chars}} b64 chars)"
+    },
+    "invite": {
+      "title": "invite peer",
+      "kp_placeholder": "peer key package (b64)…",
+      "label_placeholder": "peer label (e.g. bob)",
+      "address_placeholder": "peer phantom:view:spend",
+      "signing_placeholder": "peer signing pubkey (64-hex)",
+      "add_button": "add member",
+      "auto_ship_hint": "welcome + commit auto-shipped via sealed-sender.",
+      "invited": "invited '{{label}}' — welcome auto-shipped via sealed-sender",
+      "add_failed": "add_member failed: {{error}}"
+    },
+    "directory": {
+      "title": "directory"
+    },
+    "send": {
+      "title": "send",
+      "placeholder": "message to group…",
+      "send_button": "send to group",
+      "fanout_hint_one": "auto-fans-out to {{count}} member.",
+      "fanout_hint_other": "auto-fans-out to {{count}} members.",
+      "send_failed": "send-to-group failed: {{error}}"
+    },
+    "log": {
+      "title": "group messages",
+      "empty": "(no MLS activity yet)",
+      "joined": "joined group from {{label}} · {{count}} member(s)",
+      "epoch_advanced": "epoch advanced · {{count}} member(s)",
+      "status_error": "status error: {{error}}"
+    },
+    "copy": {
+      "copy": "copy",
+      "copied": "copied"
+    }
+  },
+  "message_stream": {
+    "title_default": "#stream",
+    "empty": "(waiting for first message — type below or wait for incoming)",
+    "tampered_title": "Signature failed — sender attribution was tampered with. Do not trust the label.",
+    "hash_mismatch_title": "Hash mismatch — DO NOT OPEN. The file's SHA-256 does not match the manifest.",
+    "warn_tampered": "warning: signature tampered",
+    "warn_hash": "warning: hash mismatch",
+    "sent_label": "sent",
+    "received_label": "received",
+    "open_folder_title": "Open Downloads/PhantomChat in your file manager",
+    "open_folder_button": "Open folder",
+    "saved_to": "Saved to {{path}}",
+    "bind_button": "bind",
+    "bind_button_title": "Bind {{label}} to a contact"
+  },
+  "input_bar": {
+    "attach_title": "Attach a file to send to {{label}} (max 5 MiB)",
+    "attach_title_no_contact": "Select a contact to attach a file",
+    "attach_aria": "Attach file",
+    "placeholder_uploading": "uploading…",
+    "placeholder_target": "→ {{label}}",
+    "placeholder_no_contact": "→ (no contact selected)",
+    "send_button": "send",
+    "sealing_button": "sealing…",
+    "file_picker_title": "Send file to {{label}}",
+    "typing_pill": "{{label}} is typing…"
+  },
+  "status_footer": {
+    "connected": "connected",
+    "disconnected": "disconnected",
+    "connecting": "connecting…",
+    "subscription_title": "Relay subscription is {{status}}",
+    "kbd_send": "send",
+    "kbd_add_contact": "add contact",
+    "scanned_decrypted": "scanned {{scanned}} · decrypted {{decrypted}}",
+    "settings_title": "settings",
+    "settings_aria": "open settings"
+  },
+  "add_contact_modal": {
+    "title": "add contact",
+    "label": "label",
+    "label_placeholder": "alice",
+    "address_label": "address (phantom:view:spend)",
+    "address_placeholder": "phantom:abcd…:1234…",
+    "cancel": "cancel",
+    "save": "save",
+    "saving": "saving…"
+  },
+  "bind_modal": {
+    "title": "bind unknown sender",
+    "description": "Pick the contact this sealed-sender pubkey belongs to. Future messages from this key will resolve to that contact's name.",
+    "pubkey_label": "pubkey",
+    "empty": "(no contacts — add one first, then re-open this modal)",
+    "rebind_warning_title": "Warning: this contact already has a bound key — clicking will overwrite it.",
+    "will_rebind": "will rebind",
+    "cancel": "cancel"
+  },
+  "address_qr": {
+    "aria": "Your PhantomChat address as a QR code",
+    "loading": "loading qr…",
+    "copy": "copy address",
+    "copied": "copied!"
+  }
+}
