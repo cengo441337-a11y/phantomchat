@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -5,8 +7,11 @@ import 'package:uuid/uuid.dart';
 import '../models/contact.dart';
 import '../models/identity.dart';
 import '../models/message.dart';
+import '../services/contact_directory.dart';
 import '../services/crypto_service.dart';
+import '../services/relay_service.dart';
 import '../services/storage_service.dart';
+import '../src/rust/api.dart' as rust;
 import '../theme.dart';
 import '../widgets/cyber_card.dart';
 
@@ -26,18 +31,76 @@ class _ChatScreenState extends State<ChatScreen> {
   List<PhantomMessage> _messages = [];
   bool _sending = false;
   static const _uuid = Uuid();
+  StreamSubscription<RelayEvent>? _relaySub;
+
+  /// Tracks the most-recent incoming sender label/sigOk for the bind-to-
+  /// contact UI. Set by the listener whenever a `?<8hex>` message lands.
+  String? _lastUnboundSenderLabel;
 
   @override
   void initState() {
     super.initState();
     _loadMessages();
+    // Subscribe to the relay event stream so `RelayService.feedEnvelope`
+    // calls (driven by whatever transport is wired in wave 7B-followup)
+    // surface as incoming bubbles here. Filtered down to messages whose
+    // sealed-sender attribution maps to this contact's signing pub.
+    _relaySub = RelayService.instance.events.listen((ev) {
+      if (!mounted) return;
+      switch (ev.kind) {
+        case 'message':
+          _handleIncoming(ev.payload);
+          break;
+        case 'system':
+          _appendIncomingFree(ev.payload['plaintext'] as String);
+          break;
+      }
+    });
   }
 
   @override
   void dispose() {
+    _relaySub?.cancel();
     _msgCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
+  }
+
+  void _handleIncoming(Map<String, dynamic> p) {
+    final senderHex = (p['senderPubHex'] as String?)?.toLowerCase();
+    // Only surface here if the sealed-sender pub matches this contact's
+    // bound signing pub (or it's an unbound sender showing as `?<8hex>`
+    // and the user opens this thread to bind it).
+    final isUnbound = p['isUnbound'] as bool? ?? false;
+    final contactPubHex =
+        widget.contact.publicSpendKey.toLowerCase(); // best-effort match
+    final fromUs = senderHex != null &&
+        (senderHex == contactPubHex ||
+            (p['senderLabel'] as String?) ==
+                widget.contact.nickname.toUpperCase());
+    if (!fromUs && !isUnbound) return;
+
+    if (isUnbound) {
+      _lastUnboundSenderLabel = p['senderLabel'] as String?;
+    }
+    _appendIncomingFree(p['plaintext'] as String);
+  }
+
+  void _appendIncomingFree(String text) {
+    final msg = PhantomMessage(
+      id: _uuid.v4(),
+      contactId: widget.contact.id,
+      outgoing: false,
+      plaintext: text,
+      ciphertext: '',
+      ephemeralKey: '',
+      nonce: '',
+      timestamp: DateTime.now(),
+      status: MessageStatus.delivered,
+    );
+    StorageService.addMessage(msg);
+    setState(() => _messages.add(msg));
+    _scrollToBottom();
   }
 
   Future<void> _loadMessages() async {
@@ -64,26 +127,89 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _sending = true);
     _msgCtrl.clear();
 
+    String ciphertextHex = '';
+    String ephemeralHex = '';
+    String nonceHex = '';
     try {
-      final encrypted = await CryptoService.encrypt(text, widget.contact.publicSpendKey);
-      final msg = PhantomMessage(
-        id: _uuid.v4(),
-        contactId: widget.contact.id,
-        outgoing: true,
-        plaintext: text,
-        ciphertext: encrypted['ciphertext']!,
-        ephemeralKey: encrypted['ephemeralKey']!,
-        nonce: encrypted['nonce']!,
-        timestamp: DateTime.now(),
-        status: MessageStatus.sent,
+      // v3 path — sealed-sender 1:1 via the wrapper Rust crate. Returns the
+      // raw envelope wire bytes; the relay-transport hookup that ships
+      // these to the recipient is wave 7B-followup. For now we still emit
+      // a legacy CryptoService payload so the on-disk row keeps the
+      // ciphertext/ephemeral/nonce columns populated (StorageService /
+      // PhantomMessage round-trip).
+      final wire = await rust.sendSealedV3(
+        recipientAddress:
+            'phantom:${widget.contact.publicViewKey}:${widget.contact.publicSpendKey}',
+        plaintext: utf8.encode(text),
       );
-      await StorageService.addMessage(msg);
-      widget.contact.lastMessage = text;
-      widget.contact.lastMessageAt = DateTime.now();
-      setState(() { _messages.add(msg); _sending = false; });
-      _scrollToBottom();
-    } catch (e) {
-      setState(() => _sending = false);
+      // Telemetry: we keep the wire bytes only as a debug-friendly hex
+      // fingerprint on the row so a developer trace can confirm the
+      // ciphertext was produced.
+      ciphertextHex =
+          wire.take(32).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    } catch (_) {
+      // Fall back to the legacy demo crypto so first-launch (no v3
+      // identity loaded yet) doesn't hard-fail. The demo is intentionally
+      // NOT wire-compatible with Desktop — it's there to keep the UI
+      // smoke-testable.
+      try {
+        final encrypted =
+            await CryptoService.encrypt(text, widget.contact.publicSpendKey);
+        ciphertextHex = encrypted['ciphertext']!;
+        ephemeralHex = encrypted['ephemeralKey']!;
+        nonceHex = encrypted['nonce']!;
+      } catch (_) {
+        setState(() => _sending = false);
+        return;
+      }
+    }
+
+    final msg = PhantomMessage(
+      id: _uuid.v4(),
+      contactId: widget.contact.id,
+      outgoing: true,
+      plaintext: text,
+      ciphertext: ciphertextHex,
+      ephemeralKey: ephemeralHex,
+      nonce: nonceHex,
+      timestamp: DateTime.now(),
+      status: MessageStatus.sent,
+    );
+    await StorageService.addMessage(msg);
+    widget.contact.lastMessage = text;
+    widget.contact.lastMessageAt = DateTime.now();
+    setState(() {
+      _messages.add(msg);
+      _sending = false;
+    });
+    _scrollToBottom();
+  }
+
+  /// Surface a "Bind to contact" sheet when the most-recent inbound
+  /// message arrived from a sealed-sender pubkey we don't have on file
+  /// yet. Mirrors the Desktop's `bind_last_unbound_sender` action.
+  Future<void> _showBindUnbound() async {
+    if (ContactDirectory.lastUnboundSenderPubHex == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('> NO UNBOUND SENDER PENDING')),
+      );
+      return;
+    }
+    final result = await ContactDirectory.bindLastUnboundSender(
+        widget.contact.nickname);
+    if (!mounted) return;
+    if (result.ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('> BOUND ${widget.contact.nickname}'.toUpperCase())),
+      );
+      setState(() {
+        _lastUnboundSenderLabel = null;
+      });
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('! ${result.error}')),
+      );
     }
   }
 
@@ -167,6 +293,25 @@ class _ChatScreenState extends State<ChatScreen> {
               ],
             ),
           ),
+          if (_lastUnboundSenderLabel != null) ...[
+            GestureDetector(
+              onTap: _showBindUnbound,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  border: Border.all(color: kMagenta.withOpacity(0.6)),
+                  color: kMagenta.withOpacity(0.08),
+                ),
+                child: Text(
+                  'BIND $_lastUnboundSenderLabel',
+                  style: GoogleFonts.orbitron(
+                      fontSize: 9, color: kMagenta, letterSpacing: 1),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
           GestureDetector(
             onTap: _showContactInfo,
             child: Container(

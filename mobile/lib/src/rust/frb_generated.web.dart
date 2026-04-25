@@ -10,7 +10,6 @@ import 'api.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'frb_generated.dart';
-import 'network.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 
 abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
@@ -22,18 +21,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   });
 
   @protected
-  AnyhowException dco_decode_AnyhowException(dynamic raw);
-
-  @protected
-  RustStreamSink<NetworkEvent> dco_decode_StreamSink_network_event_Sse(
-    dynamic raw,
-  );
-
-  @protected
   String dco_decode_String(dynamic raw);
 
   @protected
   bool dco_decode_bool(dynamic raw);
+
+  @protected
+  ReceivedFullV3 dco_decode_box_autoadd_received_full_v_3(dynamic raw);
+
+  @protected
+  List<MlsMemberInfoV3> dco_decode_list_mls_member_info_v_3(dynamic raw);
+
+  @protected
+  List<MlsMemberRefV3> dco_decode_list_mls_member_ref_v_3(dynamic raw);
 
   @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
@@ -42,13 +42,29 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
-  NetworkEvent dco_decode_network_event(dynamic raw);
+  MlsMemberInfoV3 dco_decode_mls_member_info_v_3(dynamic raw);
+
+  @protected
+  MlsMemberRefV3 dco_decode_mls_member_ref_v_3(dynamic raw);
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
+  ReceivedFullV3? dco_decode_opt_box_autoadd_received_full_v_3(dynamic raw);
+
+  @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  ReceivedFullV3 dco_decode_received_full_v_3(dynamic raw);
+
+  @protected
+  (Uint8List, Uint8List)
+  dco_decode_record_list_prim_u_8_strict_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  int dco_decode_u_32(dynamic raw);
 
   @protected
   int dco_decode_u_8(dynamic raw);
@@ -57,18 +73,25 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void dco_decode_unit(dynamic raw);
 
   @protected
-  AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
-
-  @protected
-  RustStreamSink<NetworkEvent> sse_decode_StreamSink_network_event_Sse(
-    SseDeserializer deserializer,
-  );
-
-  @protected
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
   bool sse_decode_bool(SseDeserializer deserializer);
+
+  @protected
+  ReceivedFullV3 sse_decode_box_autoadd_received_full_v_3(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<MlsMemberInfoV3> sse_decode_list_mls_member_info_v_3(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<MlsMemberRefV3> sse_decode_list_mls_member_ref_v_3(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
@@ -77,13 +100,33 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
-  NetworkEvent sse_decode_network_event(SseDeserializer deserializer);
+  MlsMemberInfoV3 sse_decode_mls_member_info_v_3(SseDeserializer deserializer);
+
+  @protected
+  MlsMemberRefV3 sse_decode_mls_member_ref_v_3(SseDeserializer deserializer);
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
+  ReceivedFullV3? sse_decode_opt_box_autoadd_received_full_v_3(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  ReceivedFullV3 sse_decode_received_full_v_3(SseDeserializer deserializer);
+
+  @protected
+  (Uint8List, Uint8List)
+  sse_decode_record_list_prim_u_8_strict_list_prim_u_8_strict(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  int sse_decode_u_32(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_8(SseDeserializer deserializer);
@@ -95,22 +138,28 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
-  void sse_encode_AnyhowException(
-    AnyhowException self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_StreamSink_network_event_Sse(
-    RustStreamSink<NetworkEvent> self,
-    SseSerializer serializer,
-  );
-
-  @protected
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_received_full_v_3(
+    ReceivedFullV3 self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_mls_member_info_v_3(
+    List<MlsMemberInfoV3> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_mls_member_ref_v_3(
+    List<MlsMemberRefV3> self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
@@ -122,16 +171,46 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_network_event(NetworkEvent self, SseSerializer serializer);
+  void sse_encode_mls_member_info_v_3(
+    MlsMemberInfoV3 self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_mls_member_ref_v_3(
+    MlsMemberRefV3 self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_received_full_v_3(
+    ReceivedFullV3? self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_opt_list_prim_u_8_strict(
     Uint8List? self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_received_full_v_3(
+    ReceivedFullV3 self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_record_list_prim_u_8_strict_list_prim_u_8_strict(
+    (Uint8List, Uint8List) self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_u_32(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_8(int self, SseSerializer serializer);

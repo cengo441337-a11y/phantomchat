@@ -4,14 +4,18 @@
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
 import 'frb_generated.dart';
-import 'network.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `privacy_config`, `sessions`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `IdentityKeys`, `PhysicalSecureMessage`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
-// These functions are ignored (category: IgnoreBecauseExplicitAttribute): `take_stealth_cover_rx`
+// These functions are ignored because they are not marked as `pub`: `mls_slot`, `mls_with_group`, `sessions`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MlsBundle`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`
 
+String generatePhantomId() => RustLib.instance.api.crateApiGeneratePhantomId();
+
+/// Stub — mobile builds do not link rusqlite/SQLCipher (no OpenSSL on
+/// plain Android NDK). Identity material lives in `flutter_secure_storage`
+/// on the Dart side. Returns a clear error so a caller that still wires
+/// it gets a debuggable message instead of a silent no-op.
 Future<String> initSecureStorage({
   required String dbPath,
   required String password,
@@ -20,35 +24,13 @@ Future<String> initSecureStorage({
   password: password,
 );
 
-Future<String> generatePhantomId() =>
-    RustLib.instance.api.crateApiGeneratePhantomId();
+/// Stub — see [`init_secure_storage`].
+Future<void> performPanicWipe({required String dbPath}) =>
+    RustLib.instance.api.crateApiPerformPanicWipe(dbPath: dbPath);
 
-/// Switch the privacy mode at runtime.
-///
-/// `mode_str`  — `"daily"` | `"stealth"`
-/// `proxy_addr` — optional SOCKS5, e.g. `"127.0.0.1:9050"` (Tor) or `"127.0.0.1:1080"` (Nym)
-/// `use_nym`   — `true` → Nym, `false` → Tor
-String setPrivacyMode({
-  required String modeStr,
-  String? proxyAddr,
-  required bool useNym,
-}) => RustLib.instance.api.crateApiSetPrivacyMode(
-  modeStr: modeStr,
-  proxyAddr: proxyAddr,
-  useNym: useNym,
-);
-
-/// Returns the currently active privacy mode as a string (`"DailyUse"` or `"MaximumStealth"`).
-String getPrivacyMode() => RustLib.instance.api.crateApiGetPrivacyMode();
-
-Stream<NetworkEvent> startNetworkNode({String? avatarCid}) =>
-    RustLib.instance.api.crateApiStartNetworkNode(avatarCid: avatarCid);
-
-/// Import the caller's long-term identity into the Rust side so the
-/// envelope pipeline can sign/scan on their behalf.
-///
-/// `view_secret_hex` and `spend_secret_hex` are 64-char hex encodings of
-/// the 32-byte X25519 secrets written by `PhantomIdentity` on the Dart side.
+/// Bind the local view + spend keys for the receive pipeline. Hex-only
+/// signature kept so the existing Dart `loadLocalIdentity({viewSecretHex,
+/// spendSecretHex})` call site keeps working unchanged.
 Future<String> loadLocalIdentity({
   required String viewSecretHex,
   required String spendSecretHex,
@@ -57,18 +39,11 @@ Future<String> loadLocalIdentity({
   spendSecretHex: spendSecretHex,
 );
 
-/// Send a real encrypted message.
-///
-/// Replaces the legacy AES-GCM demo pipeline. Takes a PhantomChat address
-/// (`phantom:view:spend` or `view:spend`), wraps the plaintext in a
-/// [`SessionStore::send`] → [`Envelope`] pair, and hands the serialised
-/// bytes off to the network layer for publishing.
-///
-/// The 3-parameter signature is kept for backwards-compat with the
-/// auto-generated Flutter bridge (`flutter_rust_bridge`) — the middle
-/// `_local_phantom_id` argument is no longer used internally but removing
-/// it would require regenerating `frb_generated.rs` from a machine that
-/// has the Flutter toolchain installed.
+/// 1:1 send (v2-compatible). Returns the wire bytes of the freshly-sealed
+/// envelope so the Flutter side can hand them to its transport (relays
+/// websocket / future libp2p direct). The middle `_local_phantom_id`
+/// argument is preserved for backwards-compat with the existing Dart call
+/// sites and is unused internally.
 Future<String> sendSecureMessage({
   required String recipientAddress,
   required String localPhantomId,
@@ -79,15 +54,15 @@ Future<String> sendSecureMessage({
   plaintext: plaintext,
 );
 
-/// Try to decrypt an incoming envelope using the loaded local identity.
-///
-/// Called by the network listener for every envelope the node observes.
-/// Returns:
-/// - `Some(plaintext)` when the envelope is ours and decrypts cleanly
-/// - `None` when it belongs to someone else (cover traffic, other peer)
+/// Try to decrypt an inbound envelope using the loaded local identity.
+/// Returns the plaintext bytes on a hit, `None` on someone-else's
+/// envelope (the silent-drop path).
 Future<Uint8List?> scanIncomingEnvelope({required List<int> wireBytes}) =>
     RustLib.instance.api.crateApiScanIncomingEnvelope(wireBytes: wireBytes);
 
+/// No-op stubs — group transport is the relays crate's job, and the mobile
+/// build doesn't pull libp2p. Kept as cheap async returns so the existing
+/// `joinGroup` / `sendGroupMessage` Dart call sites stay shape-compatible.
 Future<void> joinGroup({required String groupId}) =>
     RustLib.instance.api.crateApiJoinGroup(groupId: groupId);
 
@@ -102,5 +77,219 @@ Future<void> sendGroupMessage({
 Future<void> updateAvatarCid({required String cid}) =>
     RustLib.instance.api.crateApiUpdateAvatarCid(cid: cid);
 
-Future<void> performPanicWipe({required String dbPath}) =>
-    RustLib.instance.api.crateApiPerformPanicWipe(dbPath: dbPath);
+String setPrivacyMode({
+  required String modeStr,
+  String? proxyAddr,
+  required bool useNym,
+}) => RustLib.instance.api.crateApiSetPrivacyMode(
+  modeStr: modeStr,
+  proxyAddr: proxyAddr,
+  useNym: useNym,
+);
+
+String getPrivacyMode() => RustLib.instance.api.crateApiGetPrivacyMode();
+
+/// Sealed-sender flavour of [`load_local_identity`]. Call this once at
+/// startup with the hex encodings of the view, spend, AND signing
+/// secrets so [`send_sealed_v3`] has the signing seed available.
+Future<String> loadLocalIdentityV3({
+  required String viewSecretHex,
+  required String spendSecretHex,
+  required String signingSecretHex,
+}) => RustLib.instance.api.crateApiLoadLocalIdentityV3(
+  viewSecretHex: viewSecretHex,
+  spendSecretHex: spendSecretHex,
+  signingSecretHex: signingSecretHex,
+);
+
+/// Sealed-sender variant of [`send_secure_message`]. Returns the wire bytes
+/// directly (no base64 wrap) since the v3 caller knows it's the sealed
+/// path and ships the bytes itself.
+Future<Uint8List> sendSealedV3({
+  required String recipientAddress,
+  required List<int> plaintext,
+}) => RustLib.instance.api.crateApiSendSealedV3(
+  recipientAddress: recipientAddress,
+  plaintext: plaintext,
+);
+
+/// v3 receive that surfaces sealed-sender attribution. `Ok(None)` for
+/// envelopes that don't pass our view-tag check (silent-drop path on a
+/// public relay). Errors on a malformed wire blob or AEAD failure on
+/// a tag-passing envelope.
+Future<ReceivedFullV3?> receiveFullV3({required List<int> wireBytes}) =>
+    RustLib.instance.api.crateApiReceiveFullV3(wireBytes: wireBytes);
+
+/// Initialise the MLS bundle backed by `storage_dir/mls_state.bin`. Re-runs
+/// are cheap — if a bundle already exists in the slot, we leave it alone
+/// and return its current state.
+Future<String> mlsInit({
+  required String identityLabel,
+  required String storageDir,
+}) => RustLib.instance.api.crateApiMlsInit(
+  identityLabel: identityLabel,
+  storageDir: storageDir,
+);
+
+Future<Uint8List> mlsPublishKeyPackage() =>
+    RustLib.instance.api.crateApiMlsPublishKeyPackage();
+
+Future<int> mlsCreateGroup() => RustLib.instance.api.crateApiMlsCreateGroup();
+
+/// Add a peer's KeyPackage. Returns `(commit_bytes, welcome_bytes)` —
+/// caller wraps the welcome in a `MLS-WLC2` envelope and ships it via
+/// the existing sealed-sender pipe.
+Future<(Uint8List, Uint8List)> mlsAddMember({
+  required List<int> keyPackageBytes,
+  required String newMemberLabel,
+  required String newMemberAddress,
+  required String newMemberSigningPubHex,
+}) => RustLib.instance.api.crateApiMlsAddMember(
+  keyPackageBytes: keyPackageBytes,
+  newMemberLabel: newMemberLabel,
+  newMemberAddress: newMemberAddress,
+  newMemberSigningPubHex: newMemberSigningPubHex,
+);
+
+/// Process an incoming Welcome. Caller MUST have already stripped the
+/// `MLS-WLC2` prefix + ULEB128(meta_len) + meta_json header; what arrives
+/// here is the raw openmls Welcome bytes.
+Future<int> mlsJoinViaWelcome({required List<int> welcomeBytes}) =>
+    RustLib.instance.api.crateApiMlsJoinViaWelcome(welcomeBytes: welcomeBytes);
+
+/// Push an inviter into the directory before processing their Welcome.
+/// Mirrors `handle_incoming_mls_welcome_v2` so the very first incoming app
+/// message resolves to the human label instead of `?<8hex>`.
+Future<void> mlsDirectoryInsert({
+  required String label,
+  required String address,
+  required String signingPubHex,
+}) => RustLib.instance.api.crateApiMlsDirectoryInsert(
+  label: label,
+  address: address,
+  signingPubHex: signingPubHex,
+);
+
+Future<Uint8List> mlsEncrypt({required List<int> plaintext}) =>
+    RustLib.instance.api.crateApiMlsEncrypt(plaintext: plaintext);
+
+/// Decrypt a `MLS-APP1` payload (already stripped of the 8-byte prefix).
+/// `Ok(None)` for control messages that advanced the epoch but carried
+/// no application data.
+Future<Uint8List?> mlsDecrypt({required List<int> wireBytes}) =>
+    RustLib.instance.api.crateApiMlsDecrypt(wireBytes: wireBytes);
+
+int mlsMemberCount() => RustLib.instance.api.crateApiMlsMemberCount();
+
+bool mlsInGroup() => RustLib.instance.api.crateApiMlsInGroup();
+
+String? mlsSelfLabel() => RustLib.instance.api.crateApiMlsSelfLabel();
+
+/// Hex-encoded signing public key of the local MLS member. Used by the
+/// inviter side to populate `inviter_signing_pub_hex` in the V2 Welcome
+/// metadata header.
+Future<String> mlsSelfSigningPubHex() =>
+    RustLib.instance.api.crateApiMlsSelfSigningPubHex();
+
+/// Walk the MLS group tree and emit one `MlsMemberInfoV3` per leaf.
+/// Cross-references `member_addresses` to surface the human contact label
+/// associated with each leaf's signing pubkey (for the "alice (you)" /
+/// "bob → contact" UI rendering).
+Future<List<MlsMemberInfoV3>> mlsListMembers() =>
+    RustLib.instance.api.crateApiMlsListMembers();
+
+/// Snapshot of the MLS auto-transport directory.
+Future<List<MlsMemberRefV3>> mlsDirectory() =>
+    RustLib.instance.api.crateApiMlsDirectory();
+
+class MlsMemberInfoV3 {
+  final String credentialLabel;
+  final String signaturePubHex;
+  final bool isSelf;
+  final String? mappedContactLabel;
+
+  const MlsMemberInfoV3({
+    required this.credentialLabel,
+    required this.signaturePubHex,
+    required this.isSelf,
+    this.mappedContactLabel,
+  });
+
+  @override
+  int get hashCode =>
+      credentialLabel.hashCode ^
+      signaturePubHex.hashCode ^
+      isSelf.hashCode ^
+      mappedContactLabel.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MlsMemberInfoV3 &&
+          runtimeType == other.runtimeType &&
+          credentialLabel == other.credentialLabel &&
+          signaturePubHex == other.signaturePubHex &&
+          isSelf == other.isSelf &&
+          mappedContactLabel == other.mappedContactLabel;
+}
+
+class MlsMemberRefV3 {
+  final String label;
+  final String address;
+  final String signingPubHex;
+
+  const MlsMemberRefV3({
+    required this.label,
+    required this.address,
+    required this.signingPubHex,
+  });
+
+  @override
+  int get hashCode =>
+      label.hashCode ^ address.hashCode ^ signingPubHex.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MlsMemberRefV3 &&
+          runtimeType == other.runtimeType &&
+          label == other.label &&
+          address == other.address &&
+          signingPubHex == other.signingPubHex;
+}
+
+/// Outcome of [`receive_full_v3`] — plaintext + sealed-sender attribution
+/// flattened into a wire-friendly struct the FRB layer can mirror in Dart.
+class ReceivedFullV3 {
+  /// Decrypted plaintext bytes.
+  final Uint8List plaintext;
+
+  /// Hex-encoded sender Ed25519 verifying key, when the envelope carried
+  /// a Sealed-Sender attribution. `None` for unauthenticated envelopes.
+  final String? senderPubHex;
+
+  /// `true` when the attached signature verified against the wire bytes.
+  /// Vacuously `true` for the no-attribution case so the Dart side can
+  /// branch on `(sender_pub_hex.is_some() && !sig_ok)` to flag tampered
+  /// envelopes (== Desktop's `INBOX!` rendering).
+  final bool sigOk;
+
+  const ReceivedFullV3({
+    required this.plaintext,
+    this.senderPubHex,
+    required this.sigOk,
+  });
+
+  @override
+  int get hashCode =>
+      plaintext.hashCode ^ senderPubHex.hashCode ^ sigOk.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ReceivedFullV3 &&
+          runtimeType == other.runtimeType &&
+          plaintext == other.plaintext &&
+          senderPubHex == other.senderPubHex &&
+          sigOk == other.sigOk;
+}
