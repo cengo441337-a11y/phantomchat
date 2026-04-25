@@ -149,6 +149,28 @@
       "col_event": "event",
       "col_details": "details"
     },
+    "diagnostics": {
+      "title": "diagnostics",
+      "optin_label": "Send crash reports (anonymous)",
+      "optin_hint": "Default: off. When on, the \"Send\" button below uploads a single crash report at a time over HTTPS.",
+      "view_button": "show crash reports",
+      "view_modal_title": "Crash reports",
+      "view_modal_close": "close",
+      "empty": "(no crashes recorded — nothing to report)",
+      "col_ts": "timestamp",
+      "col_version": "version",
+      "col_msg": "panic",
+      "col_actions": "actions",
+      "send_button": "send",
+      "sending": "sending…",
+      "sent": "sent",
+      "send_failed": "send failed: {{error}}",
+      "delete_row_button": "delete",
+      "clear_all_button": "delete all",
+      "clear_failed": "delete failed: {{error}}",
+      "load_failed": "failed to load crash reports: {{error}}",
+      "privacy_note": "Reports are sent over HTTPS to updates.dc-infosec.de. We only read the crash data — no message content, no identity, no contacts."
+    },
     "danger": {
       "title": "danger zone",
       "description": "Wipe all local data: identity, contacts, sessions, messages and MLS state. The app closes immediately afterwards.",

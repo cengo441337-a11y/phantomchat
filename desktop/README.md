@@ -160,6 +160,34 @@ desktop/
         └── lib.rs          All Tauri commands, listener loop, persistence
 ```
 
+## Crash Reporting
+
+PhantomChat captures unhandled panics into a local append-only JSONL file
+(`crashes.jsonl`) next to your `keys.json` in the app-data dir. The capture
+itself is **always on** — it costs nothing at runtime, and a record of what
+crashed is useful even for offline debugging.
+
+Uploading those records is **strictly opt-in**:
+
+1. Open `Settings → Diagnostics`.
+2. Tick `Send crash reports (anonymous)`. This creates the
+   `crash_reporting_opted_in.flag` sentinel in app-data.
+3. Click `Show crash reports` to see the captured panics. Each row has
+   `Send` (POST one report over HTTPS to `updates.dc-infosec.de`) and
+   `Delete all` at the bottom.
+
+What's in a report: timestamp, app version, OS string, the first line of
+the panic message, the source `file:line:col`, and a captured backtrace.
+What is **never** in a report: contact list, message content, identity
+keys, relay URLs, or any other application state.
+
+The collector endpoint is configurable. Self-hosting orgs can rebuild the
+desktop binary with a different `CRASH_REPORT_ENDPOINT` constant in
+`src-tauri/src/lib.rs` to route reports to their own infrastructure
+instead of `updates.dc-infosec.de`. See
+[`docs/RELAY-SELFHOSTING.md`](../docs/RELAY-SELFHOSTING.md) for the
+broader self-hosting story.
+
 ## Troubleshooting
 
 - **WebView2 missing on old Win**: PhantomChat uses Tauri 2, which needs
