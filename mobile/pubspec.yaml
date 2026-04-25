@@ -22,6 +22,10 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_rust_bridge: 2.12.0
   freezed_annotation: ^2.4.4
+  # Battery-optimisation opt-out flow (Settings + first-launch wizard).
+  # On Xiaomi/Huawei/OnePlus/Samsung this keeps the relay/connection-keeper
+  # alive across Doze; without it the OEM kills the process within minutes.
+  disable_battery_optimization: ^1.1.1
 
 dev_dependencies:
   flutter_test:
