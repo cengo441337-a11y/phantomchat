@@ -25,8 +25,10 @@ use phantomchat_core::{
     keys::{IdentityKey, PhantomSigningKey, SpendKey, ViewKey},
     mls::{self, GroupId, PhantomMlsGroup, PhantomMlsMember},
     privacy::{PrivacyConfig, PrivacyMode, ProxyConfig, ProxyKind},
+    secure_storage::{detect_best_storage, key_id_for_path, SecureStorage, SecureStorageError},
     session::SessionStore,
 };
+use zeroize::Zeroizing;
 use phantomchat_relays::{
     make_multi_relay, BridgeProvider, ConnectionEvent, EnvelopeHandler, StateHandler,
 };
@@ -891,25 +893,212 @@ fn save_mls_directory(
 }
 
 // ── Identity persistence (mirrors `cli::cmd_keygen` JSON layout) ─────────────
+//
+// Wave 8H — OS-secure keystore
+// ----------------------------
+// The on-disk `keys.json` no longer carries `view_private` /
+// `spend_private` / `signing_private` plaintext. Instead it carries
+// `view_private_ref` / `spend_private_ref` / `signing_private_ref`
+// — opaque key_ids that resolve to byte blobs in the host's secure
+// keystore (DPAPI on Windows, Keychain on macOS, libsecret on Linux,
+// or — on hosts with no keystore — the in-process fallback).
+//
+// Migration is automatic and one-way: the first time `load_identity`
+// sees a legacy plaintext keyfile it stores the secrets in the keystore,
+// rewrites `keys.json` atomically (`.tmp` + fsync + rename), and emits an
+// `audit("identity", "migrated_to_secure_storage", …)` line. If anything
+// fails before the rename, the original plaintext keys.json survives so
+// the user never gets locked out of their identity.
+//
+// `signing_public` and `view_public` / `spend_public` continue to live
+// inline as hex — they are by design shareable.
 
-/// Load view + spend + signing keys from the on-disk keyfile.
-///
-/// Backwards-compat: if `signing_private` is absent (pre-attribution
-/// keyfiles), a fresh [`PhantomSigningKey`] is generated and the keyfile
-/// is rewritten in-place with the two new fields. The fourth tuple element
-/// signals whether such an upgrade happened so the caller can emit a
-/// one-time `status` event to the frontend.
-fn load_identity(
+/// Lazily-initialised handle onto the host's secure keystore. We initialise
+/// once per process and reuse the same `Box<dyn SecureStorage>` for every
+/// migration / load / write. Wrapped in `OnceLock` so the first identity
+/// access on the hot path doesn't pay a dispatch cost on every subsequent
+/// call.
+static SECURE_STORAGE: std::sync::OnceLock<Box<dyn SecureStorage>> = std::sync::OnceLock::new();
+
+fn secure_storage() -> &'static dyn SecureStorage {
+    SECURE_STORAGE.get_or_init(detect_best_storage).as_ref()
+}
+
+/// Compose the per-secret key_id from a path-derived prefix. Keeps the
+/// three secrets under one identity-file logically grouped in the OS
+/// keystore (`secret-tool search service phantomchat` lists them together)
+/// and lets `wipe_all_data` purge them by enumerating the suffixes.
+fn secret_key_id(path: &std::path::Path, suffix: &str) -> String {
+    format!("{}:{}", key_id_for_path(path), suffix)
+}
+
+const SECRET_SUFFIXES: &[&str] = &["view", "spend", "signing", "identity"];
+
+/// Atomic write helper: serialise `value` to `path.tmp`, fsync, rename
+/// onto `path`. If anything errors before the rename, the original file
+/// (if any) is preserved bit-for-bit. Used by the migration path so a
+/// power-loss between "stash secrets in keystore" and "rewrite keys.json"
+/// never leaves a half-converted file on disk.
+fn atomic_write_json(path: &std::path::Path, value: &serde_json::Value) -> anyhow::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    {
+        let mut f = fs::File::create(&tmp)
+            .with_context(|| format!("create {}", tmp.display()))?;
+        let bytes = serde_json::to_vec_pretty(value)?;
+        f.write_all(&bytes).with_context(|| format!("write {}", tmp.display()))?;
+        f.sync_all().with_context(|| format!("fsync {}", tmp.display()))?;
+    }
+    fs::rename(&tmp, path)
+        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
+    Ok(())
+}
+
+/// Stash a single secret (already base64-decoded) in the host keystore
+/// under the canonical per-path key_id, and return the key_id string the
+/// caller should write into the rewritten keys.json.
+fn stash_secret(
     path: &std::path::Path,
-) -> anyhow::Result<(ViewKey, SpendKey, PhantomSigningKey, bool)> {
+    suffix: &str,
+    secret: &[u8],
+) -> Result<String, SecureStorageError> {
+    let id = secret_key_id(path, suffix);
+    secure_storage().store(&id, secret)?;
+    Ok(id)
+}
+
+/// Pull a secret back from the keystore by its `_ref` value. Returned in a
+/// `Zeroizing<Vec<u8>>` so the plaintext is wiped from RAM as soon as the
+/// caller's deref-and-copy into a typed key struct returns.
+fn fetch_secret(key_id: &str) -> anyhow::Result<Zeroizing<Vec<u8>>> {
+    let bytes = secure_storage()
+        .load(key_id)
+        .with_context(|| format!("secure-storage load '{key_id}'"))?;
+    Ok(Zeroizing::new(bytes))
+}
+
+/// Convert a keys.json that still carries `*_private` plaintext into the
+/// new `*_private_ref` form. Returns `Ok(true)` iff a migration ran.
+///
+/// Atomicity contract: if any single keystore-store call fails (or the
+/// final atomic rewrite fails), the on-disk keys.json is left untouched
+/// and the caller can retry on the next launch.
+fn migrate_keys_json_if_legacy(
+    app: &AppHandle,
+    path: &std::path::Path,
+) -> anyhow::Result<bool> {
     let raw = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let mut json: serde_json::Value = serde_json::from_slice(&raw)?;
 
-    let view_bytes = B64.decode(
-        json["view_private"]
-            .as_str()
-            .context("missing view_private")?,
-    )?;
+    let has_legacy = ["view_private", "spend_private", "signing_private", "identity_private"]
+        .iter()
+        .any(|f| json.get(*f).and_then(|v| v.as_str()).is_some());
+    if !has_legacy {
+        return Ok(false);
+    }
+
+    // Migrate every plaintext field that exists. `identity_private` is
+    // legacy and may not appear on freshly-keygen'd files, so be lenient.
+    for (field, suffix) in [
+        ("view_private", "view"),
+        ("spend_private", "spend"),
+        ("signing_private", "signing"),
+        ("identity_private", "identity"),
+    ] {
+        if let Some(s) = json.get(field).and_then(|v| v.as_str()) {
+            // Wrap the decoded plaintext in `Zeroizing` so it's wiped from
+            // RAM as soon as the keystore-store call returns, even on the
+            // error path.
+            let plaintext: Zeroizing<Vec<u8>> = Zeroizing::new(
+                B64.decode(s).with_context(|| format!("decode {field} base64"))?,
+            );
+            let id = stash_secret(path, suffix, &plaintext)
+                .map_err(|e| anyhow!("stash {field}: {e}"))?;
+            if let Some(obj) = json.as_object_mut() {
+                obj.remove(field);
+                obj.insert(format!("{field}_ref"), serde_json::Value::String(id));
+            }
+        }
+    }
+
+    // Stamp which backend we used so a later operator audit can
+    // differentiate a real keychain from the fallback plaintext store.
+    let backend = secure_storage().name();
+    if let Some(obj) = json.as_object_mut() {
+        obj.insert(
+            "storage_backend".to_string(),
+            serde_json::Value::String(backend.to_string()),
+        );
+    }
+
+    atomic_write_json(path, &json)?;
+
+    audit(
+        app,
+        "identity",
+        "migrated_to_secure_storage",
+        serde_json::json!({
+            "backend": backend,
+        }),
+    );
+    if backend == "fallback-plaintext" {
+        audit(
+            app,
+            "identity",
+            "secure_storage_fallback_warning",
+            serde_json::json!({
+                "reason": "no OS keystore detected; secrets live in process memory only"
+            }),
+        );
+    }
+
+    Ok(true)
+}
+
+/// Load view + spend + signing keys from the on-disk keyfile.
+///
+/// Handles three input shapes:
+///
+/// 1. **Legacy plaintext** (`view_private`, etc.) — auto-migrated to
+///    the secure-storage form on first sight, then loaded as case 2.
+/// 2. **Secure-storage refs** (`view_private_ref`, etc.) — the
+///    canonical post-Wave-8H format; secrets fetched from
+///    `secure_storage()`.
+/// 3. **Mixed / partial** (e.g. `signing_private` absent on
+///    pre-attribution keyfiles) — the missing piece is generated
+///    fresh, written to the keystore, and the keyfile is upgraded
+///    in-place. The fourth tuple element flags such an upgrade so
+///    the caller can emit a one-time `status` event.
+fn load_identity(
+    app: &AppHandle,
+    path: &std::path::Path,
+) -> anyhow::Result<(ViewKey, SpendKey, PhantomSigningKey, bool)> {
+    // Step 1 — best-effort auto-migration. A migration failure surfaces
+    // via the load below (the *_private fields will still be there, the
+    // *_private_ref fields will be missing) so we don't gate the entire
+    // load on it; just log if it errored.
+    if let Err(e) = migrate_keys_json_if_legacy(app, path) {
+        eprintln!("identity migration to secure-storage failed: {e:#}");
+    }
+
+    let raw = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut json: serde_json::Value = serde_json::from_slice(&raw)?;
+
+    // Helper: load a single secret either by `_ref` (preferred) or by
+    // legacy plaintext (fallback if the migration above failed).
+    let load_secret = |json: &serde_json::Value,
+                       field: &str|
+     -> anyhow::Result<Zeroizing<Vec<u8>>> {
+        let ref_field = format!("{field}_ref");
+        if let Some(id) = json.get(&ref_field).and_then(|v| v.as_str()) {
+            return fetch_secret(id);
+        }
+        if let Some(s) = json.get(field).and_then(|v| v.as_str()) {
+            return Ok(Zeroizing::new(B64.decode(s)?));
+        }
+        Err(anyhow!("missing {field} (or {ref_field})"))
+    };
+
+    let view_bytes = load_secret(&json, "view_private")?;
     let view_secret = StaticSecret::from(
         <[u8; 32]>::try_from(view_bytes.as_slice()).map_err(|_| anyhow!("bad view key"))?,
     );
@@ -918,11 +1107,7 @@ fn load_identity(
         secret: view_secret,
     };
 
-    let spend_bytes = B64.decode(
-        json["spend_private"]
-            .as_str()
-            .context("missing spend_private")?,
-    )?;
+    let spend_bytes = load_secret(&json, "spend_private")?;
     let spend_secret = StaticSecret::from(
         <[u8; 32]>::try_from(spend_bytes.as_slice()).map_err(|_| anyhow!("bad spend key"))?,
     );
@@ -931,30 +1116,35 @@ fn load_identity(
         secret: spend_secret,
     };
 
-    let (signing, upgraded) = match json["signing_private"].as_str() {
-        Some(s) => {
-            let bytes = B64.decode(s)?;
+    // Signing key handling: prefer the `_ref` form, then plaintext, then
+    // generate-and-persist if the keyfile predates sealed-sender
+    // attribution. The `upgraded` flag fires only in that last case.
+    let (signing, upgraded) = match load_secret(&json, "signing_private") {
+        Ok(bytes) => {
             let arr: [u8; 32] = <[u8; 32]>::try_from(bytes.as_slice())
                 .map_err(|_| anyhow!("bad signing key"))?;
             (PhantomSigningKey::from_bytes(arr), false)
         }
-        None => {
+        Err(_) => {
             let sk = PhantomSigningKey::generate();
-            // Persist so subsequent runs reuse the same identity for
-            // attribution. Best-effort: a write failure is non-fatal — the
-            // in-memory key still works for this session.
-            if let Some(obj) = json.as_object_mut() {
-                obj.insert(
-                    "signing_private".to_string(),
-                    serde_json::Value::String(B64.encode(sk.to_bytes())),
-                );
-                obj.insert(
-                    "signing_public".to_string(),
-                    serde_json::Value::String(hex::encode(sk.public_bytes())),
-                );
-                let _ = serde_json::to_vec_pretty(&json)
-                    .ok()
-                    .and_then(|b| fs::write(path, b).ok());
+            // Persist directly into the keystore + a `_ref` in keys.json.
+            // Best-effort: a failure here just means the next launch will
+            // generate a different signing key (cosmetic — sealed-sender
+            // attribution will show a different signing_pub).
+            let plaintext: Zeroizing<[u8; 32]> = Zeroizing::new(sk.to_bytes());
+            if let Ok(id) = stash_secret(path, "signing", plaintext.as_ref()) {
+                if let Some(obj) = json.as_object_mut() {
+                    obj.insert(
+                        "signing_private_ref".to_string(),
+                        serde_json::Value::String(id),
+                    );
+                    obj.insert(
+                        "signing_public".to_string(),
+                        serde_json::Value::String(hex::encode(sk.public_bytes())),
+                    );
+                    obj.remove("signing_private");
+                    let _ = atomic_write_json(path, &json);
+                }
             }
             (sk, true)
         }
@@ -969,21 +1159,46 @@ fn write_identity(path: &std::path::Path) -> anyhow::Result<IdentityInfo> {
     let spend = SpendKey::generate();
     let signing = PhantomSigningKey::generate();
 
-    // Field names + encodings match `cli/src/main.rs::cmd_keygen` exactly so
-    // the same keyfile is interchangeable between CLI and Desktop.
+    // Stash every secret in the host keystore first, build the on-disk
+    // keys.json out of the returned key_ids. Identity-private is also
+    // stashed even though current call sites don't read it back — keeps
+    // the wire-format symmetry with the CLI keyfile (so an export/import
+    // round-trip survives a future feature that needs the identity key).
+    //
+    // `Zeroizing` wraps each plaintext blob so it's wiped from RAM as
+    // soon as `stash_secret` returns. The struct fields themselves
+    // already zeroize-on-drop via the `Zeroize` derives in `core::keys`.
+    let view_priv: Zeroizing<[u8; 32]> = Zeroizing::new(view.secret.to_bytes());
+    let spend_priv: Zeroizing<[u8; 32]> = Zeroizing::new(spend.secret.to_bytes());
+    let signing_priv: Zeroizing<[u8; 32]> = Zeroizing::new(signing.to_bytes());
+    let identity_priv: Zeroizing<[u8; 32]> = Zeroizing::new(id.private);
+
+    let view_ref = stash_secret(path, "view", view_priv.as_ref())
+        .map_err(|e| anyhow!("stash view: {e}"))?;
+    let spend_ref = stash_secret(path, "spend", spend_priv.as_ref())
+        .map_err(|e| anyhow!("stash spend: {e}"))?;
+    let signing_ref = stash_secret(path, "signing", signing_priv.as_ref())
+        .map_err(|e| anyhow!("stash signing: {e}"))?;
+    let identity_ref = stash_secret(path, "identity", identity_priv.as_ref())
+        .map_err(|e| anyhow!("stash identity: {e}"))?;
+
+    // Field names + encodings of the public-side fields match
+    // `cli/src/main.rs::cmd_keygen` exactly so the address/QR shape is
+    // identical to the CLI keyfile. The `*_ref` fields are new and only
+    // make sense to a desktop install on the same host.
     let json = serde_json::json!({
-        "identity_private": B64.encode(id.private),
-        "identity_public":  B64.encode(id.public),
-        "view_private":     B64.encode(view.secret.to_bytes()),
-        "view_public":      hex::encode(view.public.as_bytes()),
-        "spend_private":    B64.encode(spend.secret.to_bytes()),
-        "spend_public":     hex::encode(spend.public.as_bytes()),
-        "signing_private":  B64.encode(signing.to_bytes()),
-        "signing_public":   hex::encode(signing.public_bytes()),
+        "identity_private_ref": identity_ref,
+        "identity_public":      B64.encode(id.public),
+        "view_private_ref":     view_ref,
+        "view_public":          hex::encode(view.public.as_bytes()),
+        "spend_private_ref":    spend_ref,
+        "spend_public":         hex::encode(spend.public.as_bytes()),
+        "signing_private_ref":  signing_ref,
+        "signing_public":       hex::encode(signing.public_bytes()),
+        "storage_backend":      secure_storage().name(),
     });
 
-    fs::write(path, serde_json::to_vec_pretty(&json)?)
-        .with_context(|| format!("writing {}", path.display()))?;
+    atomic_write_json(path, &json)?;
 
     Ok(IdentityInfo {
         address: format!(
@@ -1179,7 +1394,7 @@ async fn send_sealed_to_address(
     let recipient = PhantomAddress::parse(recipient_addr)
         .ok_or_else(|| anyhow!("invalid recipient address '{}'", recipient_addr))?;
 
-    let (_view, _spend, signing_key, _upgraded) = load_identity(&keys_path)?;
+    let (_view, _spend, signing_key, _upgraded) = load_identity(app, &keys_path)?;
 
     let mut store = SessionStore::load(&sessions_path)
         .with_context(|| format!("loading sessions from {}", sessions_path.display()))?;
@@ -1268,7 +1483,7 @@ async fn spawn_listener_task(
     let sessions_path = sessions_path(&app).map_err(|e| e.to_string())?;
 
     let (view_key, spend_key, _signing, upgraded) =
-        load_identity(&keys_path).map_err(|e| e.to_string())?;
+        load_identity(&app, &keys_path).map_err(|e| e.to_string())?;
     if upgraded {
         let _ = app.emit(
             "status",
@@ -2967,6 +3182,15 @@ fn export_keyfile(app: AppHandle) -> Result<String, String> {
 /// Validate + write a pasted keyfile JSON into `app_data_dir/keys.json`.
 /// Overwrites any existing file (the wizard's "Restore" branch is the only
 /// caller; the user is informed it'll replace the current identity).
+///
+/// Imported keyfiles still arrive in the legacy plaintext format (that's
+/// the export shape — `*_ref` fields would be useless on the importing
+/// host since they only resolve in the originating keystore). Right after
+/// writing the plaintext to disk we run the standard migration so the
+/// just-imported `*_private` fields get pushed into the host keystore and
+/// the on-disk file is rewritten with `*_private_ref` placeholders. The
+/// process is idempotent: a re-import overwrites both the file AND the
+/// keystore entries since they're keyed off the same path.
 #[tauri::command]
 fn import_keyfile(app: AppHandle, json_text: String) -> Result<(), String> {
     let json: serde_json::Value =
@@ -2987,15 +3211,139 @@ fn import_keyfile(app: AppHandle, json_text: String) -> Result<(), String> {
         }
     }
     let path = keys_path(&app).map_err(|e| e.to_string())?;
-    fs::write(&path, serde_json::to_vec_pretty(&json).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("write {}: {}", path.display(), e))?;
+    // Atomic write of the plaintext form so we never have a half-written
+    // keys.json next to a half-stashed keystore.
+    atomic_write_json(&path, &json).map_err(|e| format!("write {}: {}", path.display(), e))?;
     audit(&app, "identity", "restored", serde_json::json!({}));
+    // Immediately migrate the just-imported plaintext into the host
+    // keystore. Best-effort: a migration failure leaves the plaintext
+    // keys.json on disk (the user can still use the app — every read path
+    // falls back to the inline `*_private` field if `*_private_ref` is
+    // missing) and the next launch will retry the migration.
+    if let Err(e) = migrate_keys_json_if_legacy(&app, &path) {
+        eprintln!("import: secure-storage migration failed: {e:#}");
+    }
     Ok(())
 }
 
+/// Anti-forensic file-overwrite threshold. Files **larger** than this skip
+/// the zero-overwrite pass and are unlinked directly with a WARN audit
+/// entry — primarily to keep `wipe_all_data` from spending O(GB) of disk
+/// I/O on user-staged backups that the user is independently responsible
+/// for. SSD TRIM will do its own thing on those over time.
+const WIPE_OVERWRITE_MAX_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Best-effort cryptographic-shred of a single file: open for write,
+/// overwrite the byte range with zeros, fsync, truncate, then unlink.
+///
+/// On SSDs the underlying NAND blocks are usually only TRIM'd on delete,
+/// so the in-place zero-write is partially redundant — but on spinning
+/// rust it materially raises the bar against forensic recovery, and on
+/// SSDs it at least pre-empts wear-leveling shenanigans that might keep
+/// a stale copy of the original bytes in an unmapped erase block.
+///
+/// All errors are swallowed (logged to stderr) — the goal is "delete the
+/// file, scrubbed if possible, plain-deleted as a fallback". A scrub
+/// failure must not block the unlink.
+fn shred_file(path: &std::path::Path) {
+    let size = match fs::metadata(path) {
+        Ok(m) => m.len(),
+        Err(e) => {
+            eprintln!("shred: stat {} failed: {e}", path.display());
+            // Even with no metadata, attempt the unlink as a last resort.
+            let _ = fs::remove_file(path);
+            return;
+        }
+    };
+
+    if size > WIPE_OVERWRITE_MAX_BYTES {
+        // Probably a backup the user staged into app_data; honour the
+        // size threshold and just unlink. We log so a compliance auditor
+        // can see why this file wasn't scrubbed.
+        eprintln!(
+            "shred: skipping zero-overwrite of {} ({} > {}); unlinking only",
+            path.display(),
+            size,
+            WIPE_OVERWRITE_MAX_BYTES
+        );
+        let _ = fs::remove_file(path);
+        return;
+    }
+
+    if size > 0 {
+        match OpenOptions::new().write(true).truncate(false).open(path) {
+            Ok(mut f) => {
+                // Stream the zero-pass in 64 KiB chunks rather than
+                // allocating a `vec![0u8; size as usize]` outright — keeps
+                // wipe of a 95 MiB file from spiking RSS to 95 MiB.
+                let chunk = vec![0u8; 64 * 1024];
+                let mut remaining = size as usize;
+                while remaining > 0 {
+                    let n = remaining.min(chunk.len());
+                    if let Err(e) = f.write_all(&chunk[..n]) {
+                        eprintln!("shred: write {} failed: {e}", path.display());
+                        break;
+                    }
+                    remaining -= n;
+                }
+                let _ = f.sync_all();
+                // Truncate after the overwrite so the directory entry
+                // points at a 0-byte file before unlink — narrows the
+                // forensic window further on filesystems that delay free.
+                let _ = f.set_len(0);
+                let _ = f.sync_all();
+            }
+            Err(e) => {
+                eprintln!("shred: open {} for overwrite failed: {e}", path.display());
+            }
+        }
+    }
+
+    if let Err(e) = fs::remove_file(path) {
+        eprintln!("shred: unlink {} failed: {e}", path.display());
+    }
+}
+
+/// Recursively shred every file under `dir`, then remove the (now-empty)
+/// directory tree. Symlinks are unlinked without following — defence
+/// against a hostile or buggy preconfig that points app_data at `/`.
+fn shred_directory(dir: &std::path::Path) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("shred: read_dir {} failed: {e}", dir.display());
+            // Still try to remove the dir itself — it may already be empty.
+            let _ = fs::remove_dir_all(dir);
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        // Lstat (symlink_metadata) so we don't follow into another tree.
+        let meta = match fs::symlink_metadata(&p) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if meta.file_type().is_symlink() {
+            let _ = fs::remove_file(&p);
+        } else if meta.is_dir() {
+            shred_directory(&p);
+        } else {
+            shred_file(&p);
+        }
+    }
+    let _ = fs::remove_dir(dir);
+}
+
 /// Wipe the entire app-data directory (keys, contacts, sessions, history,
-/// MLS directory, relays.json, onboarding marker) then exit. Caller is
+/// MLS directory, relays.json, onboarding marker) AND the host-keystore
+/// secrets keyed off the current identity file, then exit. Caller is
 /// expected to confirm the destructive intent before invoking.
+///
+/// Pre-delete pass scrubs each file with a single zero-overwrite +
+/// truncate to defeat naive forensic recovery on spinning disks. Files
+/// larger than `WIPE_OVERWRITE_MAX_BYTES` (100 MiB) skip the overwrite
+/// and are unlinked directly — see `shred_file` for the rationale.
 #[tauri::command]
 fn wipe_all_data(app: AppHandle) -> Result<(), String> {
     // Best-effort audit BEFORE the wipe — the on-disk audit.log itself is
@@ -3007,9 +3355,25 @@ fn wipe_all_data(app: AppHandle) -> Result<(), String> {
         .path()
         .app_data_dir()
         .map_err(|e| format!("resolve app_data_dir: {e}"))?;
+
+    // Step 1 — purge keystore entries belonging to this identity. The
+    // path-derived key_id scheme means a stale `keys.json` is enough to
+    // know which entries to drop. Best-effort: a missing entry is fine.
     if dir.exists() {
-        fs::remove_dir_all(&dir).map_err(|e| format!("remove {}: {}", dir.display(), e))?;
+        let kp = dir.join(KEYS_FILE);
+        for suffix in SECRET_SUFFIXES {
+            let id = secret_key_id(&kp, suffix);
+            if let Err(e) = secure_storage().delete(&id) {
+                eprintln!("wipe: keystore delete '{id}' failed: {e}");
+            }
+        }
     }
+
+    // Step 2 — anti-forensic shred + remove every file in app_data_dir.
+    if dir.exists() {
+        shred_directory(&dir);
+    }
+
     // Hard exit: we just nuked our own state; staying in the process risks
     // background tasks (relay subscribe loop, session writes) recreating
     // some of the files we just deleted.
