@@ -102,6 +102,45 @@ const TYPN_PREFIX_V1: &[u8; 7] = b"TYPN-1:";
 /// with enough headroom (≈3 cycles) to bridge a brief pause.
 const TYPING_TTL_SECS: u32 = 5;
 
+/// 7-byte ASCII tag prefixed to reply envelopes. Wire:
+///
+///   REPL-1: || ULEB128(meta_len) || meta_json || plaintext_body
+///
+/// `meta_json` is a [`ReplyMetaV1`] (`in_reply_to_msg_id`, `quoted_preview`).
+/// The body that follows the meta is the new message's plaintext — the
+/// receiver displays it like a regular text row but with an inline
+/// "↪ <quoted_preview>" header that scrolls to the quoted row when clicked.
+const REPL_PREFIX_V1: &[u8; 7] = b"REPL-1:";
+
+/// 7-byte ASCII tag prefixed to reaction envelopes. Wire:
+///
+///   RACT-1: || ULEB128(meta_len) || meta_json
+///
+/// `meta_json` is a [`ReactionMetaV1`] (`target_msg_id`, `emoji`, `action`).
+/// No body — pure metadata. Reactions are accumulated client-side and
+/// stored on the target message's `reactions` array; we never persist the
+/// per-reaction stream on the wire (only the action stream replays it).
+const RACT_PREFIX_V1: &[u8; 7] = b"RACT-1:";
+
+/// 7-byte ASCII tag prefixed to disappearing-messages TTL setting envelopes.
+/// Wire:
+///
+///   DISA-1: || ULEB128(meta_len) || meta_json
+///
+/// `meta_json` is a [`DisappearingMetaV1`] (`contact_label`, `ttl_secs`).
+/// `ttl_secs == None` disables the timer for the conversation. Both peers
+/// must agree (one sets, the other receives + applies to their own copy).
+const DISA_PREFIX_V1: &[u8; 7] = b"DISA-1:";
+
+/// Per-contact disappearing-messages settings file. Lives next to
+/// `contacts.json`. Map of `contact_label -> ttl_secs`. A missing entry
+/// means "no auto-disappear for this conversation".
+const DISAPPEARING_FILE: &str = "disappearing.json";
+
+/// Auto-purge tick interval. Every 60s the background task scans
+/// `messages.json` for rows whose `expires_at <= now()` and prunes them.
+const PURGE_INTERVAL_SECS: u64 = 60;
+
 // ── Wire types shared with the React frontend ────────────────────────────────
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -182,6 +221,45 @@ pub struct IncomingMessage {
     /// monotonically (never downgrades read → delivered).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery_state: Option<String>,
+    /// Reply-thread metadata, populated when the row was sent via
+    /// `send_reply` (or arrived in a `REPL-1:` envelope). The frontend
+    /// renders a magenta-tinted quote block above the body that scrolls
+    /// to the quoted row on click.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<ReplyMeta>,
+    /// Accumulated reactions for this row. Mutated in-place by the
+    /// `RACT-1:` listener path: `add` appends a `ReactionEntry`,
+    /// `remove` drops the matching `(sender_label, emoji)` pair. The UI
+    /// groups by emoji for the pill display.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reactions: Vec<ReactionEntry>,
+    /// Unix-epoch second after which this row is auto-purged. Set on
+    /// both outgoing (sender stamps from local TTL) and incoming
+    /// (receiver stamps from local TTL) rows. The 60s purge sweep
+    /// drops rows whose value is `<= now()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
+}
+
+/// Reply-thread metadata. Carried inline in REPL-1: envelopes and
+/// persisted on the row so re-opens still show the quote block.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReplyMeta {
+    pub in_reply_to_msg_id: String,
+    /// First ~80 chars of the quoted message. We carry the preview
+    /// inline rather than looking it up by msg_id at render time so the
+    /// recipient sees the SENDER'S view of the quoted text (defends
+    /// against a sender forging a quote that doesn't match what the
+    /// receiver actually has on record).
+    pub quoted_preview: String,
+}
+
+/// One emoji-reaction entry on a message row. Aggregated client-side
+/// from `RACT-1:` events.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReactionEntry {
+    pub sender_label: String,
+    pub emoji: String,
 }
 
 fn default_direction() -> String {
@@ -657,6 +735,10 @@ pub struct AppState {
     /// instead of a half-open hang. AsyncMutex so we can hold it across
     /// the (async) take + spawn.
     pub subscriber: AsyncMutex<Option<ListenerControl>>,
+    /// Set once `spawn_purge_task` has spawned the disappearing-messages
+    /// auto-purge timer. Guard against React.StrictMode double-mounts
+    /// that would otherwise stack two writers on `messages.json`.
+    pub purge_started: StdMutex<bool>,
 }
 
 /// Control handle for one in-flight relay-subscriber task. `shutdown_tx`
@@ -1388,6 +1470,36 @@ async fn spawn_listener_task(
                             );
                             return;
                         }
+                        if prefix7 == &REPL_PREFIX_V1[..] {
+                            handle_incoming_reply_v1(
+                                &app,
+                                &msg.plaintext[REPL_PREFIX_V1.len()..],
+                                sender_pub,
+                                sig_ok,
+                                &contacts_path,
+                            );
+                            return;
+                        }
+                        if prefix7 == &RACT_PREFIX_V1[..] {
+                            handle_incoming_reaction_v1(
+                                &app,
+                                &msg.plaintext[RACT_PREFIX_V1.len()..],
+                                sender_pub,
+                                sig_ok,
+                                &contacts_path,
+                            );
+                            return;
+                        }
+                        if prefix7 == &DISA_PREFIX_V1[..] {
+                            handle_incoming_disappearing_v1(
+                                &app,
+                                &msg.plaintext[DISA_PREFIX_V1.len()..],
+                                sender_pub,
+                                sig_ok,
+                                &contacts_path,
+                            );
+                            return;
+                        }
                     }
 
                     // Resolve sender attribution against the contact list.
@@ -1442,6 +1554,19 @@ async fn spawn_listener_task(
                     let ts = chrono::Local::now().format("%H:%M:%S").to_string();
                     let msg_id = compute_msg_id(&ts, &msg.plaintext);
 
+                    // Apply per-contact disappearing TTL on plain text
+                    // rows so the receiver's auto-purge clock starts at
+                    // local now() (sender + receiver clocks may drift,
+                    // small delta is acceptable per the spec).
+                    let expires_at = match sender_label.as_str() {
+                        "INBOX" | "INBOX!" => None,
+                        l if l.starts_with('?') => None,
+                        l => {
+                            let disk = load_disappearing(&app);
+                            disk.entries.get(l).map(|secs| now_unix_secs() + (*secs as u64))
+                        }
+                    };
+
                     let payload = IncomingMessage {
                         plaintext: String::from_utf8_lossy(&msg.plaintext).to_string(),
                         timestamp: ts.clone(),
@@ -1453,6 +1578,9 @@ async fn spawn_listener_task(
                         file_meta: None,
                         msg_id: Some(msg_id.clone()),
                         delivery_state: None,
+                        reply_to: None,
+                        reactions: Vec::new(),
+                        expires_at,
                     };
                     maybe_notify(
                         &app,
@@ -3189,12 +3317,23 @@ pub fn run() {
             export_audit_log,
             check_for_updates,
             install_update,
+            send_reply,
+            send_reaction,
+            set_disappearing_ttl,
+            get_disappearing_ttl,
+            outgoing_expires_at,
         ])
         .setup(|app| {
             // Pre-create the data dir on first launch so command handlers
             // never have to defensively `mkdir -p` on the hot path.
             let handle = app.handle().clone();
             let _ = app_data(&handle);
+
+            // Kick off the disappearing-messages auto-purge timer. Idempotent
+            // via `AppState.purge_started`. The first sweep fires after one
+            // full PURGE_INTERVAL_SECS so we don't trample the React-side
+            // hydrate-then-debounced-save path on cold start.
+            spawn_purge_task(&handle);
 
             // ── System tray ──────────────────────────────────────────────
             // Build a minimal menu: Show/Hide toggles main window, Status
@@ -3768,6 +3907,44 @@ struct ReceiptMetaV1 {
     kind: String,
 }
 
+/// Inline metadata carried by a REPL-1: envelope.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ReplyMetaV1 {
+    in_reply_to_msg_id: String,
+    quoted_preview: String,
+}
+
+/// Inline metadata carried by a RACT-1: envelope. `action` is "add" or
+/// "remove" — the receiver mutates the target row's `reactions` array
+/// accordingly and re-emits the merged state to the frontend.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ReactionMetaV1 {
+    target_msg_id: String,
+    emoji: String,
+    /// "add" or "remove".
+    action: String,
+}
+
+/// Inline metadata carried by a DISA-1: envelope. `ttl_secs == None`
+/// disables the timer for the conversation. The peer applies the same
+/// TTL to its local copy on receive.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct DisappearingMetaV1 {
+    contact_label: String,
+    ttl_secs: Option<u32>,
+}
+
+/// On-disk shape of `disappearing.json` — one entry per contact label
+/// whose conversation has an active TTL. Missing key = no auto-purge.
+/// Stored as a flat object so a user can hand-edit it to inspect /
+/// remove entries without going through the UI.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct DisappearingDisk {
+    /// Map<contact_label, ttl_secs>.
+    #[serde(flatten)]
+    entries: std::collections::HashMap<String, u32>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct TypingMetaV1 {
     contact_label: String,
@@ -4036,4 +4213,674 @@ async fn typing_ping(app: AppHandle, contact_label: String) -> Result<(), String
     send_sealed_to_address(&app, &contact.address, &payload)
         .await
         .map_err(|e| format!("relay send: {e}"))
+}
+
+// ── Reply / reactions / disappearing messages ──────────────────────────────
+//
+// Three additive sealed-sender envelopes:
+//
+//   REPL-1: || ULEB128(meta_len) || { in_reply_to_msg_id, quoted_preview } || body
+//   RACT-1: || ULEB128(meta_len) || { target_msg_id, emoji, action: "add"|"remove" }
+//   DISA-1: || ULEB128(meta_len) || { contact_label, ttl_secs: u32 | null }
+//
+// Reply payloads decode into a normal `IncomingMessage` row whose
+// `reply_to` is populated. Reactions accumulate client-side onto the
+// target message's `reactions` array (we mutate `messages.json` in place).
+// Disappearing-TTL events update the per-contact `disappearing.json`
+// file and emit `disappearing_ttl_changed` so the UI can re-render.
+//
+// Auto-purge: a periodic 60s tokio task scans `messages.json`, drops
+// rows whose `expires_at <= now()`, and emits `messages_purged` with
+// the dropped msg_ids so the React state can prune in lockstep.
+
+fn disappearing_path(app: &AppHandle) -> anyhow::Result<PathBuf> {
+    Ok(app_data(app)?.join(DISAPPEARING_FILE))
+}
+
+fn load_disappearing(app: &AppHandle) -> DisappearingDisk {
+    disappearing_path(app)
+        .ok()
+        .and_then(|p| fs::read(&p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+fn save_disappearing(app: &AppHandle, disk: &DisappearingDisk) -> anyhow::Result<()> {
+    let path = disappearing_path(app)?;
+    fs::write(&path, serde_json::to_vec_pretty(disk)?)
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+/// Truncate a body to <=80 characters (UTF-8-safe via char iteration) so
+/// the on-wire `quoted_preview` never balloons the envelope.
+fn truncate_preview(body: &str) -> String {
+    let mut out = String::new();
+    for (i, ch) in body.chars().enumerate() {
+        if i >= 80 {
+            out.push('\u{2026}');
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Wrap a `ReplyMetaV1` + body into the `REPL-1:` wire shape.
+fn build_reply_payload(
+    in_reply_to_msg_id: &str,
+    quoted_preview: &str,
+    body: &[u8],
+) -> Result<Vec<u8>, String> {
+    let meta = ReplyMetaV1 {
+        in_reply_to_msg_id: in_reply_to_msg_id.to_string(),
+        quoted_preview: quoted_preview.to_string(),
+    };
+    let meta_json = serde_json::to_vec(&meta)
+        .map_err(|e| format!("serialize reply meta: {e}"))?;
+    let mut out = Vec::with_capacity(REPL_PREFIX_V1.len() + 5 + meta_json.len() + body.len());
+    out.extend_from_slice(REPL_PREFIX_V1);
+    write_uleb128(&mut out, meta_json.len() as u64);
+    out.extend_from_slice(&meta_json);
+    out.extend_from_slice(body);
+    Ok(out)
+}
+
+/// Wrap a `ReactionMetaV1` into the `RACT-1:` wire shape.
+fn build_reaction_payload(
+    target_msg_id: &str,
+    emoji: &str,
+    action: &str,
+) -> Result<Vec<u8>, String> {
+    let meta = ReactionMetaV1 {
+        target_msg_id: target_msg_id.to_string(),
+        emoji: emoji.to_string(),
+        action: action.to_string(),
+    };
+    let meta_json = serde_json::to_vec(&meta)
+        .map_err(|e| format!("serialize reaction meta: {e}"))?;
+    let mut out = Vec::with_capacity(RACT_PREFIX_V1.len() + 5 + meta_json.len());
+    out.extend_from_slice(RACT_PREFIX_V1);
+    write_uleb128(&mut out, meta_json.len() as u64);
+    out.extend_from_slice(&meta_json);
+    Ok(out)
+}
+
+/// Wrap a `DisappearingMetaV1` into the `DISA-1:` wire shape.
+fn build_disappearing_payload(
+    contact_label: &str,
+    ttl_secs: Option<u32>,
+) -> Result<Vec<u8>, String> {
+    let meta = DisappearingMetaV1 {
+        contact_label: contact_label.to_string(),
+        ttl_secs,
+    };
+    let meta_json = serde_json::to_vec(&meta)
+        .map_err(|e| format!("serialize disappearing meta: {e}"))?;
+    let mut out = Vec::with_capacity(DISA_PREFIX_V1.len() + 5 + meta_json.len());
+    out.extend_from_slice(DISA_PREFIX_V1);
+    write_uleb128(&mut out, meta_json.len() as u64);
+    out.extend_from_slice(&meta_json);
+    Ok(out)
+}
+
+/// Current Unix time in seconds. Wraps `chrono::Utc::now().timestamp()`
+/// to a `u64` for storage in `expires_at`.
+fn now_unix_secs() -> u64 {
+    chrono::Utc::now().timestamp().max(0) as u64
+}
+
+/// Receiver-side handler for a `REPL-1:` envelope. Parses meta + body,
+/// builds an `IncomingMessage` row whose `reply_to` is populated, and
+/// emits the standard `message` event so the existing React reducer +
+/// notification + auto-`delivered`-receipt path all fire unchanged.
+fn handle_incoming_reply_v1(
+    app: &AppHandle,
+    body: &[u8],
+    sender_pub: Option<[u8; 32]>,
+    sig_ok: bool,
+    contacts_path: &std::path::Path,
+) {
+    let (meta_len, consumed) = match read_uleb128(body) {
+        Some(t) => t,
+        None => {
+            let _ = app.emit("error", "REPL-1: truncated meta length".to_string());
+            return;
+        }
+    };
+    let meta_end = match consumed.checked_add(meta_len as usize) {
+        Some(v) => v,
+        None => {
+            let _ = app.emit("error", "REPL-1: meta_len overflow".to_string());
+            return;
+        }
+    };
+    if body.len() < meta_end {
+        let _ = app.emit(
+            "error",
+            format!("REPL-1: meta_len {} exceeds body of {} bytes", meta_len, body.len()),
+        );
+        return;
+    }
+    let meta: ReplyMetaV1 = match serde_json::from_slice(&body[consumed..meta_end]) {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = app.emit("error", format!("REPL-1: meta JSON: {e}"));
+            return;
+        }
+    };
+    let plaintext_bytes = &body[meta_end..];
+
+    // Resolve sender attribution mirror of the 1:1 text path.
+    let (sender_label, sender_pub_hex) = match sender_pub {
+        None => ("INBOX".to_string(), None),
+        Some(_) if !sig_ok => ("INBOX!".to_string(), None),
+        Some(pub_bytes) => {
+            let pub_hex = hex::encode(pub_bytes);
+            let book = load_contacts(contacts_path);
+            let matched = book
+                .contacts
+                .iter()
+                .find(|c| {
+                    c.signing_pub
+                        .as_deref()
+                        .map(|h| h.eq_ignore_ascii_case(&pub_hex))
+                        .unwrap_or(false)
+                })
+                .map(|c| c.label.clone());
+            match matched {
+                Some(lbl) => (lbl, Some(pub_hex)),
+                None => {
+                    if let Some(state) = app.try_state::<AppState>() {
+                        if let Ok(mut slot) = state.last_unbound_sender.lock() {
+                            *slot = Some(pub_bytes);
+                        }
+                    }
+                    let label = format!("?{}", &pub_hex[..8]);
+                    (label, Some(pub_hex))
+                }
+            }
+        }
+    };
+
+    let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+    let msg_id = compute_msg_id(&ts, plaintext_bytes);
+    let plaintext = String::from_utf8_lossy(plaintext_bytes).to_string();
+
+    // Apply per-contact disappearing TTL on incoming reply rows so the
+    // peer's auto-disappear clock starts the moment we receive it.
+    let expires_at = match sender_label.as_str() {
+        "INBOX" | "INBOX!" => None,
+        l if l.starts_with('?') => None,
+        l => {
+            let disk = load_disappearing(app);
+            disk.entries.get(l).map(|secs| now_unix_secs() + (*secs as u64))
+        }
+    };
+
+    let payload = IncomingMessage {
+        plaintext: plaintext.clone(),
+        timestamp: ts.clone(),
+        sender_label: sender_label.clone(),
+        sig_ok,
+        sender_pub_hex,
+        direction: "incoming".to_string(),
+        kind: None,
+        file_meta: None,
+        msg_id: Some(msg_id.clone()),
+        delivery_state: None,
+        reply_to: Some(ReplyMeta {
+            in_reply_to_msg_id: meta.in_reply_to_msg_id,
+            quoted_preview: meta.quoted_preview,
+        }),
+        reactions: Vec::new(),
+        expires_at,
+    };
+    maybe_notify(
+        app,
+        &format!("From {}", payload.sender_label),
+        &payload.plaintext,
+    );
+    let _ = app.emit("message", payload);
+
+    // Auto-`delivered` receipt — same condition as the 1:1 text path.
+    if !sender_label.starts_with('?')
+        && sender_label != "INBOX"
+        && sender_label != "INBOX!"
+    {
+        let app_for_rcpt = app.clone();
+        let label_for_rcpt = sender_label.clone();
+        let id_for_rcpt = msg_id;
+        tokio::spawn(async move {
+            if let Err(e) =
+                send_receipt(&app_for_rcpt, &label_for_rcpt, &id_for_rcpt, "delivered").await
+            {
+                let _ = app_for_rcpt
+                    .emit("error", format!("send delivered receipt (reply): {e}"));
+            }
+        });
+    }
+}
+
+/// Receiver-side handler for a `RACT-1:` envelope. Loads `messages.json`,
+/// finds the row whose `msg_id` matches `target_msg_id`, mutates its
+/// `reactions` array (add or remove the matching `(sender_label, emoji)`
+/// entry), persists the file, and emits `reaction_updated` with the
+/// merged reactions so the React side can patch its in-memory state.
+fn handle_incoming_reaction_v1(
+    app: &AppHandle,
+    body: &[u8],
+    sender_pub: Option<[u8; 32]>,
+    sig_ok: bool,
+    contacts_path: &std::path::Path,
+) {
+    let (meta_len, consumed) = match read_uleb128(body) {
+        Some(t) => t,
+        None => {
+            let _ = app.emit("error", "RACT-1: truncated meta length".to_string());
+            return;
+        }
+    };
+    let meta_end = match consumed.checked_add(meta_len as usize) {
+        Some(v) => v,
+        None => {
+            let _ = app.emit("error", "RACT-1: meta_len overflow".to_string());
+            return;
+        }
+    };
+    if body.len() < meta_end {
+        let _ = app.emit(
+            "error",
+            format!("RACT-1: meta_len {} exceeds body of {} bytes", meta_len, body.len()),
+        );
+        return;
+    }
+    let meta: ReactionMetaV1 = match serde_json::from_slice(&body[consumed..meta_end]) {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = app.emit("error", format!("RACT-1: meta JSON: {e}"));
+            return;
+        }
+    };
+    if meta.action != "add" && meta.action != "remove" {
+        let _ = app.emit(
+            "error",
+            format!("RACT-1: unknown action '{}'", meta.action),
+        );
+        return;
+    }
+    let from_label = match resolve_meta_sender_label(sender_pub, sig_ok, contacts_path) {
+        Some(l) => l,
+        None => return,
+    };
+
+    // Mutate the on-disk history under the history lock so a concurrent
+    // `save_history` from the frontend can't trample our update.
+    let state = match app.try_state::<AppState>() {
+        Some(s) => s,
+        None => return,
+    };
+    let _guard = match state.history_lock.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    let path = match messages_path(app) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = app.emit("error", format!("RACT-1: messages_path: {e}"));
+            return;
+        }
+    };
+    let mut history: Vec<IncomingMessage> = if path.exists() {
+        let raw = match fs::read(&path) {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = app.emit("error", format!("RACT-1: read history: {e}"));
+                return;
+            }
+        };
+        serde_json::from_slice(&raw).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    let mut updated_reactions: Option<Vec<ReactionEntry>> = None;
+    for row in history.iter_mut() {
+        if row.msg_id.as_deref() == Some(meta.target_msg_id.as_str()) {
+            let entry = ReactionEntry {
+                sender_label: from_label.clone(),
+                emoji: meta.emoji.clone(),
+            };
+            match meta.action.as_str() {
+                "add" => {
+                    if !row.reactions.contains(&entry) {
+                        row.reactions.push(entry);
+                    }
+                }
+                "remove" => {
+                    row.reactions.retain(|e| e != &entry);
+                }
+                _ => unreachable!("validated above"),
+            }
+            updated_reactions = Some(row.reactions.clone());
+            break;
+        }
+    }
+
+    if let Some(ref reactions) = updated_reactions {
+        if let Ok(buf) = serde_json::to_vec_pretty(&history) {
+            if let Err(e) = fs::write(&path, buf) {
+                let _ = app.emit("error", format!("RACT-1: write history: {e}"));
+                return;
+            }
+        }
+        let _ = app.emit(
+            "reaction_updated",
+            serde_json::json!({
+                "target_msg_id": meta.target_msg_id,
+                "reactions": reactions,
+            }),
+        );
+    }
+    // No matching row -> silently drop. The reaction may have arrived
+    // before the history hydrated on a fresh launch; the wire stream is
+    // append-only so a future re-send would re-apply.
+}
+
+/// Receiver-side handler for a `DISA-1:` envelope. Mutates the local
+/// `disappearing.json` file with the peer's chosen TTL and emits
+/// `disappearing_ttl_changed` so the React UI can show a system message.
+fn handle_incoming_disappearing_v1(
+    app: &AppHandle,
+    body: &[u8],
+    sender_pub: Option<[u8; 32]>,
+    sig_ok: bool,
+    contacts_path: &std::path::Path,
+) {
+    let (meta_len, consumed) = match read_uleb128(body) {
+        Some(t) => t,
+        None => {
+            let _ = app.emit("error", "DISA-1: truncated meta length".to_string());
+            return;
+        }
+    };
+    let meta_end = match consumed.checked_add(meta_len as usize) {
+        Some(v) => v,
+        None => {
+            let _ = app.emit("error", "DISA-1: meta_len overflow".to_string());
+            return;
+        }
+    };
+    if body.len() < meta_end {
+        let _ = app.emit(
+            "error",
+            format!("DISA-1: meta_len {} exceeds body of {} bytes", meta_len, body.len()),
+        );
+        return;
+    }
+    let meta: DisappearingMetaV1 = match serde_json::from_slice(&body[consumed..meta_end]) {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = app.emit("error", format!("DISA-1: meta JSON: {e}"));
+            return;
+        }
+    };
+    let from_label = match resolve_meta_sender_label(sender_pub, sig_ok, contacts_path) {
+        Some(l) => l,
+        None => return,
+    };
+
+    // The receiver applies the TTL to ITS local label for the sender,
+    // not whatever the sender called itself. `meta.contact_label` is
+    // carried for forward-compat / debug telemetry only.
+    let _ = meta.contact_label;
+    let mut disk = load_disappearing(app);
+    match meta.ttl_secs {
+        Some(secs) => {
+            disk.entries.insert(from_label.clone(), secs);
+        }
+        None => {
+            disk.entries.remove(&from_label);
+        }
+    }
+    if let Err(e) = save_disappearing(app, &disk) {
+        let _ = app.emit("error", format!("DISA-1: save: {e}"));
+        return;
+    }
+    let _ = app.emit(
+        "disappearing_ttl_changed",
+        serde_json::json!({
+            "contact_label": from_label,
+            "ttl_secs": meta.ttl_secs,
+        }),
+    );
+}
+
+/// Frontend command: send a sealed-sender REPL-1: envelope quoting the
+/// row identified by `in_reply_to_msg_id`. Returns the new outgoing
+/// row's `msg_id` so the React side can stamp it on the optimistic echo.
+#[tauri::command]
+async fn send_reply(
+    app: AppHandle,
+    contact_label: String,
+    body: String,
+    in_reply_to_msg_id: String,
+    quoted_preview: String,
+) -> Result<String, String> {
+    let contacts_path = contacts_path(&app).map_err(|e| e.to_string())?;
+    let book = load_contacts(&contacts_path);
+    let contact = book
+        .contacts
+        .iter()
+        .find(|c| c.label == contact_label)
+        .ok_or_else(|| format!("unknown contact '{contact_label}'"))?
+        .clone();
+
+    let preview = truncate_preview(&quoted_preview);
+    let payload = build_reply_payload(&in_reply_to_msg_id, &preview, body.as_bytes())?;
+    let msg_id = compute_msg_id("", body.as_bytes());
+    send_sealed_to_address(&app, &contact.address, &payload)
+        .await
+        .map_err(|e| format!("relay send: {e}"))?;
+    Ok(msg_id)
+}
+
+/// Frontend command: send a sealed-sender RACT-1: envelope. `action`
+/// is "add" or "remove". The peer's listener mutates its on-disk
+/// history row's `reactions` array.
+#[tauri::command]
+async fn send_reaction(
+    app: AppHandle,
+    contact_label: String,
+    target_msg_id: String,
+    emoji: String,
+    action: String,
+) -> Result<(), String> {
+    if action != "add" && action != "remove" {
+        return Err(format!("invalid reaction action '{action}' (want add|remove)"));
+    }
+    let contacts_path = contacts_path(&app).map_err(|e| e.to_string())?;
+    let book = load_contacts(&contacts_path);
+    let contact = book
+        .contacts
+        .iter()
+        .find(|c| c.label == contact_label)
+        .ok_or_else(|| format!("unknown contact '{contact_label}'"))?
+        .clone();
+    let payload = build_reaction_payload(&target_msg_id, &emoji, &action)?;
+    send_sealed_to_address(&app, &contact.address, &payload)
+        .await
+        .map_err(|e| format!("relay send: {e}"))
+}
+
+/// Frontend command: persist a per-contact disappearing-messages TTL
+/// AND notify the peer so they apply the same setting to their own
+/// copy. `ttl_secs == None` clears the timer for that conversation.
+#[tauri::command]
+async fn set_disappearing_ttl(
+    app: AppHandle,
+    contact_label: String,
+    ttl_secs: Option<u32>,
+) -> Result<(), String> {
+    let contacts_path = contacts_path(&app).map_err(|e| e.to_string())?;
+    let book = load_contacts(&contacts_path);
+    let contact = book
+        .contacts
+        .iter()
+        .find(|c| c.label == contact_label)
+        .ok_or_else(|| format!("unknown contact '{contact_label}'"))?
+        .clone();
+
+    // Persist locally first so a relay failure doesn't roll back the
+    // user-visible "TTL is on" indicator (the peer will simply not have
+    // matching settings until a retry).
+    {
+        let mut disk = load_disappearing(&app);
+        match ttl_secs {
+            Some(secs) => {
+                disk.entries.insert(contact_label.clone(), secs);
+            }
+            None => {
+                disk.entries.remove(&contact_label);
+            }
+        }
+        save_disappearing(&app, &disk).map_err(|e| e.to_string())?;
+    }
+
+    let payload = build_disappearing_payload(&contact_label, ttl_secs)?;
+    send_sealed_to_address(&app, &contact.address, &payload)
+        .await
+        .map_err(|e| format!("relay send: {e}"))?;
+
+    let _ = app.emit(
+        "disappearing_ttl_changed",
+        serde_json::json!({
+            "contact_label": contact_label,
+            "ttl_secs": ttl_secs,
+        }),
+    );
+    Ok(())
+}
+
+/// Frontend command: read the current TTL (in seconds) for a given
+/// contact. `None` means no auto-disappear is configured.
+#[tauri::command]
+fn get_disappearing_ttl(
+    app: AppHandle,
+    contact_label: String,
+) -> Result<Option<u32>, String> {
+    let disk = load_disappearing(&app);
+    Ok(disk.entries.get(&contact_label).copied())
+}
+
+/// Frontend command called by `App.tsx` immediately before
+/// `send_message` so the optimistic outgoing row gets the same
+/// `expires_at` the peer will compute on receive. Returns the
+/// configured TTL for the contact (or `None` if disappearing is off).
+/// This is a thin alias of `get_disappearing_ttl` for naming symmetry
+/// with the send path — both share the same on-disk source of truth.
+#[tauri::command]
+fn outgoing_expires_at(
+    app: AppHandle,
+    contact_label: String,
+) -> Result<Option<u64>, String> {
+    let disk = load_disappearing(&app);
+    Ok(disk
+        .entries
+        .get(&contact_label)
+        .map(|secs| now_unix_secs() + (*secs as u64)))
+}
+
+/// Background sweep: every 60s, walk `messages.json` and drop rows
+/// whose `expires_at <= now()`. Emits `messages_purged` with the
+/// dropped msg_ids so the React reducer can prune in lockstep. Held
+/// under the same `history_lock` `save_history` uses so we never
+/// race a concurrent save.
+fn run_purge_sweep(app: &AppHandle) {
+    let state = match app.try_state::<AppState>() {
+        Some(s) => s,
+        None => return,
+    };
+    let _guard = match state.history_lock.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    let path = match messages_path(app) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    if !path.exists() {
+        return;
+    }
+    let raw = match fs::read(&path) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    let history: Vec<IncomingMessage> = match serde_json::from_slice(&raw) {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let now = now_unix_secs();
+    let mut purged_ids: Vec<String> = Vec::new();
+    let kept: Vec<IncomingMessage> = history
+        .into_iter()
+        .filter_map(|row| {
+            if let Some(deadline) = row.expires_at {
+                if deadline <= now {
+                    if let Some(id) = row.msg_id.clone() {
+                        purged_ids.push(id);
+                    }
+                    return None;
+                }
+            }
+            Some(row)
+        })
+        .collect();
+    if purged_ids.is_empty() {
+        return;
+    }
+    if let Ok(buf) = serde_json::to_vec_pretty(&kept) {
+        let _ = fs::write(&path, buf);
+    }
+    let _ = app.emit(
+        "messages_purged",
+        serde_json::json!({ "msg_ids": purged_ids }),
+    );
+}
+
+/// Spawn the periodic auto-purge tokio task. Idempotent — guarded by
+/// `AppState.purge_started` so a hot-reload double-mount doesn't end up
+/// with two timers writing the file in parallel. Called from `setup()`.
+fn spawn_purge_task(app: &AppHandle) {
+    let state = match app.try_state::<AppState>() {
+        Some(s) => s,
+        None => return,
+    };
+    {
+        let mut started = match state.purge_started.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        if *started {
+            return;
+        }
+        *started = true;
+    }
+    let app_for_task = app.clone();
+    tokio::spawn(async move {
+        // Sleep first so a cold-start purge doesn't fire before the
+        // history file even exists (the React side hydrates async on
+        // launch). Subsequent ticks fire on the configured interval.
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(PURGE_INTERVAL_SECS));
+        // Skip the first tick (which fires immediately) so the very
+        // first sweep happens after one full interval. This prevents
+        // a startup race where the history file is mid-rewrite by the
+        // React side (it does a debounced save 500ms after hydrate).
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            run_purge_sweep(&app_for_task);
+        }
+    });
 }

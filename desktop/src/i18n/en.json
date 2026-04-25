@@ -302,5 +302,33 @@
     "loading": "loading qr…",
     "copy": "copy address",
     "copied": "copied!"
+  },
+  "messages": {
+    "reply": {
+      "toolbar_button": "Reply",
+      "toolbar_title": "Quote this message in your reply",
+      "quote_jump_title": "Jump to the original message",
+      "cancel_aria": "Cancel reply",
+      "cancel_title": "Cancel reply"
+    },
+    "reactions": {
+      "toolbar_button": "React",
+      "toolbar_title": "Add an emoji reaction",
+      "pill_title": "Reactions from {{senders}}"
+    },
+    "disappearing": {
+      "label": "auto-disappear",
+      "preset_off": "Off",
+      "preset_min5": "5 min",
+      "preset_hour1": "1 hour",
+      "preset_hour24": "24 hours",
+      "preset_day7": "7 days",
+      "active_title": "Disappearing messages: rows expire {{secs}}s after sending",
+      "inactive_title": "Disappearing messages: off",
+      "row_label": "in {{remaining}}",
+      "row_title": "This message will auto-purge once the timer reaches zero",
+      "system_enabled": "Disappearing messages enabled ({{secs}}s) for {{label}}",
+      "system_disabled": "Disappearing messages disabled for {{label}}"
+    }
   }
 }
