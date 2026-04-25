@@ -2,6 +2,7 @@
 
 > **Sovereign internal-comms messenger.** Quantum-safe E2E. Metadata-blind via Monero-style stealth-addressing. MLS group chat. Multi-relay redundant. Tor-mode. Tauri 2 desktop (Windows MSI), cyberpunk TUI, headless CLI. Built and offered by **DC INFOSEC** (`dc-infosec.de`) as the Slack/Email-replacement for German SMEs and law firms with hard secrecy obligations.
 
+[![CI](https://github.com/cengo441337-a11y/phantomchat/actions/workflows/ci.yml/badge.svg)](https://github.com/cengo441337-a11y/phantomchat/actions/workflows/ci.yml)
 ![Status](https://img.shields.io/badge/Status-v3.0.0-brightgreen)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![Crypto](https://img.shields.io/badge/Crypto-PQXDH_%2B_XChaCha20--Poly1305-red)
@@ -371,6 +372,57 @@ Pull Requests und Issues sind willkommen, besonders für:
 - **iOS Build + App-Store-Review** (braucht Apple-Developer-Account).
 
 Code-Style: `cargo fmt` auf `core/` + `cli/` vor jedem Commit; `cargo clippy --all` sollte sauber laufen. Tests sind Pflicht für alle neuen Krypto-Pfade.
+
+---
+
+## CI/CD
+
+PhantomChat ships three GitHub Actions workflows under `.github/workflows/`:
+
+- **`ci.yml`** — runs on every push + PR: cargo build + selftest (`30/30`),
+  `cargo test` on core (incl. `mls`), `cargo clippy -D warnings`, desktop
+  TS/Vite build, Flutter analyze on touched dirs, and a 30-second smoke fuzz
+  per parser target.
+- **`release.yml`** — runs on `v*` tag-push: builds Tauri MSI on Windows,
+  Flutter APK split-per-abi on Linux, CLI for 5 host triples, and
+  publishes a GitHub Release with auto-generated changelog + SHA256SUMS.
+- **`auto-deploy.yml`** — gated `workflow_dispatch` (will auto-trigger
+  post-Release once trusted): SSHes to the Hostinger update host and runs
+  `phantom-publish` for the MSI + scp's APKs to `/var/www/updates/download/`.
+
+Dependabot bumps Cargo, npm, and GitHub Actions deps weekly (see
+`.github/dependabot.yml`).
+
+## Reproducible Builds
+
+PhantomChat aims for byte-for-byte reproducible release artifacts so customers
+can rebuild from the public Git tag and confirm the binary they downloaded
+hasn't been tampered with. Full guide:
+**[`docs/REPRODUCIBLE-BUILDS.md`](docs/REPRODUCIBLE-BUILDS.md)** — covers
+pinned toolchains (Rust stable + Node 20 + Flutter `cc0734ac71` + NDK r26),
+build steps for each artifact, and the `SOURCE_DATE_EPOCH` discipline.
+
+The companion verifier downloads + hashes a published release in one shot:
+
+```bash
+bash scripts/verify-release.sh v3.0.0
+# OK: all artifacts match published checksums.
+```
+
+## Fuzz Testing
+
+Every wire-format parser in PhantomChat has a `cargo-fuzz` harness under
+[`fuzz/`](fuzz/README.md): envelope, MLS-WLC2 / MLS-APP1, FILE1:01,
+RCPT-1, TYPN-1, REPL-1, RACT-1, DISA-1, `PhantomAddress::parse`, and the
+nostr-event extractor. CI smoke-fuzzes each target for 30 seconds on every
+push; deeper runs are done out-of-band:
+
+```bash
+cargo +nightly fuzz run envelope_parse -- -max_total_time=300
+```
+
+A single panic in a parser is potentially RCE-adjacent — the harnesses
+exist to make sure that never lands in `main`.
 
 ---
 

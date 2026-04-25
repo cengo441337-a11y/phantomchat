@@ -1,0 +1,91 @@
+name: Auto-deploy
+
+# Triggered after Release succeeds — but kept gated behind manual dispatch
+# for now so a CI hiccup can't accidentally republish to the live update
+# channel. Flip the `workflow_run` block to active once we trust the
+# release pipeline.
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to deploy (e.g. v3.0.1)"
+        required: true
+        type: string
+      confirm:
+        description: 'Type "DEPLOY" to confirm'
+        required: true
+        type: string
+
+concurrency:
+  group: auto-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: ssh-deploy to Hostinger
+    # Only run when the trigger is workflow_dispatch (manual gate during
+    # bring-up). Once we trust this, drop the second clause and require the
+    # workflow_run conclusion == 'success'.
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.confirm == 'DEPLOY'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://updates.dc-infosec.de/
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve target tag
+        id: target
+        run: |
+          tag="${{ github.event.inputs.tag }}"
+          if [ -z "$tag" ]; then
+            tag="${{ github.event.workflow_run.head_branch }}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Download release artifacts via gh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p deploy
+          gh release download "${{ steps.target.outputs.tag }}" -D deploy
+          ls -la deploy/
+
+      - name: Configure SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.HOSTINGER_DEPLOY_KEY }}
+
+      - name: Add Hostinger host key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.HOSTINGER_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Publish MSI via phantom-publish
+        run: |
+          set -euo pipefail
+          msi=$(ls deploy/*.msi | head -n1)
+          [ -n "$msi" ] || { echo "::error::no MSI found in artifacts"; exit 1; }
+          scp "$msi" "${{ secrets.HOSTINGER_USER }}@${{ secrets.HOSTINGER_HOST }}:/tmp/"
+          remote_msi="/tmp/$(basename "$msi")"
+          ssh "${{ secrets.HOSTINGER_USER }}@${{ secrets.HOSTINGER_HOST }}" \
+            "phantom-publish --msi '$remote_msi' --version '${{ steps.target.outputs.tag }}'"
+
+      - name: Upload APKs to /var/www/updates/download/
+        run: |
+          set -euo pipefail
+          for apk in deploy/*.apk; do
+            [ -e "$apk" ] || continue
+            scp "$apk" "${{ secrets.HOSTINGER_USER }}@${{ secrets.HOSTINGER_HOST }}:/var/www/updates/download/"
+          done
+
+      - name: Update landing-page version stamp
+        run: |
+          ssh "${{ secrets.HOSTINGER_USER }}@${{ secrets.HOSTINGER_HOST }}" \
+            "echo '${{ steps.target.outputs.tag }}' > /var/www/updates/version.txt"
