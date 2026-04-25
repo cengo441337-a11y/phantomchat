@@ -1,8 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import AddressQR from "./AddressQR";
-import type { AuditEntry, PrivacyConfigDto, UpdateInfo } from "../types";
+import type {
+  AuditEntry,
+  BackupMeta,
+  BackupResult,
+  PrivacyConfigDto,
+  RestoreResult,
+  UpdateInfo,
+} from "../types";
 
 interface Props {
   onClose: () => void;
@@ -89,6 +97,32 @@ export default function SettingsPanel({ onClose }: Props) {
   const [wipeStage, setWipeStage] = useState<"idle" | "confirm">("idle");
   const [wipeText, setWipeText] = useState("");
   const [wipeErr, setWipeErr] = useState<string | null>(null);
+
+  // ── Backup & Restore (Wave 8c, compliance Aufbewahrungspflicht) ─────────
+  // Two flows share this state:
+  //
+  //   Export: open a "create backup" modal → passphrase + confirm + strength
+  //   meter → file-save dialog → invoke `export_backup` → success toast.
+  //
+  //   Import: file-open dialog (.pcbackup filter) → invoke `verify_backup`
+  //   to surface the meta block → user confirms → invoke `import_backup` →
+  //   success toast. The frontend listens for `app_data_replaced` (emitted
+  //   by the backend after the swap completes) and reloads its caches.
+  const [backupModal, setBackupModal] = useState<"none" | "create" | "restore">("none");
+  const [backupExportPass, setBackupExportPass] = useState("");
+  const [backupExportPassConfirm, setBackupExportPassConfirm] = useState("");
+  const [backupExportBusy, setBackupExportBusy] = useState(false);
+  const [backupExportMsg, setBackupExportMsg] = useState<string | null>(null);
+  const [backupExportResult, setBackupExportResult] = useState<BackupResult | null>(null);
+  const [backupImportPath, setBackupImportPath] = useState<string | null>(null);
+  const [backupImportPass, setBackupImportPass] = useState("");
+  const [backupImportMeta, setBackupImportMeta] = useState<BackupMeta | null>(null);
+  const [backupImportBusy, setBackupImportBusy] = useState(false);
+  const [backupImportMsg, setBackupImportMsg] = useState<string | null>(null);
+  const [backupImportResult, setBackupImportResult] = useState<RestoreResult | null>(null);
+  const [backupImportConfirmStage, setBackupImportConfirmStage] = useState<"verify" | "confirm">(
+    "verify",
+  );
 
   useEffect(() => {
     (async () => {
@@ -190,6 +224,183 @@ export default function SettingsPanel({ onClose }: Props) {
       setBackupPath(p);
     } catch (e) {
       setBackupPath(`error: ${String(e)}`);
+    }
+  }
+
+  /// Lightweight passphrase strength estimator (zxcvbn-style heuristic, no
+  /// external dep — keeps the bundle small). Computes Shannon-style entropy
+  /// from the character class diversity multiplied by length, then maps to
+  /// a 0..4 score plus a human time-to-crack hint.
+  ///
+  /// Pessimistic on purpose: assumes a 10^11 guesses-per-second offline
+  /// attacker (single high-end GPU on a SHA-256 keyspace; Argon2id raises
+  /// the bar enormously, but the meter should still nudge users toward
+  /// long passphrases rather than relying on the KDF alone).
+  const exportStrength = useMemo(() => {
+    return estimatePassphraseStrength(backupExportPass);
+  }, [backupExportPass]);
+
+  /// True iff the current export-modal state is valid for a `create
+  /// backup` invocation. Mirrors the Rust 12-char minimum and also
+  /// requires the confirm field to match — preventing silent typos that
+  /// would lock the user out of their own backup.
+  const exportPassValid =
+    backupExportPass.length >= 12 && backupExportPass === backupExportPassConfirm;
+
+  function resetExportModal() {
+    setBackupExportPass("");
+    setBackupExportPassConfirm("");
+    setBackupExportMsg(null);
+    setBackupExportResult(null);
+    setBackupExportBusy(false);
+  }
+
+  function resetImportModal() {
+    setBackupImportPath(null);
+    setBackupImportPass("");
+    setBackupImportMeta(null);
+    setBackupImportMsg(null);
+    setBackupImportResult(null);
+    setBackupImportBusy(false);
+    setBackupImportConfirmStage("verify");
+  }
+
+  /// Begin an export. Pops the file-save dialog AFTER the passphrase is
+  /// validated so the user can't get halfway through naming a file then
+  /// realise they typoed the passphrase.
+  async function runBackupExport() {
+    if (!exportPassValid) return;
+    setBackupExportBusy(true);
+    setBackupExportMsg(t("settings.backup.export_in_progress"));
+    setBackupExportResult(null);
+    try {
+      const dest = await saveDialog({
+        title: t("settings.backup.export_picker_title"),
+        defaultPath: `phantomchat-backup-${new Date().toISOString().slice(0, 10)}.pcbackup`,
+        filters: [
+          {
+            name: t("settings.backup.export_filter_name"),
+            extensions: ["pcbackup"],
+          },
+        ],
+      });
+      if (!dest) {
+        setBackupExportMsg(null);
+        setBackupExportBusy(false);
+        return;
+      }
+      const result = await invoke<BackupResult>("export_backup", {
+        outputPath: dest,
+        passphrase: backupExportPass,
+      });
+      setBackupExportResult(result);
+      setBackupExportMsg(null);
+      // Wipe passphrases from React state — the Rust side already
+      // zeroized its copy, the frontend should follow suit.
+      setBackupExportPass("");
+      setBackupExportPassConfirm("");
+    } catch (e) {
+      setBackupExportMsg(t("settings.backup.export_failed", { error: String(e) }));
+    } finally {
+      setBackupExportBusy(false);
+    }
+  }
+
+  /// Step 1 of the restore flow: pop the file-open dialog. Verification
+  /// itself happens after the user types the passphrase (Step 2).
+  async function pickBackupForImport() {
+    setBackupImportMsg(null);
+    setBackupImportResult(null);
+    setBackupImportMeta(null);
+    setBackupImportConfirmStage("verify");
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        directory: false,
+        title: t("settings.backup.import_picker_title"),
+        filters: [
+          {
+            name: t("settings.backup.export_filter_name"),
+            extensions: ["pcbackup"],
+          },
+        ],
+      });
+      if (selected === null || selected === undefined) {
+        return;
+      }
+      const path =
+        typeof selected === "string"
+          ? selected
+          : Array.isArray(selected)
+          ? null
+          : (selected as { path?: string }).path ?? null;
+      if (!path) return;
+      setBackupImportPath(path);
+      setBackupModal("restore");
+    } catch (e) {
+      setBackupImportMsg(t("settings.backup.import_failed", { error: String(e) }));
+    }
+  }
+
+  /// Step 2 of the restore flow: validate the passphrase by invoking
+  /// `verify_backup`. On success the meta block is rendered and the
+  /// "Wiederherstellen" button replaces "Prüfen".
+  async function runBackupVerify() {
+    if (!backupImportPath || backupImportPass.length === 0) return;
+    setBackupImportBusy(true);
+    setBackupImportMsg(t("settings.backup.import_verifying"));
+    try {
+      const meta = await invoke<BackupMeta>("verify_backup", {
+        inputPath: backupImportPath,
+        passphrase: backupImportPass,
+      });
+      setBackupImportMeta(meta);
+      setBackupImportMsg(null);
+      setBackupImportConfirmStage("confirm");
+    } catch (e) {
+      setBackupImportMsg(t("settings.backup.import_failed", { error: String(e) }));
+    } finally {
+      setBackupImportBusy(false);
+    }
+  }
+
+  /// Step 3 of the restore flow: actually invoke `import_backup`. The
+  /// backend stops the listener, decrypts each entry into a temp dir,
+  /// atomically swaps onto live paths, restarts the listener, and emits
+  /// `app_data_replaced`. The success toast surfaces the item count.
+  async function runBackupRestore() {
+    if (!backupImportPath || !backupImportMeta) return;
+    setBackupImportBusy(true);
+    setBackupImportMsg(t("settings.backup.import_in_progress"));
+    try {
+      const result = await invoke<RestoreResult>("import_backup", {
+        inputPath: backupImportPath,
+        passphrase: backupImportPass,
+      });
+      setBackupImportResult(result);
+      setBackupImportMsg(
+        t("settings.backup.import_success", { count: result.items_restored }),
+      );
+      // Wipe passphrase + reset relays/audit state so the next render
+      // re-fetches the freshly restored data.
+      setBackupImportPass("");
+      try {
+        const list = await invoke<string[]>("list_relays");
+        setRelays(list);
+        setRelaysOriginal(list);
+      } catch {
+        /* surfaces via the existing relays reload path */
+      }
+      try {
+        const entries = await invoke<AuditEntry[]>("read_audit_log", { limit: 100 });
+        setAuditEntries(entries);
+      } catch {
+        /* leave previous list — error is already in the toast */
+      }
+    } catch (e) {
+      setBackupImportMsg(t("settings.backup.import_failed", { error: String(e) }));
+    } finally {
+      setBackupImportBusy(false);
     }
   }
 
@@ -427,6 +638,62 @@ export default function SettingsPanel({ onClose }: Props) {
                   {backupPath}
                 </div>
               )}
+            </div>
+          )}
+        </section>
+
+        {/* ── Backup & Restore ───────────────────────────────────────── */}
+        <section className="mb-6">
+          <h3 className="text-neon-green text-xs uppercase tracking-widest mb-2">
+            {t("settings.backup.title")}
+          </h3>
+          <div className="text-xs text-soft-grey mb-3">
+            {t("settings.backup.intro")}
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                resetExportModal();
+                setBackupModal("create");
+              }}
+              className="neon-button text-xs"
+            >
+              {t("settings.backup.export_button")}
+            </button>
+            <button
+              onClick={() => {
+                resetImportModal();
+                void pickBackupForImport();
+              }}
+              className="neon-button text-xs"
+            >
+              {t("settings.backup.import_button")}
+            </button>
+          </div>
+          {backupExportResult && backupModal === "none" && (
+            <div className="mt-3 text-xs space-y-1 border border-neon-green/40 rounded p-2">
+              <div className="text-neon-green uppercase tracking-widest">
+                {t("settings.backup.export_success_title")}
+              </div>
+              <div className="text-cyber-cyan break-all">{backupExportResult.path}</div>
+              <div className="text-soft-grey">
+                {t("settings.backup.export_success_size", {
+                  size: backupExportResult.size_bytes,
+                  count: backupExportResult.item_count,
+                })}
+              </div>
+              <div className="text-soft-grey font-mono break-all">
+                {t("settings.backup.export_success_sha", {
+                  sha: backupExportResult.sha256_hex,
+                })}
+              </div>
+            </div>
+          )}
+          {backupImportResult && backupModal === "none" && (
+            <div className="mt-3 text-xs border border-neon-green/40 rounded p-2 text-cyber-cyan">
+              {t("settings.backup.import_success", {
+                count: backupImportResult.items_restored,
+              })}
             </div>
           )}
         </section>
@@ -790,6 +1057,268 @@ export default function SettingsPanel({ onClose }: Props) {
           )}
         </section>
       </div>
+
+      {/* ── Backup modals ─────────────────────────────────────────────── */}
+      {backupModal === "create" && (
+        <div
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-[60]"
+          onClick={() => {
+            if (!backupExportBusy) {
+              resetExportModal();
+              setBackupModal("none");
+            }
+          }}
+        >
+          <div
+            className="bg-bg-panel border border-neon-magenta shadow-neon-magenta rounded-md w-[480px] max-w-[92%] p-5 space-y-3"
+            onClick={e => e.stopPropagation()}
+          >
+            <h3 className="text-neon-magenta font-bold uppercase tracking-widest text-sm">
+              {t("settings.backup.modal_create_title")}
+            </h3>
+            <div className="space-y-2 text-xs">
+              <label className="block">
+                <span className="text-soft-grey uppercase tracking-wider text-[10px] block mb-1">
+                  {t("settings.backup.passphrase_label")}
+                </span>
+                <input
+                  type="password"
+                  autoFocus
+                  value={backupExportPass}
+                  onChange={e => setBackupExportPass(e.target.value)}
+                  placeholder={t("settings.backup.passphrase_placeholder")}
+                  className="neon-input w-full text-xs"
+                />
+              </label>
+              <label className="block">
+                <span className="text-soft-grey uppercase tracking-wider text-[10px] block mb-1">
+                  {t("settings.backup.passphrase_confirm_label")}
+                </span>
+                <input
+                  type="password"
+                  value={backupExportPassConfirm}
+                  onChange={e => setBackupExportPassConfirm(e.target.value)}
+                  className="neon-input w-full text-xs"
+                />
+              </label>
+              {/* Strength meter */}
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-soft-grey uppercase tracking-wider text-[10px]">
+                    {t("settings.backup.strength_label")}:
+                  </span>
+                  <span className="text-[10px]" style={{ color: exportStrength.color }}>
+                    {t(exportStrength.labelKey)}
+                  </span>
+                </div>
+                <div className="h-1.5 bg-bg-deep rounded overflow-hidden">
+                  <div
+                    className="h-full transition-all"
+                    style={{
+                      width: `${(exportStrength.score / 4) * 100}%`,
+                      backgroundColor: exportStrength.color,
+                    }}
+                  />
+                </div>
+                <div className="text-soft-grey text-[10px]">
+                  {t("settings.backup.strength_entropy", {
+                    bits: exportStrength.entropyBits.toFixed(0),
+                    time: exportStrength.crackTime,
+                  })}
+                </div>
+              </div>
+              {backupExportPass.length > 0 && backupExportPass.length < 12 && (
+                <div className="text-neon-magenta text-[10px]">
+                  {t("settings.backup.passphrase_too_short")}
+                </div>
+              )}
+              {backupExportPassConfirm.length > 0 &&
+                backupExportPass !== backupExportPassConfirm && (
+                  <div className="text-neon-magenta text-[10px]">
+                    {t("settings.backup.passphrase_mismatch")}
+                  </div>
+                )}
+              <div className="text-soft-grey text-[10px] pt-1 border-t border-dim-green/30">
+                {t("settings.backup.strength_hint")}
+              </div>
+              {backupExportMsg && (
+                <div className="text-cyber-cyan text-[10px]">{backupExportMsg}</div>
+              )}
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={() => void runBackupExport()}
+                  disabled={!exportPassValid || backupExportBusy}
+                  className="neon-button text-xs disabled:opacity-40"
+                >
+                  {t("settings.backup.modal_create_confirm")}
+                </button>
+                <button
+                  onClick={() => {
+                    if (!backupExportBusy) {
+                      resetExportModal();
+                      setBackupModal("none");
+                    }
+                  }}
+                  disabled={backupExportBusy}
+                  className="text-soft-grey hover:text-neon-green text-xs uppercase tracking-wider px-3 py-2 disabled:opacity-40"
+                >
+                  {t("settings.backup.import_cancel_button")}
+                </button>
+              </div>
+              {backupExportResult && (
+                <div className="text-xs space-y-1 border border-neon-green/40 rounded p-2 mt-2">
+                  <div className="text-neon-green uppercase tracking-widest">
+                    {t("settings.backup.export_success_title")}
+                  </div>
+                  <div className="text-cyber-cyan break-all">{backupExportResult.path}</div>
+                  <div className="text-soft-grey">
+                    {t("settings.backup.export_success_size", {
+                      size: backupExportResult.size_bytes,
+                      count: backupExportResult.item_count,
+                    })}
+                  </div>
+                  <div className="text-soft-grey font-mono break-all">
+                    {t("settings.backup.export_success_sha", {
+                      sha: backupExportResult.sha256_hex,
+                    })}
+                  </div>
+                  <button
+                    onClick={() => {
+                      resetExportModal();
+                      setBackupModal("none");
+                    }}
+                    className="neon-button text-xs mt-1"
+                  >
+                    {t("settings.close")}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {backupModal === "restore" && (
+        <div
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-[60]"
+          onClick={() => {
+            if (!backupImportBusy) {
+              resetImportModal();
+              setBackupModal("none");
+            }
+          }}
+        >
+          <div
+            className="bg-bg-panel border border-neon-magenta shadow-neon-magenta rounded-md w-[480px] max-w-[92%] p-5 space-y-3"
+            onClick={e => e.stopPropagation()}
+          >
+            <h3 className="text-neon-magenta font-bold uppercase tracking-widest text-sm">
+              {t("settings.backup.import_meta_title")}
+            </h3>
+            <div className="text-xs text-soft-grey break-all">
+              {backupImportPath}
+            </div>
+            {backupImportConfirmStage === "verify" && (
+              <>
+                <label className="block">
+                  <span className="text-soft-grey uppercase tracking-wider text-[10px] block mb-1">
+                    {t("settings.backup.import_passphrase_label")}
+                  </span>
+                  <input
+                    type="password"
+                    autoFocus
+                    value={backupImportPass}
+                    onChange={e => setBackupImportPass(e.target.value)}
+                    className="neon-input w-full text-xs"
+                  />
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => void runBackupVerify()}
+                    disabled={backupImportPass.length === 0 || backupImportBusy}
+                    className="neon-button text-xs disabled:opacity-40"
+                  >
+                    {t("settings.backup.import_continue_button")}
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!backupImportBusy) {
+                        resetImportModal();
+                        setBackupModal("none");
+                      }
+                    }}
+                    disabled={backupImportBusy}
+                    className="text-soft-grey hover:text-neon-green text-xs uppercase tracking-wider px-3 py-2 disabled:opacity-40"
+                  >
+                    {t("settings.backup.import_cancel_button")}
+                  </button>
+                </div>
+              </>
+            )}
+            {backupImportConfirmStage === "confirm" && backupImportMeta && (
+              <>
+                <div className="text-xs space-y-1 border border-dim-green/40 rounded p-2">
+                  <Row
+                    label={t("settings.backup.import_meta_created")}
+                    value={backupImportMeta.created_at}
+                  />
+                  <Row
+                    label={t("settings.backup.import_meta_host")}
+                    value={backupImportMeta.host_label}
+                  />
+                  <Row
+                    label={t("settings.backup.import_meta_count")}
+                    value={String(backupImportMeta.item_count)}
+                  />
+                </div>
+                <div className="text-neon-magenta text-xs">
+                  {t("settings.backup.import_warning")}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => void runBackupRestore()}
+                    disabled={backupImportBusy || backupImportResult !== null}
+                    className="neon-button text-xs border-neon-magenta/70 text-neon-magenta hover:bg-neon-magenta/10 disabled:opacity-40"
+                  >
+                    {t("settings.backup.modal_restore_confirm")}
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!backupImportBusy) {
+                        resetImportModal();
+                        setBackupModal("none");
+                      }
+                    }}
+                    disabled={backupImportBusy}
+                    className="text-soft-grey hover:text-neon-green text-xs uppercase tracking-wider px-3 py-2 disabled:opacity-40"
+                  >
+                    {t("settings.backup.import_cancel_button")}
+                  </button>
+                </div>
+              </>
+            )}
+            {backupImportMsg && (
+              <div className="text-cyber-cyan text-[10px]">{backupImportMsg}</div>
+            )}
+            {backupImportResult && (
+              <div className="text-cyber-cyan text-xs border border-neon-green/40 rounded p-2">
+                {t("settings.backup.import_success", {
+                  count: backupImportResult.items_restored,
+                })}
+                <button
+                  onClick={() => {
+                    resetImportModal();
+                    setBackupModal("none");
+                  }}
+                  className="neon-button text-xs mt-2"
+                >
+                  {t("settings.close")}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -835,4 +1364,78 @@ function CategoryBadge({ category }: { category: string }) {
       {category}
     </span>
   );
+}
+
+/// Lightweight zxcvbn-style heuristic used by the backup-passphrase modal.
+/// Computes character-class entropy, then scores 0..4 + maps to a human
+/// time-to-crack hint assuming 1e11 guesses-per-second offline. Pessimistic
+/// on purpose; Argon2id raises the bar enormously, but the meter should
+/// nudge users toward long passphrases regardless.
+interface StrengthEstimate {
+  score: 0 | 1 | 2 | 3 | 4;
+  labelKey: string;
+  color: string;
+  entropyBits: number;
+  crackTime: string;
+}
+
+function estimatePassphraseStrength(pass: string): StrengthEstimate {
+  if (pass.length === 0) {
+    return {
+      score: 0,
+      labelKey: "settings.backup.strength_very_weak",
+      color: "#9ca3af",
+      entropyBits: 0,
+      crackTime: "—",
+    };
+  }
+  let charset = 0;
+  if (/[a-z]/.test(pass)) charset += 26;
+  if (/[A-Z]/.test(pass)) charset += 26;
+  if (/[0-9]/.test(pass)) charset += 10;
+  if (/[^a-zA-Z0-9]/.test(pass)) charset += 32;
+  if (charset === 0) charset = 26;
+  const entropyBits = Math.log2(charset) * pass.length;
+
+  let score: 0 | 1 | 2 | 3 | 4;
+  let labelKey: string;
+  let color: string;
+  if (entropyBits < 28) {
+    score = 0;
+    labelKey = "settings.backup.strength_very_weak";
+    color = "#ef4444";
+  } else if (entropyBits < 50) {
+    score = 1;
+    labelKey = "settings.backup.strength_weak";
+    color = "#f97316";
+  } else if (entropyBits < 70) {
+    score = 2;
+    labelKey = "settings.backup.strength_fair";
+    color = "#eab308";
+  } else if (entropyBits < 90) {
+    score = 3;
+    labelKey = "settings.backup.strength_strong";
+    color = "#22c55e";
+  } else {
+    score = 4;
+    labelKey = "settings.backup.strength_very_strong";
+    color = "#10b981";
+  }
+
+  // Time-to-crack at 1e11 guesses/sec (high-end GPU on a fast hash).
+  const guesses = Math.pow(2, entropyBits) / 2;
+  const seconds = guesses / 1e11;
+  const crackTime = humaniseSeconds(seconds);
+  return { score, labelKey, color, entropyBits, crackTime };
+}
+
+function humaniseSeconds(s: number): string {
+  if (!isFinite(s) || s > 1e15) return "centuries";
+  if (s < 1) return "<1s";
+  if (s < 60) return `${s.toFixed(0)}s`;
+  if (s < 3600) return `${(s / 60).toFixed(0)}min`;
+  if (s < 86400) return `${(s / 3600).toFixed(0)}h`;
+  if (s < 86400 * 365) return `${(s / 86400).toFixed(0)}d`;
+  if (s < 86400 * 365 * 1000) return `${(s / (86400 * 365)).toFixed(0)}y`;
+  return `>${(s / (86400 * 365 * 1000)).toFixed(0)}k years`;
 }

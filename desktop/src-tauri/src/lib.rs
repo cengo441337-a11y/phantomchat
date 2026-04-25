@@ -3189,6 +3189,9 @@ pub fn run() {
             export_audit_log,
             check_for_updates,
             install_update,
+            export_backup,
+            import_backup,
+            verify_backup,
         ])
         .setup(|app| {
             // Pre-create the data dir on first launch so command handlers
@@ -4036,4 +4039,711 @@ async fn typing_ping(app: AppHandle, contact_label: String) -> Result<(), String
     send_sealed_to_address(&app, &contact.address, &payload)
         .await
         .map_err(|e| format!("relay send: {e}"))
+}
+
+// ── Encrypted backup / restore (Wave 8c, compliance Aufbewahrungspflicht) ────
+//
+// Steuerberater + Anwälte are legally required to retain client communication
+// for 10 years (German GoBD / §147 AO). Without an export path, a stolen
+// laptop = permanent data loss = unsellable for the compliance-bound segment.
+//
+// Format — single `.pcbackup` file (a regular ZIP with a renamed extension):
+//
+//   backup-meta.json          UNENCRYPTED. { version: 1, created_at,
+//                             item_count, host_label }. Lets `verify_backup`
+//                             show provenance BEFORE the user types the
+//                             passphrase.
+//   wrapped-key.json          UNENCRYPTED wrapper:
+//                             { version, kdf: "argon2id",
+//                               kdf_params: { m: 65536, t: 3, p: 1 },
+//                               salt: <b64 16B>,
+//                               wrapped_data_key_nonce: <b64 24B>,
+//                               wrapped_data_key_ct:    <b64> }
+//   <filename>.nonce          24 bytes raw (XChaCha20-Poly1305 nonce).
+//   <filename>.ct             ciphertext + 16-byte Poly1305 tag.
+//
+// Crypto recipe:
+//   - 32-byte data-key from `OsRng`.
+//   - Argon2id derives a 32-byte KEK from passphrase. Parameters pinned to
+//     OWASP 2023 (m = 64 MiB, t = 3, p = 1). 16-byte salt from `OsRng`.
+//   - Each per-file payload encrypted with XChaCha20-Poly1305 + a fresh
+//     24-byte nonce (so we never repeat (key, nonce) even if the same
+//     filename is re-encrypted on a future backup).
+//   - The data-key itself is wrapped with the KEK using XChaCha20-Poly1305
+//     + its own fresh nonce so brute-forcing the passphrase is the only
+//     attack path.
+//   - `Zeroize` wipes both keys after each backup or restore.
+//
+// Restore is two-phase: decrypt every file into a TEMP dir under app_data,
+// then atomically rename onto the live paths after a clean listener
+// shutdown. If decryption of any file fails the temp dir is wiped and the
+// live data is untouched.
+
+use chacha20poly1305::{
+    aead::{rand_core::RngCore as _, Aead, AeadCore, KeyInit, OsRng as AeadOsRng},
+    XChaCha20Poly1305, XNonce,
+};
+use zeroize::Zeroize;
+
+const BACKUP_FORMAT_VERSION: u8 = 1;
+const BACKUP_META_FILENAME: &str = "backup-meta.json";
+const BACKUP_WRAPPED_KEY_FILENAME: &str = "wrapped-key.json";
+const BACKUP_KDF_M_KIB: u32 = 64 * 1024; // 64 MiB
+const BACKUP_KDF_T: u32 = 3;
+const BACKUP_KDF_P: u32 = 1;
+const BACKUP_SALT_LEN: usize = 16;
+const BACKUP_KEY_LEN: usize = 32;
+const BACKUP_XNONCE_LEN: usize = 24;
+
+/// Files at the root of `app_data_dir/` we attempt to back up. Missing
+/// entries are skipped quietly — a fresh install may not have a privacy.json
+/// or audit.log yet, and that's a valid backup. The list intentionally
+/// includes every file the spec calls out plus the optional `lan_org.json`
+/// / `window_state.json` / `disappearing.json` slots so a future feature
+/// addition picks them up automatically.
+const BACKUP_ROOT_FILES: &[&str] = &[
+    KEYS_FILE,
+    CONTACTS_FILE,
+    SESSIONS_FILE,
+    MESSAGES_FILE,
+    MLS_DIRECTORY_FILE,
+    ME_FILE,
+    RELAYS_FILE,
+    PRIVACY_FILE,
+    AUDIT_LOG_FILE,
+    "disappearing.json",
+    "lan_org.json",
+    "window_state.json",
+];
+
+/// Files inside the `mls_state/` subdirectory. Walked by name (rather than
+/// dir-listed) so the backup payload is deterministic across runs and
+/// future additions to the MLS storage backend show up explicitly here.
+const BACKUP_MLS_FILES: &[&str] = &["mls_state.bin", "mls_meta.json"];
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BackupMeta {
+    pub version: u8,
+    pub created_at: String,
+    pub item_count: u32,
+    pub host_label: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BackupResult {
+    pub path: String,
+    pub size_bytes: u64,
+    pub sha256_hex: String,
+    pub item_count: u32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RestoreResult {
+    pub items_restored: u32,
+    pub identity_replaced: bool,
+    pub requires_restart: bool,
+}
+
+/// On-disk layout of the unencrypted `wrapped-key.json` blob. Carries
+/// every parameter `verify_backup` / `import_backup` need to recreate the
+/// KEK and unwrap the data-key.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct WrappedKeyBlob {
+    version: u8,
+    kdf: String,
+    kdf_params: WrappedKeyKdfParams,
+    salt: String,
+    wrapped_data_key_nonce: String,
+    wrapped_data_key_ct: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct WrappedKeyKdfParams {
+    m: u32,
+    t: u32,
+    p: u32,
+}
+
+/// OS hostname best-effort. Used purely as a `host_label` UX hint inside
+/// `backup-meta.json` so the user can tell "alice-laptop" backups apart
+/// from "alice-desktop" ones in the file picker. Falls back to the
+/// platform default if the env var isn't set — never errors.
+fn detect_host_label() -> String {
+    if let Ok(h) = std::env::var("HOSTNAME") {
+        if !h.trim().is_empty() {
+            return h;
+        }
+    }
+    if let Ok(h) = std::env::var("COMPUTERNAME") {
+        if !h.trim().is_empty() {
+            return h;
+        }
+    }
+    if let Ok(h) = std::env::var("HOST") {
+        if !h.trim().is_empty() {
+            return h;
+        }
+    }
+    "phantomchat-host".to_string()
+}
+
+/// Derive a 32-byte KEK from passphrase + salt via Argon2id with the
+/// pinned OWASP 2023 params. Wraps the byte array in `Zeroize` semantics
+/// at the call site (caller is responsible for `key.zeroize()` after use).
+fn derive_kek(passphrase: &str, salt: &[u8]) -> Result<[u8; BACKUP_KEY_LEN], String> {
+    use argon2::{Algorithm, Argon2, Params, Version};
+    let params = Params::new(BACKUP_KDF_M_KIB, BACKUP_KDF_T, BACKUP_KDF_P, Some(BACKUP_KEY_LEN))
+        .map_err(|e| format!("argon2 params: {e}"))?;
+    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut out = [0u8; BACKUP_KEY_LEN];
+    argon
+        .hash_password_into(passphrase.as_bytes(), salt, &mut out)
+        .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?;
+    Ok(out)
+}
+
+/// Random fixed-length byte buffer via the AEAD-re-exported `OsRng`.
+fn random_bytes(len: usize) -> Vec<u8> {
+    let mut buf = vec![0u8; len];
+    AeadOsRng.fill_bytes(&mut buf);
+    buf
+}
+
+/// Encrypt `plaintext` with `key` + a fresh random nonce. Returns
+/// `(nonce_bytes, ciphertext_with_tag)`. The nonce is 24 bytes (XChaCha20)
+/// so collision probability across a single-user backup history is
+/// negligible (birthday bound ~2^96).
+fn aead_encrypt(key: &[u8; BACKUP_KEY_LEN], plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let cipher = XChaCha20Poly1305::new(key.into());
+    let nonce = XChaCha20Poly1305::generate_nonce(&mut AeadOsRng);
+    let ct = cipher
+        .encrypt(&nonce, plaintext)
+        .map_err(|e| format!("aead encrypt: {e}"))?;
+    Ok((nonce.to_vec(), ct))
+}
+
+/// Inverse of [`aead_encrypt`]. Returns the German error string on tag
+/// mismatch so the user sees the same passphrase-or-corruption hint
+/// regardless of which ciphertext fails first.
+fn aead_decrypt(key: &[u8; BACKUP_KEY_LEN], nonce: &[u8], ct: &[u8]) -> Result<Vec<u8>, String> {
+    if nonce.len() != BACKUP_XNONCE_LEN {
+        return Err(format!(
+            "nonce length mismatch: expected {} got {}",
+            BACKUP_XNONCE_LEN,
+            nonce.len()
+        ));
+    }
+    let cipher = XChaCha20Poly1305::new(key.into());
+    let nonce = XNonce::from_slice(nonce);
+    cipher
+        .decrypt(nonce, ct)
+        .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())
+}
+
+/// Read every backup-eligible file from `app_data_dir/` into an in-memory
+/// `(name, bytes)` list. The order is stable (root files first, then
+/// `mls_state/` entries) so two consecutive backups of an unchanged
+/// install round-trip to the same SHA256.
+fn collect_backup_payload(
+    data_dir: &std::path::Path,
+) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
+    for name in BACKUP_ROOT_FILES {
+        let p = data_dir.join(name);
+        if let Ok(bytes) = fs::read(&p) {
+            out.push(((*name).to_string(), bytes));
+        }
+    }
+    let mls_dir = data_dir.join(MLS_STATE_DIR);
+    if mls_dir.is_dir() {
+        for name in BACKUP_MLS_FILES {
+            let p = mls_dir.join(name);
+            if let Ok(bytes) = fs::read(&p) {
+                out.push((format!("{}/{}", MLS_STATE_DIR, name), bytes));
+            }
+        }
+    }
+    if out.is_empty() {
+        return Err(
+            "Keine Daten zum Sichern gefunden — bitte zuerst eine Identität erzeugen".into(),
+        );
+    }
+    Ok(out)
+}
+
+/// Build the `.pcbackup` archive in-memory and write it to `output_path`.
+/// Audit-log entry omits BOTH the passphrase and any key material — only
+/// the destination path + item count + sha256 hex are recorded. Any error
+/// returned is safe to surface verbatim to the React layer.
+fn write_backup_archive(
+    output_path: &std::path::Path,
+    payload: Vec<(String, Vec<u8>)>,
+    passphrase: &str,
+    host_label: String,
+) -> Result<BackupResult, String> {
+    use std::io::Write as IoWrite;
+    use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+    if passphrase.chars().count() < 12 {
+        return Err("Passphrase muss mindestens 12 Zeichen haben".into());
+    }
+
+    let item_count = payload.len() as u32;
+
+    // ── Generate keys + meta ────────────────────────────────────────────
+    let mut data_key = [0u8; BACKUP_KEY_LEN];
+    AeadOsRng.fill_bytes(&mut data_key);
+    let salt = random_bytes(BACKUP_SALT_LEN);
+    let mut kek = derive_kek(passphrase, &salt)?;
+
+    let (wrap_nonce, wrap_ct) = match aead_encrypt(&kek, &data_key) {
+        Ok(v) => v,
+        Err(e) => {
+            data_key.zeroize();
+            kek.zeroize();
+            return Err(e);
+        }
+    };
+
+    let wrapped = WrappedKeyBlob {
+        version: BACKUP_FORMAT_VERSION,
+        kdf: "argon2id".to_string(),
+        kdf_params: WrappedKeyKdfParams {
+            m: BACKUP_KDF_M_KIB,
+            t: BACKUP_KDF_T,
+            p: BACKUP_KDF_P,
+        },
+        salt: B64.encode(&salt),
+        wrapped_data_key_nonce: B64.encode(&wrap_nonce),
+        wrapped_data_key_ct: B64.encode(&wrap_ct),
+    };
+
+    let meta = BackupMeta {
+        version: BACKUP_FORMAT_VERSION,
+        created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        item_count,
+        host_label,
+    };
+
+    // ── Encrypt each payload entry into a per-file (nonce, ct) pair ─────
+    let mut encrypted: Vec<(String, Vec<u8>, Vec<u8>)> = Vec::with_capacity(payload.len());
+    for (name, bytes) in payload {
+        let result = aead_encrypt(&data_key, &bytes);
+        // Drop plaintext bytes ASAP — they may contain identity material.
+        drop(bytes);
+        match result {
+            Ok((nonce, ct)) => encrypted.push((name, nonce, ct)),
+            Err(e) => {
+                data_key.zeroize();
+                kek.zeroize();
+                return Err(e);
+            }
+        }
+    }
+    // Plaintext data-key + KEK are no longer needed — wipe before any
+    // further allocations / I/O so a panic during ZIP write can't leak.
+    data_key.zeroize();
+    kek.zeroize();
+
+    // ── Assemble ZIP ────────────────────────────────────────────────────
+    let mut zip_bytes: Vec<u8> = Vec::new();
+    {
+        let cursor = std::io::Cursor::new(&mut zip_bytes);
+        let mut zw = ZipWriter::new(cursor);
+        // Stored (no compression) — XChaCha ciphertext is incompressible
+        // and skipping deflate is markedly faster.
+        let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+
+        zw.start_file(BACKUP_META_FILENAME, opts)
+            .map_err(|e| format!("zip meta: {e}"))?;
+        zw.write_all(
+            &serde_json::to_vec_pretty(&meta).map_err(|e| format!("meta ser: {e}"))?,
+        )
+        .map_err(|e| format!("zip meta write: {e}"))?;
+
+        zw.start_file(BACKUP_WRAPPED_KEY_FILENAME, opts)
+            .map_err(|e| format!("zip wrapped-key: {e}"))?;
+        zw.write_all(
+            &serde_json::to_vec_pretty(&wrapped).map_err(|e| format!("wrapped ser: {e}"))?,
+        )
+        .map_err(|e| format!("zip wrapped-key write: {e}"))?;
+
+        for (name, nonce, ct) in &encrypted {
+            zw.start_file(format!("{}.nonce", name), opts)
+                .map_err(|e| format!("zip {name}.nonce: {e}"))?;
+            zw.write_all(nonce)
+                .map_err(|e| format!("zip {name}.nonce write: {e}"))?;
+            zw.start_file(format!("{}.ct", name), opts)
+                .map_err(|e| format!("zip {name}.ct: {e}"))?;
+            zw.write_all(ct)
+                .map_err(|e| format!("zip {name}.ct write: {e}"))?;
+        }
+        zw.finish().map_err(|e| format!("zip finish: {e}"))?;
+    }
+
+    // ── Persist + checksum ──────────────────────────────────────────────
+    if let Some(parent) = output_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
+        }
+    }
+    fs::write(output_path, &zip_bytes)
+        .map_err(|e| format!("write {}: {}", output_path.display(), e))?;
+
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(&zip_bytes);
+    let sha256_hex = hex::encode(hasher.finalize());
+
+    Ok(BackupResult {
+        path: output_path.to_string_lossy().to_string(),
+        size_bytes: zip_bytes.len() as u64,
+        sha256_hex,
+        item_count,
+    })
+}
+
+/// Open a `.pcbackup` archive and decode the unencrypted meta + wrapped-key
+/// blobs. Helper shared by `verify_backup` (no decryption) and
+/// `import_backup` (full decrypt path).
+fn open_backup_archive(
+    input_path: &std::path::Path,
+) -> Result<(BackupMeta, WrappedKeyBlob, zip::ZipArchive<std::io::Cursor<Vec<u8>>>), String> {
+    let bytes = fs::read(input_path)
+        .map_err(|e| format!("read {}: {}", input_path.display(), e))?;
+    let cursor = std::io::Cursor::new(bytes);
+    let mut zip = zip::ZipArchive::new(cursor).map_err(|_| {
+        "Falsche Passphrase oder beschädigtes Backup".to_string()
+    })?;
+
+    let meta: BackupMeta = {
+        let mut entry = zip
+            .by_name(BACKUP_META_FILENAME)
+            .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?;
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut buf)
+            .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?;
+        serde_json::from_slice(&buf)
+            .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?
+    };
+    if meta.version != BACKUP_FORMAT_VERSION {
+        return Err(format!(
+            "Backup-Version {} wird nicht unterstützt (erwartet {})",
+            meta.version, BACKUP_FORMAT_VERSION
+        ));
+    }
+
+    let wrapped: WrappedKeyBlob = {
+        let mut entry = zip
+            .by_name(BACKUP_WRAPPED_KEY_FILENAME)
+            .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?;
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut buf)
+            .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?;
+        serde_json::from_slice(&buf)
+            .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?
+    };
+    if wrapped.version != BACKUP_FORMAT_VERSION || wrapped.kdf != "argon2id" {
+        return Err("Falsche Passphrase oder beschädigtes Backup".into());
+    }
+
+    Ok((meta, wrapped, zip))
+}
+
+/// Argon2id-derive the KEK from `passphrase` + the wrapped blob's salt,
+/// then unwrap the data-key. Returns the 32-byte data-key on success;
+/// caller MUST `zeroize()` it after use.
+fn unwrap_data_key(
+    passphrase: &str,
+    wrapped: &WrappedKeyBlob,
+) -> Result<[u8; BACKUP_KEY_LEN], String> {
+    let salt = B64
+        .decode(&wrapped.salt)
+        .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?;
+    let nonce = B64
+        .decode(&wrapped.wrapped_data_key_nonce)
+        .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?;
+    let ct = B64
+        .decode(&wrapped.wrapped_data_key_ct)
+        .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?;
+    if salt.len() != BACKUP_SALT_LEN {
+        return Err("Falsche Passphrase oder beschädigtes Backup".into());
+    }
+    let mut kek = derive_kek(passphrase, &salt)?;
+    let data_key_vec = match aead_decrypt(&kek, &nonce, &ct) {
+        Ok(v) => v,
+        Err(e) => {
+            kek.zeroize();
+            return Err(e);
+        }
+    };
+    kek.zeroize();
+    if data_key_vec.len() != BACKUP_KEY_LEN {
+        return Err("Falsche Passphrase oder beschädigtes Backup".into());
+    }
+    let mut out = [0u8; BACKUP_KEY_LEN];
+    out.copy_from_slice(&data_key_vec);
+    // `data_key_vec` is the in-vector copy; wipe it before drop.
+    let mut dk = data_key_vec;
+    dk.zeroize();
+    Ok(out)
+}
+
+/// Tauri command: build a `.pcbackup` at `output_path`. The audit-log
+/// entry intentionally omits the passphrase + key material — only path,
+/// item count, and sha256 are recorded.
+#[tauri::command]
+async fn export_backup(
+    app: AppHandle,
+    output_path: String,
+    passphrase: String,
+) -> Result<BackupResult, String> {
+    let data_dir = app_data(&app).map_err(|e| e.to_string())?;
+    let payload = collect_backup_payload(&data_dir)?;
+    let host_label = detect_host_label();
+    let out_path = std::path::PathBuf::from(&output_path);
+
+    // Move the heavy Argon2 derive + AEAD work to a blocking pool so the
+    // UI thread doesn't hang for the full ~1s KDF on the IPC await.
+    let result = tokio::task::spawn_blocking(move || {
+        write_backup_archive(&out_path, payload, &passphrase, host_label)
+    })
+    .await
+    .map_err(|e| format!("export task join: {e}"))??;
+
+    audit(
+        &app,
+        "data",
+        "backup_exported",
+        serde_json::json!({
+            "path": result.path,
+            "size_bytes": result.size_bytes,
+            "sha256": result.sha256_hex,
+            "item_count": result.item_count,
+        }),
+    );
+    Ok(result)
+}
+
+/// Tauri command: open a `.pcbackup`, validate ZIP integrity + meta schema
+/// + KEK derivation. Does NOT decrypt the per-file payload — used by the
+/// restore UI to surface "Erstellt am X von Host Y, Z Einträge" before
+/// the user commits to overwriting their live state.
+#[tauri::command]
+async fn verify_backup(input_path: String, passphrase: String) -> Result<BackupMeta, String> {
+    let path = std::path::PathBuf::from(input_path);
+    tokio::task::spawn_blocking(move || {
+        let (meta, wrapped, _zip) = open_backup_archive(&path)?;
+        // Derive the KEK + unwrap the data-key as proof of passphrase.
+        // We immediately wipe the unwrapped key — verify is a metadata
+        // call only.
+        let mut data_key = unwrap_data_key(&passphrase, &wrapped)?;
+        data_key.zeroize();
+        Ok(meta)
+    })
+    .await
+    .map_err(|e| format!("verify task join: {e}"))?
+}
+
+/// Tauri command: decrypt every entry in `input_path` into a temp staging
+/// dir under `app_data`, then atomically swap them onto the live paths.
+/// Stops + restarts the relay listener around the swap so an in-flight
+/// `messages.json` write can't race the rename.
+#[tauri::command]
+async fn import_backup(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    input_path: String,
+    passphrase: String,
+) -> Result<RestoreResult, String> {
+    let data_dir = app_data(&app).map_err(|e| e.to_string())?;
+    let in_path = std::path::PathBuf::from(&input_path);
+
+    // ── Phase 1: decrypt into a temp staging dir ────────────────────────
+    let stage_dir = data_dir.join(format!(
+        ".pcbackup-restore-{}",
+        chrono::Utc::now().timestamp_millis()
+    ));
+    let stage_dir_clone = stage_dir.clone();
+    let decrypt_result = tokio::task::spawn_blocking(move || -> Result<u32, String> {
+        let (meta, wrapped, mut zip) = open_backup_archive(&in_path)?;
+        if meta.version != BACKUP_FORMAT_VERSION {
+            return Err(format!(
+                "Backup-Version {} wird nicht unterstützt",
+                meta.version
+            ));
+        }
+        let mut data_key = unwrap_data_key(&passphrase, &wrapped)?;
+
+        fs::create_dir_all(&stage_dir_clone)
+            .map_err(|e| format!("mkdir {}: {}", stage_dir_clone.display(), e))?;
+
+        // Walk the archive once, pairing `<name>.nonce` + `<name>.ct`
+        // entries via a HashMap so we don't depend on ZIP entry order.
+        let mut nonces: std::collections::HashMap<String, Vec<u8>> =
+            std::collections::HashMap::new();
+        let mut cts: std::collections::HashMap<String, Vec<u8>> =
+            std::collections::HashMap::new();
+        for i in 0..zip.len() {
+            let mut entry = match zip.by_index(i) {
+                Ok(e) => e,
+                Err(e) => {
+                    data_key.zeroize();
+                    return Err(format!("zip entry {i}: {e}"));
+                }
+            };
+            let name = entry.name().to_string();
+            if name == BACKUP_META_FILENAME || name == BACKUP_WRAPPED_KEY_FILENAME {
+                continue;
+            }
+            let mut buf = Vec::new();
+            if let Err(e) = std::io::Read::read_to_end(&mut entry, &mut buf) {
+                data_key.zeroize();
+                return Err(format!("read entry {name}: {e}"));
+            }
+            if let Some(stem) = name.strip_suffix(".nonce") {
+                nonces.insert(stem.to_string(), buf);
+            } else if let Some(stem) = name.strip_suffix(".ct") {
+                cts.insert(stem.to_string(), buf);
+            } else {
+                // Unknown entry — ignore (forward-compat for v2+ adds).
+            }
+        }
+
+        let mut count: u32 = 0;
+        for (stem, ct) in &cts {
+            let nonce = match nonces.get(stem) {
+                Some(n) => n,
+                None => {
+                    data_key.zeroize();
+                    return Err(format!("Backup beschädigt: nonce für '{stem}' fehlt"));
+                }
+            };
+            let plaintext = match aead_decrypt(&data_key, nonce, ct) {
+                Ok(p) => p,
+                Err(e) => {
+                    data_key.zeroize();
+                    return Err(e);
+                }
+            };
+            // Reject any path traversal — backup must address files
+            // *under* app_data only.
+            if stem.contains("..") || stem.starts_with('/') || stem.contains('\\') {
+                data_key.zeroize();
+                return Err(format!("Backup beschädigt: ungültiger Pfad '{stem}'"));
+            }
+            let dest = stage_dir_clone.join(stem);
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
+            }
+            fs::write(&dest, &plaintext)
+                .map_err(|e| format!("write {}: {}", dest.display(), e))?;
+            count += 1;
+        }
+
+        data_key.zeroize();
+        Ok(count)
+    })
+    .await
+    .map_err(|e| format!("import task join: {e}"))?;
+
+    let items_restored = match decrypt_result {
+        Ok(n) => n,
+        Err(e) => {
+            // Decryption failed — wipe the half-built stage dir before
+            // returning so we don't leave plaintext on disk.
+            let _ = fs::remove_dir_all(&stage_dir);
+            return Err(e);
+        }
+    };
+
+    // ── Phase 2: stop the listener for the swap ─────────────────────────
+    // Take the prior subscriber handle out of the AppState slot, signal
+    // shutdown, await with a 3s timeout (mirrors `restart_listener`).
+    let prev = {
+        let mut slot = state.subscriber.lock().await;
+        slot.take()
+    };
+    if let Some(ListenerControl { mut handle, shutdown_tx }) = prev {
+        let _ = shutdown_tx.send(());
+        match tokio::time::timeout(std::time::Duration::from_secs(3), &mut handle).await {
+            Ok(_) => {}
+            Err(_) => {
+                handle.abort();
+            }
+        }
+    }
+    // Drop the in-memory MLS bundle so the next `mls_init` rehydrates
+    // from the freshly restored `mls_state/` files.
+    {
+        if let Ok(mut slot) = state.mls.lock() {
+            *slot = None;
+        }
+    }
+
+    // ── Phase 3: atomic swap ────────────────────────────────────────────
+    // Walk the stage dir, copy each file onto its live path. We use
+    // `fs::rename` first (atomic on the same filesystem) and fall back
+    // to copy + remove_file if rename fails (cross-device).
+    fn swap_into(src_root: &std::path::Path, dst_root: &std::path::Path) -> Result<(), String> {
+        let entries = fs::read_dir(src_root)
+            .map_err(|e| format!("read_dir {}: {}", src_root.display(), e))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("read_dir entry: {e}"))?;
+            let name = entry.file_name();
+            let src = entry.path();
+            let dst = dst_root.join(&name);
+            if src.is_dir() {
+                fs::create_dir_all(&dst)
+                    .map_err(|e| format!("mkdir {}: {}", dst.display(), e))?;
+                swap_into(&src, &dst)?;
+                let _ = fs::remove_dir(&src);
+            } else {
+                // Best-effort atomic rename. `fs::rename` overwrites on
+                // POSIX; on Windows it returns an error if `dst` exists,
+                // so we remove first.
+                let _ = fs::remove_file(&dst);
+                if let Err(_e) = fs::rename(&src, &dst) {
+                    fs::copy(&src, &dst)
+                        .map_err(|e| format!("copy {} -> {}: {}", src.display(), dst.display(), e))?;
+                    let _ = fs::remove_file(&src);
+                }
+            }
+        }
+        Ok(())
+    }
+    let swap_result = swap_into(&stage_dir, &data_dir);
+    let _ = fs::remove_dir_all(&stage_dir);
+    swap_result?;
+
+    // ── Phase 4: restart the listener with the restored config ──────────
+    // Mark started=true so a parallel `start_listener` becomes a no-op,
+    // then spawn the task with the freshly-restored `relays.json` /
+    // `privacy.json`.
+    {
+        if let Ok(mut started) = state.listener_started.lock() {
+            *started = true;
+        }
+    }
+    let _ = spawn_listener_task(app.clone(), &state, None).await;
+
+    // Tell the React layer to drop and reload everything from disk.
+    let _ = app.emit("app_data_replaced", ());
+
+    audit(
+        &app,
+        "data",
+        "backup_imported",
+        serde_json::json!({
+            "items_restored": items_restored,
+        }),
+    );
+
+    Ok(RestoreResult {
+        items_restored,
+        identity_replaced: true,
+        requires_restart: false,
+    })
 }
