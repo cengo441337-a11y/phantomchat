@@ -43,3 +43,11 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Android release-signing material — NEVER commit these.
+# Generated keystore lives outside the repo (~/.android/phantomchat-release.jks);
+# key.properties holds the path + password and must stay local-only.
+# The .template file IS tracked so contributors can see the expected schema.
+/android/key.properties
+**/*.keystore
+**/*.jks
