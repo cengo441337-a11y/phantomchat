@@ -73,6 +73,24 @@
     "nav": {
       "back": "Zurück",
       "next": "Weiter"
+    },
+    "lan": {
+      "header": "Bestehender LAN-Organisation beitreten (optional)",
+      "description": "Falls Ihre Kolleginnen und Kollegen PhantomChat bereits im selben Netzwerk verwenden, fügen Sie hier den 6-stelligen Organisationscode ein, den sie Ihnen mitgeteilt haben. Wir erkennen die übrigen Teilnehmer dann automatisch im Hintergrund.",
+      "skip_button": "Überspringen — Einzelnutzer / Remote-Einrichtung",
+      "join_button": "Mit Code beitreten",
+      "create_button": "Neue LAN-Organisation erstellen",
+      "creating": "Wird erstellt…",
+      "confirm_join_button": "Beitreten",
+      "joining": "Wird beigetreten…",
+      "code_placeholder": "XXX-XXX",
+      "your_code_label": "Ihr Organisationscode",
+      "copy_button": "Code kopieren",
+      "copied_button": "Kopiert!",
+      "share_with_colleagues": "Teilen Sie diesen Code Ihren Kolleginnen und Kollegen während deren Einrichtung mit. Sie geben ihn im selben Schritt auf ihren Geräten ein.",
+      "discovering_in_background": "Teilnehmer werden im Hintergrund erkannt…",
+      "skipped_message": "Übersprungen — Sie können später unter Einstellungen → LAN-Organisation beitreten.",
+      "warning": "Achtung: Verwenden Sie diese Funktion nur in vertrauenswürdigen Büronetzwerken. mDNS sendet Ihre Adresse an alle Geräte im LAN. Bitte nicht in öffentlichen WLANs aktivieren (Cafés, Hotels, Konferenzen)."
     }
   },
   "settings": {
@@ -158,6 +176,24 @@
       "cancel_button": "Abbrechen",
       "must_type_delete": "Bitte geben Sie zur Bestätigung exakt DELETE ein",
       "wipe_failed": "Löschen fehlgeschlagen: {{error}}"
+    },
+    "lan": {
+      "title": "LAN-Organisation",
+      "description": "Zero-Touch-Erkennung von Teilnehmern für Büronetzwerke. Wer im selben Netzwerk PhantomChat mit demselben 6-stelligen Organisationscode betreibt, wird automatisch als Kontakt hinzugefügt.",
+      "code_label": "Organisationscode",
+      "peer_count_label": "erkannte Teilnehmer",
+      "last_discovery_label": "letzte Erkennung",
+      "show_code_button": "Code anzeigen",
+      "hide_code_button": "Code verbergen",
+      "copy_button": "Kopieren",
+      "copied_button": "Kopiert!",
+      "leave_button": "LAN-Organisation verlassen",
+      "code_placeholder": "XXX-XXX",
+      "join_button": "Beitreten",
+      "joining": "Wird beigetreten…",
+      "create_button": "Neu erstellen",
+      "creating": "Wird erstellt…",
+      "warning": "Achtung: Verwenden Sie diese Funktion nur in vertrauenswürdigen Büronetzwerken. mDNS sendet Ihre Adresse an alle Geräte im LAN. Bitte nicht in öffentlichen WLANs aktivieren (Cafés, Hotels, Konferenzen)."
     }
   },
   "contacts_pane": {

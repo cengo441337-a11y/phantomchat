@@ -31,6 +31,13 @@ dirs         = "5"
 x25519-dalek = "2.0"
 chrono       = { version = "0.4", default-features = false, features = ["clock"] }
 qrcodegen    = "1.8"
+# Pure-Rust mDNS responder + browser used for zero-touch LAN org discovery.
+# No system mdns daemon required; runs its own ServiceDaemon on UDP 5353.
+mdns-sd      = "0.13"
+# CSPRNG for the 6-character LAN org code generator. `OsRng` + `gen_range`
+# (rand 0.8 API) gives us a uniformly-random pick from the unambiguous-
+# alphabet table without pulling in a heavier crypto-rng dep.
+rand         = "0.8"
 
 # Same feature subset as the CLI: envelope/scanner/session + the libp2p/Nostr
 # net + MLS group stack, but no Flutter FFI bridge or SQLCipher.
