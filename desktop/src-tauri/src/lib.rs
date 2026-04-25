@@ -2948,6 +2948,33 @@ fn maybe_notify(app: &AppHandle, title: &str, body: &str) {
         .show();
 }
 
+/// High-importance "you were mentioned" notification, fired by the
+/// frontend when an incoming MLS message contains `@<my-label>` or
+/// `@<my-sigpub[..8]>`. Distinct from `maybe_notify` because:
+///   1. It always fires — even when the window is focused — so the user
+///      gets the system-shelf entry as a permanent record.
+///   2. The title is prefixed with a bell glyph + localised "Mentioned
+///      by …" so the user can distinguish the row from a regular MLS
+///      message in their notification centre.
+/// The body is hard-truncated to 80 chars (mirrors `maybe_notify`).
+#[tauri::command]
+fn notify_mention(app: AppHandle, from_label: String, body: String) -> Result<(), String> {
+    let title = format!("\u{1F514} Erwähnt von {}", from_label);
+    let truncated: String = if body.chars().count() > 80 {
+        let mut s: String = body.chars().take(80).collect();
+        s.push('\u{2026}');
+        s
+    } else {
+        body
+    };
+    app.notification()
+        .builder()
+        .title(title)
+        .body(&truncated)
+        .show()
+        .map_err(|e| e.to_string())
+}
+
 // ── Settings + onboarding commands ───────────────────────────────────────────
 
 const ONBOARDED_MARKER: &str = "onboarded";
@@ -3189,6 +3216,7 @@ pub fn run() {
             export_audit_log,
             check_for_updates,
             install_update,
+            notify_mention,
         ])
         .setup(|app| {
             // Pre-create the data dir on first launch so command handlers

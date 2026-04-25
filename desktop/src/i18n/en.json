@@ -302,5 +302,11 @@
     "loading": "loading qr…",
     "copy": "copy address",
     "copied": "copied!"
+  },
+  "mention": {
+    "header": "mention member",
+    "empty": "(no matching members)",
+    "aria_label": "Mention a group member",
+    "notify_title": "Mentioned by {{label}}"
   }
 }
