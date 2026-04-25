@@ -182,10 +182,23 @@ pub struct IncomingMessage {
     /// monotonically (never downgrades read → delivered).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery_state: Option<String>,
+    /// Per-message "pinned" affordance. Persisted on the row itself so a
+    /// reload preserves user intent. `false` (default) is omitted from
+    /// the on-disk JSON so legacy rows round-trip cleanly.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pinned: bool,
+    /// Per-message "starred" / favourite affordance. Same persistence
+    /// + back-compat strategy as `pinned`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub starred: bool,
 }
 
 fn default_direction() -> String {
     "incoming".to_string()
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Metadata describing one file payload — mirrored 1:1 with the TS
@@ -207,6 +220,13 @@ pub struct FileMeta {
     /// vacuously trusts its own bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256_ok: Option<bool>,
+    /// MIME guess from the file's extension (matches the value stored in
+    /// the wire `FileManifest.mime`). Used by the React side to branch
+    /// between inline-image rendering and the generic 📎 link. Optional +
+    /// skip-if-none keeps legacy persisted file rows round-tripping
+    /// cleanly without a migration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
 }
 
 // ── MLS wire types ───────────────────────────────────────────────────────────
@@ -1453,6 +1473,8 @@ async fn spawn_listener_task(
                         file_meta: None,
                         msg_id: Some(msg_id.clone()),
                         delivery_state: None,
+                        pinned: false,
+                        starred: false,
                     };
                     maybe_notify(
                         &app,
@@ -3189,6 +3211,19 @@ pub fn run() {
             export_audit_log,
             check_for_updates,
             install_update,
+            // ── Wave 8G: pin / star / archive ───────────────────────
+            pin_message,
+            unpin_message,
+            star_message,
+            unstar_message,
+            archive_conversation,
+            unarchive_conversation,
+            pin_conversation,
+            unpin_conversation,
+            get_conversation_state,
+            list_pinned_messages,
+            list_starred_messages,
+            list_archived_conversations,
         ])
         .setup(|app| {
             // Pre-create the data dir on first launch so command handlers
@@ -3314,6 +3349,11 @@ pub struct FileSendResult {
     pub filename: String,
     pub size: u64,
     pub sha256_hex: String,
+    /// MIME guess from the file's extension, mirrored from the wire
+    /// manifest. Empty for legacy callers — `serde` skips the field on
+    /// emit when `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
 }
 
 /// Payload for the `file_received` event. Mirrored 1:1 by TS
@@ -3331,6 +3371,11 @@ pub struct FileReceivedEvent {
     /// surface the same "bind unknown sender" affordance for files.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sender_pub_hex: Option<String>,
+    /// MIME hint copied from the wire manifest. Lets the React side decide
+    /// between inline-image render vs the generic 📎 affordance without
+    /// having to re-derive it from the extension.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
 }
 
 /// 1024-base human size, mirrors the CLI's `cli/src/file_cmd.rs::human_bytes`.
@@ -3460,7 +3505,7 @@ fn build_file_payload(filename: &str, bytes: &[u8]) -> Result<(Vec<u8>, FileSend
     let manifest = FileManifest {
         filename: basename.clone(),
         size,
-        mime,
+        mime: mime.clone(),
         sha256_hex: sha256_hex.clone(),
     };
     let meta_json = serde_json::to_vec(&manifest)
@@ -3477,6 +3522,7 @@ fn build_file_payload(filename: &str, bytes: &[u8]) -> Result<(Vec<u8>, FileSend
             filename: basename,
             size,
             sha256_hex,
+            mime: Some(mime),
         },
     ))
 }
@@ -3668,7 +3714,10 @@ fn handle_incoming_file_v1(
         &format!("{} ({})", safe_name, human_size(manifest.size)),
     );
 
-    // 8. Emit the structured event for the React side.
+    // 8. Emit the structured event for the React side. We pass the wire
+    // manifest's MIME along so the renderer can branch on `image/*` vs
+    // anything else without having to re-derive it from the extension on
+    // the JS side.
     let event = FileReceivedEvent {
         from_label,
         filename: safe_name,
@@ -3678,6 +3727,7 @@ fn handle_incoming_file_v1(
         sha256_hex: manifest.sha256_hex,
         ts: chrono::Local::now().format("%H:%M:%S").to_string(),
         sender_pub_hex,
+        mime: Some(manifest.mime),
     };
     let _ = app.emit("file_received", event);
 }
@@ -4036,4 +4086,285 @@ async fn typing_ping(app: AppHandle, contact_label: String) -> Result<(), String
     send_sealed_to_address(&app, &contact.address, &payload)
         .await
         .map_err(|e| format!("relay send: {e}"))
+}
+
+// ── Wave 8G: Pin / Star (per-message) + Archive (per-conversation) ─────────
+//
+// Per-message pin/star bits live inline on `IncomingMessage`, persisted
+// alongside the rest of the row in `messages.json`. Per-conversation state
+// lives in a separate `conversation_state.json` map keyed by contact label
+// so a conversation can be archived/pinned/muted without touching message
+// history. Schema:
+//
+//   {
+//     "alice": { "archived": false, "pinned": true,  "muted": false },
+//     "bob":   { "archived": true,  "pinned": false, "muted": false }
+//   }
+//
+// All mutations re-use `state.history_lock` so a concurrent `save_history`
+// burst can't half-write the underlying files.
+
+const CONVERSATION_STATE_FILE: &str = "conversation_state.json";
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ConversationState {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub archived: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pinned: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub muted: bool,
+}
+
+fn conversation_state_path(app: &AppHandle) -> anyhow::Result<PathBuf> {
+    Ok(app_data(app)?.join(CONVERSATION_STATE_FILE))
+}
+
+/// Load `conversation_state.json` into an in-memory map. Lenient: a
+/// corrupt or missing file resolves to an empty map so the UI can keep
+/// rendering instead of bricking on a malformed JSON edit.
+fn load_conversation_state(
+    app: &AppHandle,
+) -> std::collections::BTreeMap<String, ConversationState> {
+    let path = match conversation_state_path(app) {
+        Ok(p) => p,
+        Err(_) => return Default::default(),
+    };
+    if !path.exists() {
+        return Default::default();
+    }
+    let raw = match fs::read(&path) {
+        Ok(b) => b,
+        Err(_) => return Default::default(),
+    };
+    serde_json::from_slice(&raw).unwrap_or_default()
+}
+
+fn save_conversation_state(
+    app: &AppHandle,
+    map: &std::collections::BTreeMap<String, ConversationState>,
+) -> Result<(), String> {
+    let path = conversation_state_path(app).map_err(|e| e.to_string())?;
+    let buf = serde_json::to_vec_pretty(map).map_err(|e| e.to_string())?;
+    fs::write(&path, buf).map_err(|e| format!("write {}: {}", path.display(), e))
+}
+
+/// Per-message-state-change event payload. Mirrors TS
+/// `MessageStateChangedEvent`. Fired by `pin_message` / `unpin_message` /
+/// `star_message` / `unstar_message` so the React reducer can update the
+/// in-memory `messages` array without reloading the whole history.
+#[derive(Clone, Debug, Serialize)]
+pub struct MessageStateChangedEvent {
+    pub msg_id: String,
+    pub pinned: bool,
+    pub starred: bool,
+}
+
+/// Per-conversation-state-change event payload. Mirrors TS
+/// `ConversationStateChangedEvent`.
+#[derive(Clone, Debug, Serialize)]
+pub struct ConversationStateChangedEvent {
+    pub contact_label: String,
+    pub state: ConversationState,
+}
+
+/// Mutate the persisted message row matching `msg_id` via `mutator`,
+/// re-write `messages.json`, and emit the matching `message_state_changed`
+/// event. Returns `Err` if the row isn't found so the React side can show
+/// a clear "row no longer exists" message rather than failing silently.
+fn mutate_message_state<F>(
+    app: &AppHandle,
+    state: &AppState,
+    msg_id: &str,
+    mutator: F,
+) -> Result<(), String>
+where
+    F: Fn(&mut IncomingMessage),
+{
+    let _guard = state.history_lock.lock().map_err(|e| e.to_string())?;
+    let path = messages_path(app).map_err(|e| e.to_string())?;
+    let mut history: Vec<IncomingMessage> = if path.exists() {
+        let raw = fs::read(&path).map_err(|e| format!("read {}: {}", path.display(), e))?;
+        serde_json::from_slice(&raw).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let mut hit = None;
+    for m in history.iter_mut() {
+        if m.msg_id.as_deref() == Some(msg_id) {
+            mutator(m);
+            hit = Some((m.pinned, m.starred));
+            break;
+        }
+    }
+    let (pinned, starred) =
+        hit.ok_or_else(|| format!("msg_id '{msg_id}' not found in history"))?;
+    let buf = serde_json::to_vec_pretty(&history).map_err(|e| e.to_string())?;
+    fs::write(&path, buf).map_err(|e| format!("write {}: {}", path.display(), e))?;
+    drop(_guard);
+    let _ = app.emit(
+        "message_state_changed",
+        MessageStateChangedEvent {
+            msg_id: msg_id.to_string(),
+            pinned,
+            starred,
+        },
+    );
+    Ok(())
+}
+
+/// Mutate `conversation_state.json` for the named contact via `mutator`,
+/// persist, and emit `conversation_state_changed`. Inserts a default
+/// `ConversationState` if the contact has no entry yet so a first-time
+/// archive/pin/mute lands cleanly.
+fn mutate_conversation_state<F>(
+    app: &AppHandle,
+    state: &AppState,
+    contact_label: &str,
+    mutator: F,
+) -> Result<(), String>
+where
+    F: Fn(&mut ConversationState),
+{
+    let _guard = state.history_lock.lock().map_err(|e| e.to_string())?;
+    let mut map = load_conversation_state(app);
+    let entry = map.entry(contact_label.to_string()).or_default();
+    mutator(entry);
+    let snapshot = entry.clone();
+    save_conversation_state(app, &map)?;
+    drop(_guard);
+    let _ = app.emit(
+        "conversation_state_changed",
+        ConversationStateChangedEvent {
+            contact_label: contact_label.to_string(),
+            state: snapshot,
+        },
+    );
+    Ok(())
+}
+
+#[tauri::command]
+async fn pin_message(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    msg_id: String,
+) -> Result<(), String> {
+    mutate_message_state(&app, &state, &msg_id, |m| m.pinned = true)
+}
+
+#[tauri::command]
+async fn unpin_message(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    msg_id: String,
+) -> Result<(), String> {
+    mutate_message_state(&app, &state, &msg_id, |m| m.pinned = false)
+}
+
+#[tauri::command]
+async fn star_message(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    msg_id: String,
+) -> Result<(), String> {
+    mutate_message_state(&app, &state, &msg_id, |m| m.starred = true)
+}
+
+#[tauri::command]
+async fn unstar_message(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    msg_id: String,
+) -> Result<(), String> {
+    mutate_message_state(&app, &state, &msg_id, |m| m.starred = false)
+}
+
+#[tauri::command]
+async fn archive_conversation(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    contact_label: String,
+) -> Result<(), String> {
+    mutate_conversation_state(&app, &state, &contact_label, |s| s.archived = true)
+}
+
+#[tauri::command]
+async fn unarchive_conversation(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    contact_label: String,
+) -> Result<(), String> {
+    mutate_conversation_state(&app, &state, &contact_label, |s| s.archived = false)
+}
+
+#[tauri::command]
+async fn pin_conversation(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    contact_label: String,
+) -> Result<(), String> {
+    mutate_conversation_state(&app, &state, &contact_label, |s| s.pinned = true)
+}
+
+#[tauri::command]
+async fn unpin_conversation(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    contact_label: String,
+) -> Result<(), String> {
+    mutate_conversation_state(&app, &state, &contact_label, |s| s.pinned = false)
+}
+
+/// Snapshot of the entire `conversation_state.json` map. The frontend
+/// hydrates the `Map<label, ConversationState>` from this on cold start
+/// and then patches in-place via `conversation_state_changed` events.
+#[tauri::command]
+fn get_conversation_state(
+    app: AppHandle,
+) -> Result<std::collections::BTreeMap<String, ConversationState>, String> {
+    Ok(load_conversation_state(&app))
+}
+
+/// Return all pinned messages from the persisted history. Optional
+/// `contact_label` restricts to a single conversation — used by the
+/// MessageStream header's "📌 Pinned (N)" drawer. Order: oldest-first
+/// (history is already chronological), so pins read top-to-bottom in the
+/// drawer and the click-to-jump scroll lands on the right row.
+#[tauri::command]
+async fn list_pinned_messages(
+    app: AppHandle,
+    contact_label: Option<String>,
+) -> Result<Vec<IncomingMessage>, String> {
+    let history = load_history(app)?;
+    Ok(history
+        .into_iter()
+        .filter(|m| m.pinned)
+        .filter(|m| {
+            contact_label
+                .as_deref()
+                .map(|lbl| m.sender_label == lbl)
+                .unwrap_or(true)
+        })
+        .collect())
+}
+
+/// All starred messages across every conversation — backs the global
+/// "⭐ Starred" drawer.
+#[tauri::command]
+async fn list_starred_messages(app: AppHandle) -> Result<Vec<IncomingMessage>, String> {
+    let history = load_history(app)?;
+    Ok(history.into_iter().filter(|m| m.starred).collect())
+}
+
+/// All currently-archived contact labels. Used by the Settings panel's
+/// "Archiv" section + by ContactsPane to split archived contacts into
+/// their own collapsible group.
+#[tauri::command]
+async fn list_archived_conversations(app: AppHandle) -> Result<Vec<String>, String> {
+    let map = load_conversation_state(&app);
+    Ok(map
+        .into_iter()
+        .filter(|(_, s)| s.archived)
+        .map(|(k, _)| k)
+        .collect())
 }

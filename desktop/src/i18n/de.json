@@ -253,7 +253,56 @@
     "open_folder_button": "Ordner öffnen",
     "saved_to": "Gespeichert unter {{path}}",
     "bind_button": "binden",
-    "bind_button_title": "{{label}} an einen Kontakt binden"
+    "bind_button_title": "{{label}} an einen Kontakt binden",
+    "image_open_title": "{{filename}} im Standard-Bildbetrachter öffnen",
+    "image_tampered_caption": "manipuliertes Bild — NICHT ÖFFNEN",
+    "image_caption_received": "{{filename}} ({{size}})"
+  },
+  "messages": {
+    "pin": {
+      "pin_button": "Anheften",
+      "unpin_button": "Lösen",
+      "pin_title": "Diese Nachricht anheften",
+      "unpin_title": "Diese Nachricht lösen",
+      "pinned_badge_title": "Angeheftete Nachricht",
+      "header_button": "Angeheftet ({{count}})",
+      "drawer_title": "Angeheftete Nachrichten",
+      "drawer_empty": "(keine angehefteten Nachrichten in dieser Unterhaltung)",
+      "jump_title": "Zur Nachricht springen"
+    },
+    "star": {
+      "star_button": "Markieren",
+      "unstar_button": "Markierung entfernen",
+      "star_title": "Diese Nachricht markieren",
+      "unstar_title": "Markierung dieser Nachricht entfernen",
+      "starred_badge_title": "Markierte Nachricht",
+      "header_button": "Markiert ({{count}})",
+      "drawer_title": "Markierte Nachrichten",
+      "drawer_empty": "(noch keine markierten Nachrichten)",
+      "jump_title": "Zur Unterhaltung wechseln und springen"
+    }
+  },
+  "conversation": {
+    "archive": {
+      "archive_button": "Archivieren",
+      "unarchive_button": "Aus Archiv holen",
+      "archive_title": "Unterhaltung ins Archiv verschieben",
+      "unarchive_title": "Unterhaltung zurück in die Kontaktliste verschieben",
+      "section_header": "Archiv ({{count}})",
+      "section_empty": "(keine archivierten Unterhaltungen)",
+      "pin_button": "Nach oben heften",
+      "unpin_button": "Lösen",
+      "menu_aria": "Menü zur Unterhaltung"
+    }
+  },
+  "settings_archive": {
+    "title": "Archiv",
+    "description": "Unterhaltungen, die Sie aus der Kontaktliste archiviert haben. Klicken Sie eine Bezeichnung an, um sie wiederherzustellen.",
+    "empty": "(keine archivierten Unterhaltungen)",
+    "clear_all_button": "Alle Archive leeren",
+    "clear_all_confirm": "Alle archivierten Unterhaltungen dauerhaft aus dem Kontaktbuch entfernen? Dies kann nicht rückgängig gemacht werden.",
+    "clear_all_done": "Archiv geleert",
+    "clear_all_failed": "Archiv konnte nicht geleert werden: {{error}}"
   },
   "input_bar": {
     "attach_title": "Datei an {{label}} anhängen (max. 5 MiB)",

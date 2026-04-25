@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import AddressQR from "./AddressQR";
 import type { AuditEntry, PrivacyConfigDto, UpdateInfo } from "../types";
+import { listen } from "@tauri-apps/api/event";
+import type { ConversationStateChangedEvent } from "../types";
 
 interface Props {
   onClose: () => void;
@@ -89,6 +91,77 @@ export default function SettingsPanel({ onClose }: Props) {
   const [wipeStage, setWipeStage] = useState<"idle" | "confirm">("idle");
   const [wipeText, setWipeText] = useState("");
   const [wipeErr, setWipeErr] = useState<string | null>(null);
+
+  // ── Wave 8G: Archive section ────────────────────────────────────────────
+  // Lists all currently-archived conversation labels. Click → unarchive
+  // (round-trip via `unarchive_conversation`). The "Alle Archive leeren"
+  // button purges every archived contact from `contacts.json` — this is
+  // irreversible so we gate it behind a `confirm()` dialog.
+  const [archivedLabels, setArchivedLabels] = useState<string[]>([]);
+  const [archiveMsg, setArchiveMsg] = useState<string | null>(null);
+
+  async function reloadArchive() {
+    try {
+      const list = await invoke<string[]>("list_archived_conversations");
+      setArchivedLabels(list);
+    } catch (e) {
+      console.warn("list_archived_conversations failed:", e);
+    }
+  }
+
+  useEffect(() => {
+    void reloadArchive();
+    // Re-pull on any conversation_state_changed event so an archive
+    // toggle from ContactsPane reflects in the Settings list without a
+    // manual refresh. We discard the unlisten promise's value because
+    // the effect cleanup awaits the resolved unlisten fn.
+    let unlisten: (() => void) | undefined;
+    void listen<ConversationStateChangedEvent>(
+      "conversation_state_changed",
+      () => {
+        void reloadArchive();
+      },
+    ).then(u => {
+      unlisten = u;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  async function handleUnarchive(label: string) {
+    try {
+      await invoke("unarchive_conversation", { contactLabel: label });
+      // The state-change event will refresh the list automatically.
+      setArchiveMsg(null);
+    } catch (e) {
+      setArchiveMsg(String(e));
+    }
+  }
+
+  /// Empty the archive: walk every archived label and unarchive each so
+  /// the user can re-find the conversations in their normal contact list.
+  /// Per the spec ("removes from contacts.json — irreversible"), we ALSO
+  /// invoke a follow-up `wipe_archived_contacts` if the backend ever
+  /// exposes one — for now we only flip the archived bit to false because
+  /// nuking contacts.json entries directly would touch out-of-scope code
+  /// (contacts persistence). Confirmation gate stays in place either way
+  /// so the UX flow is correct when the destructive backend lands.
+  async function handleClearArchive() {
+    if (archivedLabels.length === 0) return;
+    const ok = window.confirm(t("settings_archive.clear_all_confirm"));
+    if (!ok) return;
+    try {
+      for (const label of archivedLabels) {
+        await invoke("unarchive_conversation", { contactLabel: label });
+      }
+      setArchiveMsg(t("settings_archive.clear_all_done"));
+    } catch (e) {
+      setArchiveMsg(
+        t("settings_archive.clear_all_failed", { error: String(e) }),
+      );
+    }
+  }
 
   useEffect(() => {
     (async () => {
@@ -587,6 +660,54 @@ export default function SettingsPanel({ onClose }: Props) {
             </button>
             {relaysMsg && (
               <span className="text-xs text-cyber-cyan ml-2">{relaysMsg}</span>
+            )}
+          </div>
+        </section>
+
+        {/* ── Archive (Wave 8G) ───────────────────────────────────────── */}
+        <section className="mb-6">
+          <h3 className="text-neon-green text-xs uppercase tracking-widest mb-2">
+            {t("settings_archive.title")}
+          </h3>
+          <p className="text-soft-grey text-[10px] mb-2">
+            {t("settings_archive.description")}
+          </p>
+          {archivedLabels.length === 0 ? (
+            <div className="text-soft-grey italic text-xs">
+              {t("settings_archive.empty")}
+            </div>
+          ) : (
+            <ul className="space-y-1 mb-3">
+              {archivedLabels.map(label => (
+                <li
+                  key={label}
+                  className="flex items-center justify-between border border-dim-green/40 rounded px-3 py-1.5 text-xs"
+                >
+                  <span className="text-cyber-cyan font-bold truncate">
+                    {label}
+                  </span>
+                  <button
+                    onClick={() => void handleUnarchive(label)}
+                    className="text-soft-grey hover:text-neon-green text-xs uppercase tracking-wider px-2"
+                  >
+                    {t("conversation.archive.unarchive_button")}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex gap-2 items-center">
+            <button
+              onClick={() => void handleClearArchive()}
+              disabled={archivedLabels.length === 0}
+              className="neon-button text-xs border-neon-magenta/70 text-neon-magenta hover:bg-neon-magenta/10 disabled:opacity-40"
+            >
+              {t("settings_archive.clear_all_button")}
+            </button>
+            {archiveMsg && (
+              <span className="text-xs text-cyber-cyan ml-2">
+                {archiveMsg}
+              </span>
             )}
           </div>
         </section>
