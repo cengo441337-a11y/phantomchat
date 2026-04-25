@@ -2,12 +2,138 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─────────────────────────────────────────────────────────────────────────
+   Theme system — CSS-variable backed.
+
+   Three themes total:
+     - cyberpunk   (default — neon-green / magenta on near-black, CRT scanlines)
+     - light       (soft light bg, professional teal/purple/cyan accents)
+     - corporate   (near-monochrome white-on-grey + cobalt accent)
+
+   The active theme is set on <html data-theme="…"> by ThemeSwitcher.tsx,
+   defaulting to "cyberpunk" via the `[data-theme="cyberpunk"], :root`
+   selector below so a fresh DOM (before the JS hook runs) still renders
+   the original cyberpunk look — zero FOUC.
+
+   Tailwind colors (neon-green, neon-magenta, cyber-cyan, dim-green,
+   soft-grey, bg-deep, bg-panel, bg-elevated) are wired to these vars in
+   tailwind.config.js, so every existing component class picks up the
+   active theme automatically with no per-component rewrites needed.
+   ───────────────────────────────────────────────────────────────────────── */
+
+:root,
+:root[data-theme="cyberpunk"] {
+  --pc-bg:               #070710;
+  --pc-bg-panel:         #11111A;
+  --pc-bg-elevated:      #161623;
+  --pc-bg-deep:          #0A0A0F;
+
+  --pc-fg:               #E5E5E8;
+  --pc-fg-dim:           #9696A0;          /* maps to soft-grey */
+
+  --pc-accent-primary:   #00FF9F;          /* neon-green */
+  --pc-accent-secondary: #FF00FF;          /* neon-magenta */
+  --pc-accent-tertiary:  #00FFFF;          /* cyber-cyan */
+  --pc-accent-dim:       #008250;          /* dim-green */
+
+  /* RGB triplets — Tailwind's `rgb(R G B / <alpha-value>)` color shape
+     needs space-separated channels (no commas). Used by tailwind.config.js
+     for opacity-shorthand classes (text-neon-green/60 etc.) AND by direct
+     rgba() calls inside this file (.pc-bg, animations, shadows). The
+     comma form is generated on the fly by rgba() falling through CSS
+     parsing — both syntaxes accept the triplet here. */
+  --pc-rgb-bg:           7 7 16;
+  --pc-rgb-primary:      0 255 159;
+  --pc-rgb-secondary:    255 0 255;
+  --pc-rgb-tertiary:     0 255 255;
+  --pc-rgb-dim:          0 130 80;
+  --pc-rgb-fg-dim:       150 150 160;
+
+  --pc-border:           rgba(0, 255, 159, 0.3);
+  --pc-warning-bg:       rgba(255, 0, 255, 0.10);
+  --pc-error-bg:         rgba(255, 60, 60, 0.18);
+
+  /* Effect toggles — set to 0 in non-cyberpunk themes. Used as
+     `opacity` multipliers and `display` switches via CSS. */
+  --pc-glitch-on:          1;
+  --pc-scanline-opacity:   0.05;
+  --pc-grid-opacity:       0.03;
+  --pc-bg-display:         block;          /* or none for flat themes */
+
+  --pc-font-display:     "Orbitron", "JetBrains Mono", monospace;
+}
+
+:root[data-theme="light"] {
+  --pc-bg:               #F8F8FA;
+  --pc-bg-panel:         #FFFFFF;
+  --pc-bg-elevated:      #F0F0F4;
+  --pc-bg-deep:          #ECECF0;
+
+  --pc-fg:               #1A1A1F;
+  --pc-fg-dim:           #6A6A75;
+
+  --pc-accent-primary:   #008060;          /* teal-green */
+  --pc-accent-secondary: #B23BB2;          /* muted purple */
+  --pc-accent-tertiary:  #0078A8;          /* deep cyan */
+  --pc-accent-dim:       #C5D8D0;          /* very pale teal — for borders */
+
+  --pc-rgb-bg:           248 248 250;
+  --pc-rgb-primary:      0 128 96;
+  --pc-rgb-secondary:    178 59 178;
+  --pc-rgb-tertiary:     0 120 168;
+  --pc-rgb-dim:          197 216 208;
+  --pc-rgb-fg-dim:       106 106 117;
+
+  --pc-border:           rgba(0, 128, 96, 0.2);
+  --pc-warning-bg:       rgba(178, 59, 178, 0.08);
+  --pc-error-bg:         rgba(220, 53, 53, 0.10);
+
+  --pc-glitch-on:          0;
+  --pc-scanline-opacity:   0;
+  --pc-grid-opacity:       0;
+  --pc-bg-display:         none;
+
+  --pc-font-display:     "Orbitron", "JetBrains Mono", monospace;
+}
+
+:root[data-theme="corporate"] {
+  --pc-bg:               #FAFAFA;
+  --pc-bg-panel:         #FFFFFF;
+  --pc-bg-elevated:      #F4F4F6;
+  --pc-bg-deep:          #EFEFF2;
+
+  --pc-fg:               #2A2A30;
+  --pc-fg-dim:           #707075;
+
+  --pc-accent-primary:   #2E5BFF;          /* cobalt */
+  --pc-accent-secondary: #6E7383;          /* slate */
+  --pc-accent-tertiary:  #2E5BFF;
+  --pc-accent-dim:       #D6DCE6;          /* pale slate — for borders */
+
+  --pc-rgb-bg:           250 250 250;
+  --pc-rgb-primary:      46 91 255;
+  --pc-rgb-secondary:    110 115 131;
+  --pc-rgb-tertiary:     46 91 255;
+  --pc-rgb-dim:          214 220 230;
+  --pc-rgb-fg-dim:       112 112 117;
+
+  --pc-border:           rgba(46, 91, 255, 0.15);
+  --pc-warning-bg:       rgba(245, 158, 11, 0.10);
+  --pc-error-bg:         rgba(220, 53, 53, 0.10);
+
+  --pc-glitch-on:          0;
+  --pc-scanline-opacity:   0;
+  --pc-grid-opacity:       0;
+  --pc-bg-display:         none;
+
+  --pc-font-display:     "Inter", "Helvetica Neue", "Segoe UI", sans-serif;
+}
+
 @layer base {
   html, body, #root {
     height: 100%;
     margin: 0;
-    /* Slightly deeper than bg-deep to keep the scanline overlay readable. */
-    background-color: #070710;
+    background-color: var(--pc-bg);
   }
   body {
     -webkit-font-smoothing: antialiased;
@@ -16,6 +142,7 @@
        creating a stacking trap. */
     position: relative;
     overflow: hidden;
+    color: var(--pc-fg);
   }
   #root {
     /* Pull the app above the .pc-bg overlay. */
@@ -23,67 +150,66 @@
     z-index: 1;
   }
 
-  /* Neon scrollbar — barely visible, glows on hover. */
+  /* Scrollbar — uses theme accent. The hover glow is gated by alpha
+     so it's still subtle on light themes. */
   ::-webkit-scrollbar { width: 8px; height: 8px; }
-  ::-webkit-scrollbar-track { background: #0A0A0F; }
+  ::-webkit-scrollbar-track { background: var(--pc-bg-deep); }
   ::-webkit-scrollbar-thumb {
-    background: rgba(0, 255, 159, 0.25);
+    background: rgb(var(--pc-rgb-primary) / 0.25);
     border-radius: 4px;
     transition: background 0.2s ease;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(0, 255, 159, 0.6);
-    box-shadow: 0 0 6px rgba(0, 255, 159, 0.5);
+    background: rgb(var(--pc-rgb-primary) / 0.6);
+    box-shadow: 0 0 6px rgb(var(--pc-rgb-primary) / 0.5);
   }
 
-  /* Subtle text-selection neon. */
+  /* Subtle text-selection accent. */
   ::selection {
-    background: rgba(0, 255, 159, 0.25);
-    color: #00FF9F;
+    background: rgb(var(--pc-rgb-primary) / 0.25);
+    color: var(--pc-accent-primary);
   }
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
    .pc-bg — fixed CRT background.
-   Layered:
-     1. Base dark blue-black fill (#070710).
-     2. 2px horizontal scanlines @ ~5% opacity, 4px period.
-     3. Faint 60px grid @ ~3% opacity (vertical + horizontal lines).
-     4. Slow vertical CRT-roll drift (60s, max 4px shift).
-   Pure CSS — no canvas, no JS. Sits behind everything via z-index: 0.
+   In cyberpunk: scanlines + grid + slow drift.
+   In light/corporate: hidden via `display: var(--pc-bg-display)`. The
+   variable resolves to `none` in those themes so this layer disappears
+   entirely (no GPU compositing cost, no visual artefact on light bg).
    ───────────────────────────────────────────────────────────────────────── */
 .pc-bg {
+  display: var(--pc-bg-display);
   position: fixed;
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background-color: #070710;
+  background-color: var(--pc-bg);
   background-image:
     /* Scanlines: 2px on, 2px off — alternating dark line. */
     repeating-linear-gradient(
       0deg,
-      rgba(0, 255, 159, 0.05) 0px,
-      rgba(0, 255, 159, 0.05) 1px,
+      rgb(var(--pc-rgb-primary) / var(--pc-scanline-opacity)) 0px,
+      rgb(var(--pc-rgb-primary) / var(--pc-scanline-opacity)) 1px,
       transparent 1px,
       transparent 4px
     ),
     /* Vertical grid: 1px line every 60px. */
     repeating-linear-gradient(
       90deg,
-      rgba(0, 255, 255, 0.03) 0px,
-      rgba(0, 255, 255, 0.03) 1px,
+      rgb(var(--pc-rgb-tertiary) / var(--pc-grid-opacity)) 0px,
+      rgb(var(--pc-rgb-tertiary) / var(--pc-grid-opacity)) 1px,
       transparent 1px,
       transparent 60px
     ),
     /* Horizontal grid: 1px line every 60px. */
     repeating-linear-gradient(
       0deg,
-      rgba(0, 255, 255, 0.03) 0px,
-      rgba(0, 255, 255, 0.03) 1px,
+      rgb(var(--pc-rgb-tertiary) / var(--pc-grid-opacity)) 0px,
+      rgb(var(--pc-rgb-tertiary) / var(--pc-grid-opacity)) 1px,
       transparent 1px,
       transparent 60px
     );
-  /* Slight vignette via radial overlay so the corners feel darker. */
   background-blend-mode: normal;
   animation: pc-bg-drift 60s linear infinite;
 }
@@ -109,7 +235,7 @@
     transition: border-color 0.15s ease, box-shadow 0.2s ease, background-color 0.2s ease;
   }
   .neon-input:focus {
-    background-color: rgba(0, 255, 159, 0.04);
+    background-color: rgb(var(--pc-rgb-primary) / 0.04);
   }
   .neon-button {
     @apply bg-bg-elevated text-neon-green border border-neon-green/70
@@ -117,7 +243,7 @@
            transition-all duration-150 rounded-md px-4 py-2
            font-mono uppercase tracking-wider text-sm;
     /* Subtle resting glow + hover-lift. */
-    box-shadow: 0 0 0 0 rgba(0, 255, 159, 0);
+    box-shadow: 0 0 0 0 rgb(var(--pc-rgb-primary) / 0);
   }
   .neon-button:hover {
     filter: brightness(1.15);
@@ -137,22 +263,22 @@
   }
   .neon-button-magenta:hover {
     filter: brightness(1.2);
-    box-shadow: 0 0 14px rgba(255, 0, 255, 0.6),
-                inset 0 0 6px rgba(255, 0, 255, 0.2);
+    box-shadow: 0 0 14px rgb(var(--pc-rgb-secondary) / 0.6),
+                inset 0 0 6px rgb(var(--pc-rgb-secondary) / 0.2);
   }
 
   /* Pane focus glow — applied via :focus-within or explicit className. */
   .pane-focused-green {
-    box-shadow: 0 0 12px 0 rgba(0, 255, 159, 0.5),
-                inset 0 0 6px 0 rgba(0, 255, 159, 0.2);
+    box-shadow: 0 0 12px 0 rgb(var(--pc-rgb-primary) / 0.5),
+                inset 0 0 6px 0 rgb(var(--pc-rgb-primary) / 0.2);
   }
   .pane-focused-magenta {
-    box-shadow: 0 0 12px 0 rgba(255, 0, 255, 0.5),
-                inset 0 0 6px 0 rgba(255, 0, 255, 0.2);
+    box-shadow: 0 0 12px 0 rgb(var(--pc-rgb-secondary) / 0.5),
+                inset 0 0 6px 0 rgb(var(--pc-rgb-secondary) / 0.2);
   }
   .pane-focused-cyan {
-    box-shadow: 0 0 12px 0 rgba(0, 255, 255, 0.5),
-                inset 0 0 6px 0 rgba(0, 255, 255, 0.2);
+    box-shadow: 0 0 12px 0 rgb(var(--pc-rgb-tertiary) / 0.5),
+                inset 0 0 6px 0 rgb(var(--pc-rgb-tertiary) / 0.2);
   }
   /* Auto-glow when keyboard focus lands inside any element marked
      with `.pc-pane`. Cheap and works without state plumbing. */
@@ -160,17 +286,18 @@
     transition: box-shadow 0.25s ease;
   }
   .pc-pane:focus-within {
-    box-shadow: 0 0 12px 0 rgba(0, 255, 159, 0.35),
-                inset 0 0 6px 0 rgba(0, 255, 159, 0.15);
+    box-shadow: 0 0 12px 0 rgb(var(--pc-rgb-primary) / 0.35),
+                inset 0 0 6px 0 rgb(var(--pc-rgb-primary) / 0.15);
   }
   .pc-pane-magenta:focus-within {
-    box-shadow: 0 0 12px 0 rgba(255, 0, 255, 0.35),
-                inset 0 0 6px 0 rgba(255, 0, 255, 0.15);
+    box-shadow: 0 0 12px 0 rgb(var(--pc-rgb-secondary) / 0.35),
+                inset 0 0 6px 0 rgb(var(--pc-rgb-secondary) / 0.15);
   }
 
-  /* Display font helper. */
+  /* Display font helper. Resolves to Orbitron on cyberpunk/light, and
+     Inter on corporate (overridden via --pc-font-display). */
   .font-display {
-    font-family: "Orbitron", "JetBrains Mono", monospace;
+    font-family: var(--pc-font-display);
     letter-spacing: 0.18em;
   }
 
@@ -178,7 +305,12 @@
      Apply `.pc-glitch` to a span with `data-text` set to the same body.
      The before/after pseudos paint the same string in cyan and magenta,
      nudged ±1-2px. Animation runs every ~6s for ~0.3s — subtle hint,
-     not a constant flicker. */
+     not a constant flicker.
+
+     In non-cyberpunk themes `--pc-glitch-on` is 0, which forces the
+     pseudo-elements to opacity 0 and disables the keyframe shifts.
+     A red border is still present on the row itself (via the inline
+     bg-red-* classes in MessageStream), so tampering remains obvious. */
   .pc-glitch {
     position: relative;
     display: inline-block;
@@ -192,17 +324,29 @@
     width: 100%;
     overflow: hidden;
     pointer-events: none;
-    opacity: 0.85;
+    opacity: calc(0.85 * var(--pc-glitch-on));
   }
   .pc-glitch::before {
-    color: #00FFFF;
+    color: var(--pc-accent-tertiary);
     animation: pc-glitch-cyan 6s infinite steps(1);
+    animation-play-state: running;
     mix-blend-mode: screen;
   }
   .pc-glitch::after {
-    color: #FF00FF;
+    color: var(--pc-accent-secondary);
     animation: pc-glitch-magenta 6s infinite steps(1);
+    animation-play-state: running;
     mix-blend-mode: screen;
+  }
+  /* Hard-disable the keyframe shifts on themes that opt out of glitch.
+     This wins over the `animation` declaration above because of higher
+     specificity (attribute selector + class). */
+  :root[data-theme="light"] .pc-glitch::before,
+  :root[data-theme="light"] .pc-glitch::after,
+  :root[data-theme="corporate"] .pc-glitch::before,
+  :root[data-theme="corporate"] .pc-glitch::after {
+    animation: none;
+    opacity: 0;
   }
 
   /* ──────── Cursor for InputBar ──────────────────────────────────────────
@@ -210,12 +354,12 @@
      empty. Blinks via .animate-cursor-blink (2-step). */
   .pc-cursor {
     display: inline-block;
-    color: #00FF9F;
+    color: var(--pc-accent-primary);
     font-weight: 700;
-    text-shadow: 0 0 6px rgba(0, 255, 159, 0.7);
+    text-shadow: 0 0 6px rgb(var(--pc-rgb-primary) / 0.7);
   }
   .pc-cursor-dim {
-    color: rgba(0, 255, 159, 0.35);
+    color: rgb(var(--pc-rgb-primary) / 0.35);
     text-shadow: none;
   }
 }
@@ -228,12 +372,12 @@
 @layer utilities {
   /* Connection pill — three speeds / colors. */
   @keyframes pc-pulse-connecting {
-    0%, 100% { opacity: 0.5; filter: drop-shadow(0 0 0 transparent); color: #9696A0; }
+    0%, 100% { opacity: 0.5; filter: drop-shadow(0 0 0 transparent); color: rgb(var(--pc-rgb-fg-dim)); }
     50%      { opacity: 1.0; filter: drop-shadow(0 0 6px rgba(255, 215, 0, 0.7)); color: #FFD700; }
   }
   @keyframes pc-pulse-connected {
-    0%, 100% { opacity: 0.7; filter: drop-shadow(0 0 2px rgba(0, 255, 159, 0.4)); }
-    50%      { opacity: 1.0; filter: drop-shadow(0 0 8px rgba(0, 255, 159, 0.9)); }
+    0%, 100% { opacity: 0.7; filter: drop-shadow(0 0 2px rgb(var(--pc-rgb-primary) / 0.4)); }
+    50%      { opacity: 1.0; filter: drop-shadow(0 0 8px rgb(var(--pc-rgb-primary) / 0.9)); }
   }
   @keyframes pc-pulse-disconnected {
     0%, 100% { opacity: 0.3; }
@@ -244,14 +388,14 @@
      is an inline box-shadow on the row that fades over 800ms via a
      dedicated keyframe). */
   @keyframes pc-row-in-incoming {
-    0%   { opacity: 0; transform: translateX(12px); box-shadow: inset 3px 0 0 0 rgba(0, 255, 255, 0.9); }
-    60%  { opacity: 1; transform: translateX(0);    box-shadow: inset 3px 0 0 0 rgba(0, 255, 255, 0.6); }
-    100% { opacity: 1; transform: translateX(0);    box-shadow: inset 3px 0 0 0 rgba(0, 255, 255, 0); }
+    0%   { opacity: 0; transform: translateX(12px); box-shadow: inset 3px 0 0 0 rgb(var(--pc-rgb-tertiary) / 0.9); }
+    60%  { opacity: 1; transform: translateX(0);    box-shadow: inset 3px 0 0 0 rgb(var(--pc-rgb-tertiary) / 0.6); }
+    100% { opacity: 1; transform: translateX(0);    box-shadow: inset 3px 0 0 0 rgb(var(--pc-rgb-tertiary) / 0); }
   }
   @keyframes pc-row-in-outgoing {
-    0%   { opacity: 0; transform: translateX(-12px); box-shadow: inset 3px 0 0 0 rgba(0, 255, 159, 0.9); }
-    60%  { opacity: 1; transform: translateX(0);     box-shadow: inset 3px 0 0 0 rgba(0, 255, 159, 0.6); }
-    100% { opacity: 1; transform: translateX(0);     box-shadow: inset 3px 0 0 0 rgba(0, 255, 159, 0); }
+    0%   { opacity: 0; transform: translateX(-12px); box-shadow: inset 3px 0 0 0 rgb(var(--pc-rgb-primary) / 0.9); }
+    60%  { opacity: 1; transform: translateX(0);     box-shadow: inset 3px 0 0 0 rgb(var(--pc-rgb-primary) / 0.6); }
+    100% { opacity: 1; transform: translateX(0);     box-shadow: inset 3px 0 0 0 rgb(var(--pc-rgb-primary) / 0); }
   }
   /* Tweak duration: rows take 200ms slide, then border decays over the
      remaining 600ms → total 800ms. Implemented by overriding the
@@ -295,9 +439,9 @@
   }
   .pc-modal-panel {
     animation: pc-modal-in 0.2s ease-out both;
-    background-color: rgba(10, 10, 20, 0.95);
-    box-shadow: 0 0 30px rgba(255, 0, 255, 0.4),
-                inset 0 0 12px rgba(255, 0, 255, 0.08);
+    background-color: var(--pc-bg-panel);
+    box-shadow: 0 0 30px rgb(var(--pc-rgb-secondary) / 0.4),
+                inset 0 0 12px rgb(var(--pc-rgb-secondary) / 0.08);
   }
 
   /* Cursor blink — 2-step so the box just toggles. */
@@ -322,23 +466,32 @@
     transition: background-color 0.18s ease, box-shadow 0.18s ease;
   }
   .pc-contact-row:hover {
-    background-color: rgba(255, 255, 255, 0.05);
-    box-shadow: inset 2px 0 0 0 rgba(0, 255, 159, 0.7);
+    background-color: rgb(var(--pc-rgb-fg-dim) / 0.08);
+    box-shadow: inset 2px 0 0 0 rgb(var(--pc-rgb-primary) / 0.7);
   }
   .pc-contact-row.is-active {
-    background-color: rgba(0, 255, 159, 0.06);
-    box-shadow: inset 2px 0 0 0 #00FF9F,
-                0 0 12px rgba(0, 255, 159, 0.15);
+    background-color: rgb(var(--pc-rgb-primary) / 0.06);
+    box-shadow: inset 2px 0 0 0 var(--pc-accent-primary),
+                0 0 12px rgb(var(--pc-rgb-primary) / 0.15);
   }
 
-  /* Header brand glow. */
+  /* Header brand glow. Strong on cyberpunk; in light/corporate it
+     becomes a subtle text-shadow because the underlying RGB values
+     stay valid (the text is the same accent color, just darker hue). */
   .pc-brand-glow {
-    text-shadow: 0 0 8px rgba(0, 255, 159, 0.6),
-                 0 0 18px rgba(0, 255, 159, 0.25);
+    text-shadow: 0 0 8px rgb(var(--pc-rgb-primary) / 0.6),
+                 0 0 18px rgb(var(--pc-rgb-primary) / 0.25);
   }
   .pc-brand-glow-magenta {
-    text-shadow: 0 0 8px rgba(255, 0, 255, 0.7),
-                 0 0 18px rgba(255, 0, 255, 0.3);
+    text-shadow: 0 0 8px rgb(var(--pc-rgb-secondary) / 0.7),
+                 0 0 18px rgb(var(--pc-rgb-secondary) / 0.3);
+  }
+  /* Suppress brand glow on light/corporate — looks gimmicky on white bg. */
+  :root[data-theme="light"] .pc-brand-glow,
+  :root[data-theme="light"] .pc-brand-glow-magenta,
+  :root[data-theme="corporate"] .pc-brand-glow,
+  :root[data-theme="corporate"] .pc-brand-glow-magenta {
+    text-shadow: none;
   }
 
   /* Search-result jump highlight. Applied for ~1.5s on the row that the
@@ -346,7 +499,7 @@
      a glance which row matched the click. Magenta to match the search
      panel's substring highlight color. */
   @keyframes pc-search-pulse {
-    0%   { background: rgba(255, 0, 255, 0.20); }
+    0%   { background: rgb(var(--pc-rgb-secondary) / 0.20); }
     100% { background: transparent; }
   }
   .pc-search-pulse {

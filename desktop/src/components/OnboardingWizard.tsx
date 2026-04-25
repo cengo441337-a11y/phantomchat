@@ -2,12 +2,20 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import AddressQR from "./AddressQR";
+import ThemeSwitcher from "./ThemeSwitcher";
 
 interface Props {
   onDone: () => void;
 }
 
-const TOTAL_STEPS = 5;
+/// Total wizard steps. Bumped from 5 → 6 in wave-8d when we inserted the
+/// "Erscheinungsbild wählen" step between step 4 (share address) and the
+/// final "Done" step. Renumbering the trailing step from 5 → 6 (and
+/// widening every `1 | 2 | 3 | 4 | 5` union to include 6) keeps the
+/// flow's tail logic intact.
+const TOTAL_STEPS = 6;
+
+type StepIdx = 1 | 2 | 3 | 4 | 5 | 6;
 
 const DEFAULT_RELAY_OPTIONS = [
   "wss://relay.damus.io",
@@ -28,7 +36,7 @@ const DEFAULT_RELAY_OPTIONS = [
 /// generate_identity / import_keyfile / set_relays / mark_onboarded.
 export default function OnboardingWizard({ onDone }: Props) {
   const { t } = useTranslation();
-  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1);
+  const [step, setStep] = useState<StepIdx>(1);
 
   // ── Step 2 ──────────────────────────────────────────────────────────────
   const [identityMode, setIdentityMode] = useState<"none" | "generate" | "restore">(
@@ -52,7 +60,7 @@ export default function OnboardingWizard({ onDone }: Props) {
   const [address, setAddress] = useState<string | null>(null);
   const [qrSvg, setQrSvg] = useState<string | null>(null);
 
-  // ── Step 5 ──────────────────────────────────────────────────────────────
+  // ── Step 6 (final) ──────────────────────────────────────────────────────
   const [finishing, setFinishing] = useState(false);
   const [finishErr, setFinishErr] = useState<string | null>(null);
 
@@ -157,16 +165,18 @@ export default function OnboardingWizard({ onDone }: Props) {
       case 4:
         return true;
       case 5:
-        return false; // step 5 uses the dedicated "Start" button.
+        return true; // theme step — any default is valid, picker is live.
+      case 6:
+        return false; // final step uses the dedicated "Start" button.
     }
   }
 
   function back() {
-    if (step > 1) setStep((s) => (s - 1) as 1 | 2 | 3 | 4 | 5);
+    if (step > 1) setStep((s) => (s - 1) as StepIdx);
   }
   function next() {
-    if (step < 5 && canAdvance()) {
-      setStep((s) => (s + 1) as 1 | 2 | 3 | 4 | 5);
+    if (step < TOTAL_STEPS && canAdvance()) {
+      setStep((s) => (s + 1) as StepIdx);
     }
   }
 
@@ -358,12 +368,27 @@ export default function OnboardingWizard({ onDone }: Props) {
         )}
 
         {step === 5 && (
-          <div className="text-center space-y-5">
-            <div className="text-2xl tracking-widest font-bold text-neon-green">
+          <div className="space-y-4">
+            <div className="text-center text-xs text-soft-grey uppercase tracking-widest">
               {t("onboarding.step5.header")}
             </div>
-            <p className="text-sm text-soft-grey leading-relaxed">
+            <p className="text-xs text-soft-grey">
               {t("onboarding.step5.description")}
+            </p>
+            <ThemeSwitcher />
+            <p className="text-[10px] text-soft-grey italic text-center">
+              {t("onboarding.step5.hint")}
+            </p>
+          </div>
+        )}
+
+        {step === 6 && (
+          <div className="text-center space-y-5">
+            <div className="text-2xl tracking-widest font-bold text-neon-green">
+              {t("onboarding.step6.header")}
+            </div>
+            <p className="text-sm text-soft-grey leading-relaxed">
+              {t("onboarding.step6.description")}
             </p>
             <button
               onClick={() => void finish()}
@@ -371,8 +396,8 @@ export default function OnboardingWizard({ onDone }: Props) {
               className="neon-button w-full text-base disabled:opacity-40"
             >
               {finishing
-                ? t("onboarding.step5.starting")
-                : t("onboarding.step5.start_button")}
+                ? t("onboarding.step6.starting")
+                : t("onboarding.step6.start_button")}
             </button>
             {finishErr && (
               <div className="text-xs text-neon-magenta border border-neon-magenta/50 rounded-md p-2 break-words">
@@ -382,8 +407,9 @@ export default function OnboardingWizard({ onDone }: Props) {
           </div>
         )}
 
-        {/* Back / Next bar (hidden on step 5 — that step has its own button) */}
-        {step !== 5 && (
+        {/* Back / Next bar (hidden on the final step — that step has its own
+            "Start" button). */}
+        {step !== TOTAL_STEPS && (
           <div className="flex justify-between pt-3 border-t border-dim-green/30">
             <button
               onClick={back}

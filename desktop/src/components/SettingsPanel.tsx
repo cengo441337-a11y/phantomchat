@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import AddressQR from "./AddressQR";
+import ThemeSwitcher from "./ThemeSwitcher";
 import type { AuditEntry, PrivacyConfigDto, UpdateInfo } from "../types";
 
 interface Props {
@@ -429,6 +430,17 @@ export default function SettingsPanel({ onClose }: Props) {
               )}
             </div>
           )}
+        </section>
+
+        {/* ── Appearance / Theme ─────────────────────────────────────── */}
+        <section className="mb-6">
+          <h3 className="text-neon-green text-xs uppercase tracking-widest mb-2">
+            {t("settings.theme.title")}
+          </h3>
+          <p className="text-xs text-soft-grey mb-3">
+            {t("settings.theme.description")}
+          </p>
+          <ThemeSwitcher />
         </section>
 
         {/* ── Privacy ────────────────────────────────────────────────── */}
