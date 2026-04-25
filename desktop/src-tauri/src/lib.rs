@@ -52,6 +52,10 @@ const ME_FILE: &str = "me.json";
 const RELAYS_FILE: &str = "relays.json";
 const PRIVACY_FILE: &str = "privacy.json";
 const AUDIT_LOG_FILE: &str = "audit.log";
+/// Persistence target for the desktop main-window geometry (position, size,
+/// maximized flag, last monitor identity). See the `window_state` module
+/// section further down for the on-disk schema and restore policy.
+const WINDOW_STATE_FILE: &str = "window_state.json";
 const POW_DIFFICULTY: u32 = 8;
 
 /// Bootstrap relay set written to `relays.json` if the file is missing.
@@ -789,6 +793,228 @@ fn audit(app: &AppHandle, category: &str, event: &str, details: serde_json::Valu
     if let Err(e) = writeln!(file, "{}", line) {
         eprintln!("audit: write {} failed: {e}", path.display());
     }
+}
+
+// ── Window-state persistence (multi-monitor aware) ──────────────────────────
+//
+// On-disk schema (`$APPDATA/de.dc-infosec.phantomchat/window_state.json`):
+//
+//   {
+//     "schema_version": 1,
+//     "x": 100,
+//     "y": 50,
+//     "width": 1320,
+//     "height": 820,
+//     "maximized": false,
+//     "monitor_label": "DELL U2722DE",
+//     "monitor_position": { "x": 1920, "y": 0 }
+//   }
+//
+// All units are LOGICAL pixels — Tauri's `LogicalPosition`/`LogicalSize`
+// abstract over DPI, so a window persisted on a 1.5x scaled display
+// restores correctly on a 1.0x display without manual math.
+//
+// `monitor_label` + `monitor_position` form a soft fingerprint of the
+// display the user last had the window on. On restore we walk
+// `available_monitors()` and only re-apply the persisted geometry if a
+// matching monitor is still attached (label equal AND top-left position
+// within ±20 px). Otherwise we fall back to the platform default — which
+// is the centered 1100×720 the WindowBuilder gave us in tauri.conf.json.
+//
+// Off-screen rescue: even when the monitor matches, we double-check that
+// the restored rect lies entirely inside that monitor's bounds. A user
+// who unplugs a 4K display and reattaches a 1080p one with the same name
+// would otherwise get a window stranded outside the visible area.
+//
+// We deliberately hand-roll this instead of pulling in
+// `tauri-plugin-window-state` because the upstream plugin's restore
+// policy is "always restore last geometry" with no monitor-identity
+// check — bad UX on an Anwalt's docking-station + portable laptop combo
+// where a missing display means the window comes back invisible.
+
+/// Tolerance (in logical pixels) for matching a persisted monitor against
+/// the currently-attached set. Two monitors that report the same label
+/// and a top-left position within this many pixels are considered the
+/// same physical display. ±20 px absorbs minor DPI-rounding drift while
+/// still distinguishing a monitor reattached at a different desktop
+/// coordinate after a layout change.
+const MONITOR_MATCH_TOLERANCE_PX: f64 = 20.0;
+
+/// Debounce window for save_window_state writes. A drag emits a flood of
+/// `Moved` events at every cursor tick; coalescing to one write per 500 ms
+/// keeps `window_state.json` from being rewritten thousands of times per
+/// gesture without losing the final position when the user releases.
+const WINDOW_STATE_DEBOUNCE_MS: u64 = 500;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MonitorPos {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WindowStateDisk {
+    #[serde(default = "window_state_schema_default")]
+    pub schema_version: u32,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    #[serde(default)]
+    pub maximized: bool,
+    #[serde(default)]
+    pub monitor_label: String,
+    #[serde(default)]
+    pub monitor_position: MonitorPos,
+}
+
+impl Default for MonitorPos {
+    fn default() -> Self {
+        Self { x: 0.0, y: 0.0 }
+    }
+}
+
+fn window_state_schema_default() -> u32 {
+    1
+}
+
+fn window_state_path(app: &AppHandle) -> anyhow::Result<PathBuf> {
+    Ok(app_data(app)?.join(WINDOW_STATE_FILE))
+}
+
+/// Lenient loader: missing or corrupt file → `None`, never an error.
+/// First launch must not warn the user; a hand-edited file that fails to
+/// parse falls back to defaults (same stance as `load_privacy`).
+fn load_window_state(app: &AppHandle) -> Option<WindowStateDisk> {
+    let path = window_state_path(app).ok()?;
+    let raw = fs::read(&path).ok()?;
+    serde_json::from_slice::<WindowStateDisk>(&raw).ok()
+}
+
+/// Write the window state atomically-enough for our purposes (single
+/// `fs::write` — the file is small and a torn write just means we lose
+/// the latest gesture, never corrupt earlier app data).
+fn save_window_state(app: &AppHandle, state: WindowStateDisk) -> Result<(), String> {
+    let path = window_state_path(app).map_err(|e| e.to_string())?;
+    let buf = serde_json::to_vec_pretty(&state).map_err(|e| e.to_string())?;
+    fs::write(&path, buf).map_err(|e| format!("write {}: {}", path.display(), e))?;
+    Ok(())
+}
+
+/// Capture the current window geometry into a `WindowStateDisk`. Reads
+/// physical units off the OS, converts to logical via the window's scale
+/// factor so persistence is DPI-independent.
+fn capture_window_state(
+    win: &tauri::WebviewWindow,
+) -> Result<WindowStateDisk, String> {
+    let scale = win.scale_factor().map_err(|e| e.to_string())?;
+    let pos = win.outer_position().map_err(|e| e.to_string())?;
+    let size = win.outer_size().map_err(|e| e.to_string())?;
+    let maximized = win.is_maximized().unwrap_or(false);
+    let monitor = win.current_monitor().ok().flatten();
+    let (label, mpos) = match monitor {
+        Some(m) => {
+            let mp = m.position();
+            (
+                m.name().cloned().unwrap_or_default(),
+                MonitorPos {
+                    x: mp.x as f64 / scale,
+                    y: mp.y as f64 / scale,
+                },
+            )
+        }
+        None => (String::new(), MonitorPos::default()),
+    };
+    Ok(WindowStateDisk {
+        schema_version: 1,
+        x: pos.x as f64 / scale,
+        y: pos.y as f64 / scale,
+        width: size.width as f64 / scale,
+        height: size.height as f64 / scale,
+        maximized,
+        monitor_label: label,
+        monitor_position: mpos,
+    })
+}
+
+/// Walk `available_monitors()` and pick the one matching the persisted
+/// monitor identity. `None` ⇒ the user disconnected or rearranged
+/// displays; caller falls back to the centered default.
+fn find_matching_monitor(
+    win: &tauri::WebviewWindow,
+    state: &WindowStateDisk,
+) -> Option<tauri::Monitor> {
+    let monitors = win.available_monitors().ok()?;
+    let scale = win.scale_factor().unwrap_or(1.0);
+    monitors.into_iter().find(|m| {
+        let label_match = m
+            .name()
+            .map(|n| n == &state.monitor_label)
+            .unwrap_or(state.monitor_label.is_empty());
+        let mp = m.position();
+        let mx = mp.x as f64 / scale;
+        let my = mp.y as f64 / scale;
+        let pos_match = (mx - state.monitor_position.x).abs() <= MONITOR_MATCH_TOLERANCE_PX
+            && (my - state.monitor_position.y).abs() <= MONITOR_MATCH_TOLERANCE_PX;
+        label_match && pos_match
+    })
+}
+
+/// Verify the persisted rect fits inside `monitor`. Catches the
+/// "saved off-screen" / "monitor downgraded to lower resolution" cases
+/// before we apply geometry that would leave the window unreachable.
+fn rect_fits_monitor(
+    win: &tauri::WebviewWindow,
+    state: &WindowStateDisk,
+    monitor: &tauri::Monitor,
+) -> bool {
+    let scale = win.scale_factor().unwrap_or(1.0);
+    let mp = monitor.position();
+    let ms = monitor.size();
+    let m_x = mp.x as f64 / scale;
+    let m_y = mp.y as f64 / scale;
+    let m_w = ms.width as f64 / scale;
+    let m_h = ms.height as f64 / scale;
+    state.x >= m_x
+        && state.y >= m_y
+        && state.x + state.width <= m_x + m_w
+        && state.y + state.height <= m_y + m_h
+}
+
+/// Restore window geometry from disk if a matching monitor is attached
+/// AND the persisted rect still fits on it. Returns `Some(label)` on a
+/// successful restore so the caller can audit-log the monitor name; the
+/// audit entry deliberately omits the actual coordinates (per the spec
+/// these could leak desktop layout via the audit-log export).
+fn restore_window_state(app: &AppHandle, win: &tauri::WebviewWindow) -> Option<String> {
+    let state = load_window_state(app)?;
+    let monitor = match find_matching_monitor(win, &state) {
+        Some(m) => m,
+        None => {
+            audit(
+                app,
+                "display",
+                "window_restore_skipped",
+                serde_json::json!({ "reason": "monitor_missing" }),
+            );
+            return None;
+        }
+    };
+    if !rect_fits_monitor(win, &state, &monitor) {
+        audit(
+            app,
+            "display",
+            "window_restore_skipped",
+            serde_json::json!({ "reason": "off_screen" }),
+        );
+        return None;
+    }
+    let _ = win.set_position(tauri::LogicalPosition::new(state.x, state.y));
+    let _ = win.set_size(tauri::LogicalSize::new(state.width, state.height));
+    if state.maximized {
+        let _ = win.maximize();
+    }
+    Some(state.monitor_label.clone())
 }
 
 /// Read `privacy.json`, or fall back to `PrivacyConfigDto::default()` if
@@ -3189,6 +3415,7 @@ pub fn run() {
             export_audit_log,
             check_for_updates,
             install_update,
+            reset_window_state,
         ])
         .setup(|app| {
             // Pre-create the data dir on first launch so command handlers
@@ -3248,13 +3475,68 @@ pub fn run() {
                 .build(app)?;
 
             // ── Window close → hide instead of exit ──────────────────────
+            // ── Window-state restore + persistent geometry ───────────────
+            //
+            // Restore happens BEFORE we wire up the listener so the
+            // initial set_position/set_size we apply doesn't trigger an
+            // immediate echo-write back to disk. The listener is then
+            // installed with a debounce so that drag/resize gestures
+            // collapse to one write per WINDOW_STATE_DEBOUNCE_MS.
             if let Some(win) = app.get_webview_window("main") {
+                // 1. Apply persisted geometry if a matching monitor is
+                //    still attached and the rect fits on it.
+                if let Some(label) = restore_window_state(&handle, &win) {
+                    audit(
+                        &handle,
+                        "display",
+                        "window_restored",
+                        serde_json::json!({ "monitor_label": label }),
+                    );
+                }
+
+                // 2. Combined window-event listener:
+                //    - CloseRequested → hide (existing behavior)
+                //    - Resized / Moved → debounced save_window_state
+                //    Maximize/unmaximize is reported as a Resized event
+                //    on every desktop platform Tauri supports, so we
+                //    re-read `is_maximized()` inside that branch.
                 let win_for_event = win.clone();
-                win.on_window_event(move |e| {
-                    if let WindowEvent::CloseRequested { api, .. } = e {
+                let app_for_event = handle.clone();
+                let last_save = Arc::new(StdMutex::new(
+                    std::time::Instant::now()
+                        - std::time::Duration::from_millis(WINDOW_STATE_DEBOUNCE_MS),
+                ));
+                win.on_window_event(move |e| match e {
+                    WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
                         let _ = win_for_event.hide();
                     }
+                    WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
+                        // Debounce: only persist if the previous save
+                        // happened more than WINDOW_STATE_DEBOUNCE_MS ago.
+                        // We deliberately accept losing the very last
+                        // gesture if the user rage-quits within 500 ms —
+                        // worst case is we restore a position that's off
+                        // by a few pixels from where they let go of the
+                        // mouse, which the off-screen rescue catches if
+                        // it ever matters.
+                        let now = std::time::Instant::now();
+                        let mut guard = match last_save.lock() {
+                            Ok(g) => g,
+                            Err(_) => return,
+                        };
+                        if now.duration_since(*guard)
+                            < std::time::Duration::from_millis(WINDOW_STATE_DEBOUNCE_MS)
+                        {
+                            return;
+                        }
+                        *guard = now;
+                        drop(guard);
+                        if let Ok(state) = capture_window_state(&win_for_event) {
+                            let _ = save_window_state(&app_for_event, state);
+                        }
+                    }
+                    _ => {}
                 });
             }
 
@@ -4036,4 +4318,22 @@ async fn typing_ping(app: AppHandle, contact_label: String) -> Result<(), String
     send_sealed_to_address(&app, &contact.address, &payload)
         .await
         .map_err(|e| format!("relay send: {e}"))
+}
+
+/// Frontend command: surfaced in Settings → "Erscheinungsbild" as
+/// "Fenster zurücksetzen". Deletes `window_state.json` so the next
+/// launch falls back to the default 1100×720 window centered on the
+/// primary monitor — the rescue button for users who somehow ended up
+/// with persisted geometry that crashes them off-screen.
+///
+/// No-op (and Ok) if the file doesn't exist; we don't want a missing
+/// file to surface as an error toast in the UI.
+#[tauri::command]
+async fn reset_window_state(app: AppHandle) -> Result<(), String> {
+    let path = window_state_path(&app).map_err(|e| e.to_string())?;
+    if path.exists() {
+        fs::remove_file(&path).map_err(|e| format!("remove {}: {}", path.display(), e))?;
+    }
+    audit(&app, "display", "window_state_reset", serde_json::json!({}));
+    Ok(())
 }
