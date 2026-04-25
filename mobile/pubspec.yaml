@@ -22,6 +22,9 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_rust_bridge: 2.12.0
   freezed_annotation: ^2.4.4
+  # Wave 8B — background relay-listener
+  flutter_background_service: ^5.0.0
+  flutter_local_notifications: ^17.2.2
 
 dev_dependencies:
   flutter_test:
