@@ -1,12 +1,15 @@
 # PhantomChat
 
-![Status](https://img.shields.io/badge/Status-v2.6.0-brightgreen)
+> **Sovereign internal-comms messenger.** Quantum-safe E2E. Metadata-blind via Monero-style stealth-addressing. MLS group chat. Multi-relay redundant. Tor-mode. Tauri 2 desktop (Windows MSI), cyberpunk TUI, headless CLI. Built and offered by **DC INFOSEC** (`dc-infosec.de`) as the Slack/Email-replacement for German SMEs and law firms with hard secrecy obligations.
+
+![Status](https://img.shields.io/badge/Status-v3.0.0-brightgreen)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![Crypto](https://img.shields.io/badge/Crypto-PQXDH_%2B_XChaCha20--Poly1305-red)
 ![PQ](https://img.shields.io/badge/Post--Quantum-ML--KEM--1024-blueviolet)
 ![MLS](https://img.shields.io/badge/Groups-MLS_RFC_9420-brightgreen)
-![Network](https://img.shields.io/badge/Network-libp2p_%2F_Nostr_%2F_Tor-orange)
-![Tests](https://img.shields.io/badge/Tests-64_%2F_64-success)
+![Desktop](https://img.shields.io/badge/Desktop-Tauri_2_%2B_React-blueviolet)
+![Network](https://img.shields.io/badge/Network-Multi--Relay_%2B_Auto--Reconnect_%2B_Tor-orange)
+![Tests](https://img.shields.io/badge/Tests-Selftest_30%2F30-success)
 
 **Dezentrales, Post-Quantum-sicheres, metadatenarmes Messaging.** Monero-Stealth-Adressen + Double Ratchet + ML-KEM-1024 + MLS-Gruppen + Onion-Mixnet + PSI-Contact-Discovery, wrapping in ein Envelope-Format das sich auf dem Wire nicht von Cover Traffic unterscheiden lässt.
 
@@ -181,6 +184,23 @@ SQLCipher AES-256    Lokale Datenbankversclüsselung
 | **PSI Contact Discovery** (DDH-Ristretto, no-leakage) | ✓ |
 | **WASM Browser-Bindings** (wasm-bindgen für JS-Client) | ✓ |
 | **MLS Gruppen** (RFC 9420 via openmls 0.8, TreeKEM) | ✓ |
+| **Tauri 2 Desktop App** (Windows MSI · React + Tailwind · cyberpunk UI) | ✓ |
+| **MLS-over-Relay Auto-Transport** (MLS-WLC2 + MLS-APP1 prefix wrapping) | ✓ |
+| **MLS persistente Storage** (file-backed openmls, gruppen überleben Neustart) | ✓ |
+| **MLS Lifecycle** (leave / list_members / remove_member) | ✓ |
+| **Multi-Relay Subscription** (3 default · SHA256-Dedupe LRU 4096) | ✓ |
+| **Auto-Reconnect** (Exp-Backoff jitter, max 60 s, attempt-counter Reset) | ✓ |
+| **Read Receipts** (✓ sent / ✓✓ delivered / ✓✓ read · IntersectionObserver auto-mark) | ✓ |
+| **Typing Indicators** (TYPN-1: prefix · 1.5 s throttle · 5 s TTL decay) | ✓ |
+| **System Tray + Native Notifications** (focus-aware · click-to-restore) | ✓ |
+| **5-Step Onboarding Wizard** (welcome → identity → relays → QR → done) | ✓ |
+| **Settings Panel** (Identity QR · Privacy/Tor · Relays · Audit · Wipe-Confirm) | ✓ |
+| **Audit Log** (JSONL append-only · ISO27001/ISMS-friendly · Export-Path) | ✓ |
+| **i18n DE + EN** (react-i18next · ~230 keys · formal "Sie" · auto-locale) | ✓ |
+| **Auto-Updater** (Tauri Updater · Ed25519-signed · `updates.dc-infosec.de`) | ✓ |
+| **File Transfer 1:1** (FILE1:01 prefix · 5 MiB cap · sha256-verify · paperclip + drag-drop) | ✓ |
+| **Message Search** (Ctrl+F · debounced · sender filter · scroll-to-row pulse) | ✓ |
+| **Visual Polish** (CRT scanlines · Pane glow · Glitch on tampered · Orbitron headers) | ✓ |
 | Externer Krypto-Audit | Vor Produktion |
 
 ---

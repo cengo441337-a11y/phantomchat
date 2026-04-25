@@ -5,6 +5,188 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [3.0.0] — 2026-04-25 — Tauri Desktop + B2B-ready stack
+
+Major surface expansion. PhantomChat is now a shippable B2B internal messenger,
+not just a research crypto stack. Feature parity with mid-tier commercial messengers
+(read receipts, typing indicators, search, audit, i18n, system tray, auto-updater)
+plus the security primitives nobody else has (PQXDH + MLS + multi-relay + Tor mode +
+sealed-sender attribution).
+
+### Added — Tauri 2 Desktop App (`desktop/`)
+
+New workspace member `desktop/src-tauri` (`phantomchat_desktop` crate) plus React +
+Vite + TypeScript + Tailwind frontend. Uses `phantomchat_core` directly — no FFI.
+
+- **Onboarding** — 5-step wizard (welcome → identity gen/restore → relays
+  → share QR → done) with persistent marker; `is_onboarded` /
+  `mark_onboarded` Tauri commands.
+- **1:1 sealed-sender messaging** — full attribution UX:
+  - `✓` sent / `✓✓` delivered / `✓✓` (cyber-cyan) read per outgoing row
+  - IntersectionObserver auto-mark-read on viewport visibility (60% threshold)
+  - bind-button workflow for unbound (`?<8hex>`) senders →
+    `bind_last_unbound_sender(contact_label)` writes signing_pub onto contact
+  - tampered (`sig_ok=false`) rows show red tint + ⚠ + glitch text effect
+- **MLS RFC 9420 group chat** with **automatic relay transport** — no manual
+  base64 paste:
+  - new wire prefixes: `MLS-WLC2:` (welcome with embedded inviter directory
+    bootstrap meta) + `MLS-APP1:` (app message) — wrapped inside sealed
+    envelopes, fanned out to every known group member's PhantomAddress
+  - directory persisted to `mls_directory.json`; rehydrates on app start
+  - file-backed openmls storage (`mls_state.bin` + `mls_meta.json`):
+    groups survive app restart
+  - lifecycle commands: `mls_create_group`, `mls_add_member`, `mls_join_via_welcome`,
+    `mls_encrypt`, `mls_decrypt`, `mls_status`, `mls_list_members`,
+    `mls_leave_group`, `mls_remove_member`
+  - auto-init on first incoming Welcome (no need for explicit `mls_init`)
+- **Multi-Relay subscription** with reliability guarantees:
+  - `MultiRelay` BridgeProvider wraps N underlying relays (default:
+    Damus + nos.lol + snort.social)
+  - SHA256-LRU dedupe (4096 envelopes, HashSet + VecDeque ring) so the
+    handler fires exactly once per unique envelope across all relays
+  - per-underlying-relay auto-reconnect inside `NostrRelay` with
+    jitterized exponential backoff (`base = 2^min(attempt,6)` capped at
+    60s, plus 0–5s jitter, attempt counter resets on successful connect)
+  - new `ConnectionEvent` enum (`Connecting`/`Connected`/`Disconnected`/
+    `Reconnecting`) emitted via aggregate state-channel up to the
+    frontend StatusFooter pill
+  - new `BridgeProvider::subscribe_with_state` trait method (default
+    impl wraps existing `subscribe` for backwards compat)
+- **Tor / Maximum Stealth privacy mode** toggle in Settings — persists
+  to `privacy.json`, `restart_listener` Tauri command re-spawns subscriber
+  with new mode without app restart, SOCKS5 proxy address configurable
+- **File transfer 1:1** — paperclip button + drag-drop in InputBar; magic
+  prefix `FILE1:01` + ULEB128(meta_len) + JSON manifest + raw bytes
+  wrapped in sealed envelope; receiver sha256-verifies, basename-sanitizes
+  (rejects `..`/`/`/`\`/null), auto-renames on collision, writes to
+  `~/Downloads/PhantomChat/`, fires native notification + emits
+  `file_received` event; 5 MiB cap per file (single-envelope MVP, chunking
+  in 3.1)
+- **Read Receipts + Typing Indicators** — new wire prefixes `RCPT-1:` and
+  `TYPN-1:`, both wrapped in sealed envelopes (no metadata leaked to relay):
+  - `mark_read(msg_id, contact_label)` Tauri command; receiver auto-emits
+    a `delivered` receipt on every successful 1:1 decode
+  - `typing_ping(contact_label)` Tauri command, leading-edge 1.5s throttled
+  - `msg_id` = first 16 hex of `SHA256("v1|" || hex(plaintext))` —
+    plaintext-only so sender + receiver compute byte-identical IDs
+- **System Tray** (Tauri 2 `TrayIconBuilder`) — Show/Hide/Status/Quit menu,
+  single-click toggles main window, close-button hides instead of exits
+- **Native Notifications** (`tauri-plugin-notification`) — focus-aware
+  (only fires when `is_focused() == false || is_visible() == false`),
+  click-to-restore, separate titles for 1:1 / MLS / file events
+- **Settings Panel** — Identity (with QR via `qrcodegen` SVG, copy address,
+  display name), Privacy (Tor toggle + SOCKS5 config), Relays (editable URL
+  list with per-row connection state), About (version + update check),
+  Audit Log (filterable table + Export-Path button), Danger Zone
+  (two-step DELETE confirm → `wipe_all_data` removes app_data_dir + exits)
+- **Audit Log** — JSONL append-only at `audit.log`, ISO27001/ISMS-friendly:
+  identity_created/restored, contact_added/bound, mls_created/added/left/
+  removed, relay_changed, privacy_changed, data_wiped/onboarded —
+  categorical metadata only (never key material, never message bodies)
+- **i18n DE + EN** via `react-i18next` + `i18next-browser-languagedetector`,
+  ~230 namespaced keys (`settings.identity.title` etc.), localStorage
+  persistence, Auto/English/Deutsch toggle in Settings → Identity → Language;
+  formal "Sie" throughout German strings
+- **Auto-Updater** (`tauri-plugin-updater`) — Ed25519-signed releases,
+  endpoint `https://updates.dc-infosec.de/phantomchat/{{target}}/{{current_version}}`,
+  startup auto-check + manual "Check for updates" button + passive top-banner
+  on available update
+- **Message Search** (Ctrl+F / Cmd+F) — `search_messages(query, sender_filter, limit)`
+  Tauri command scans messages.json, debounced 200ms, magenta substring
+  highlights, sender-filter dropdown, click-result scrolls main MessageStream
+  + `pc-search-pulse` 1.5s animation on the row
+- **1:1 message persistence** — `messages.json` JSONL with file rows
+  (`kind: "text" | "file"` + optional `file_meta`, `direction`, `sender_pub_hex`);
+  debounced auto-save 500ms after every message; hydrated on mount
+- **Connection-status pill** — live state from `connection` events
+  (connected breathing pulse / disconnected red blink / connecting yellow pulse)
+- **Cyberpunk visual polish** — CRT scanlines + grid background with 60s drift,
+  pane-focus glow, glitch-text effect on tampered messages (every ~6s, 0.3s
+  burst), slide-in animations on new messages, modal glass effect with 8px
+  backdrop-blur, Orbitron display font for headers, blinking cursor in input
+- **Graceful subscriber shutdown** — `tokio::oneshot` channel + `select!`,
+  3s timeout fallback to `JoinHandle::abort`, explicit `drop(relay)` ensures
+  clean WebSocket close before respawn
+
+### Added — Cyberpunk TUI (`cli/src/tui.rs`, `phantom chat`)
+
+- `ratatui` + `crossterm` three-pane chat (contacts left, message stream
+  center, input bottom)
+- Sealed-sender attribution + bind-keybinding (`b`)
+- Auto-upgrade for legacy keyfiles (adds `signing_private` / `signing_public`)
+- Same SessionStore + relay code path as headless `send` / `listen`
+- Cyberpunk palette matching the Tauri Desktop and CLI banner
+
+### Changed — Core (`core/src/mls.rs`)
+
+- New public accessors on `PhantomMlsMember`: `provider()`, `signer()`,
+  `credential_with_key()` — enable safe `MlsGroup::load(provider, &gid)`
+  per-call pattern (replacing the prior `unsafe { mem::transmute }` workaround)
+- New `PhantomMlsGroup::from_parts(member, group)` constructor
+- New module-level `pub fn load_group(member, &group_id) -> Result<MlsGroup, MlsError>`
+- New `pub fn group_id_bytes(group)` helper
+- Re-exports `pub use openmls::group::{GroupId, MlsGroup}` so consumers
+  don't need an openmls direct dep
+- Custom file-backed `StorageProvider` wrapping the upstream
+  `MemoryStorage` — `persist()` snapshots the entire HashMap atomically
+  to `mls_state.bin` (bincode), `new_with_storage_dir` rehydrates on startup
+- Two new tests: `file_backed_member_round_trips_storage_across_restarts`,
+  `state_blob_roundtrips_arbitrary_pairs` — both green (6/6 MLS tests pass)
+
+### Changed — Relays (`relays/src/lib.rs`)
+
+- `MultiRelay` BridgeProvider — fan-out publish (succeed-if-any), dedupe-LRU
+  subscribe, `id() == "multi:N"`
+- `make_multi_relay(urls, stealth, proxy)` factory; single-URL passthrough
+  optimization
+- `NostrRelay::subscribe` rewritten to use new auto-reconnect loop with
+  exponential backoff (StealthNostrRelay deliberately untouched per scope)
+- New `ConnectionEvent` enum + `StateHandler` type alias + default-impl
+  `subscribe_with_state` trait method on `BridgeProvider`
+
+### Changed — CLI (`cli/src/main.rs`)
+
+- New `phantom chat` subcommand opens TUI
+- `cmd_keygen` now also generates + persists Ed25519 signing keypair
+  (`signing_private` b64, `signing_public` hex) for sealed-sender attribution
+- Cleaned 21 build warnings → 0 (deprecated `base64::encode` migrations,
+  unused-import deletes, dead-code annotations)
+
+### Documentation
+
+- `desktop/README.md` (179 lines) — quickstart, build, OS-specific app-data
+  paths, troubleshooting, ASCII architecture diagram
+- This README updated with B2B sales positioning + new feature matrix rows
+
+### Build / Distribution
+
+- Tauri Windows build verified end-to-end on Win11 25H2:
+  - MSVC + WiX MSI bundling (Visual Studio Build Tools 2022 on `D:\BuildTools`,
+    Rust toolchain on `D:\rust`, repo on `D:\phantomchat`)
+  - Ed25519 release signing via `minisign 0.12` on Hostinger VPS
+  - Update server: nginx vhost on `updates.dc-infosec.de` serving Tauri
+    updater protocol JSON manifests + signed `.msi` + `.minisig`
+  - Companion CLI binary cross-built (`phantom.exe`, 7.11 MiB)
+
+### Tests / Quality
+
+- Selftest still 30/30 across 9 phases
+- MLS unit tests: 6/6 pass (4 original + 2 new for file-backed storage)
+- `phantomchat_cli` build: 0 warnings
+- `phantomchat_relays` build: 0 warnings
+- `phantomchat_desktop` cargo check: clean
+- Frontend bundle: 303 KB JS / 27 KB CSS (gzip: 90 / 6 KB)
+
+### Sales positioning (decided 2026-04-25)
+
+PhantomChat now markets as **internal company messenger replacing email** for
+German SMEs and law firms with hard confidentiality obligations
+(`Anwaltsgeheimnis` § 203 StGB). Pricing model: bundled with DC INFOSEC
+pentest engagements (cross-sell), self-hosted flat-license tier, and
+optional managed hosting tier.
+
+---
+
 ## [2.6.0] — 2026-04-20 — MLS (RFC 9420) live
 
 ### Added — Real MLS group messaging via openmls 0.8
