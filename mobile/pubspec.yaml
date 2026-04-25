@@ -23,6 +23,10 @@ dependencies:
   flutter_rust_bridge: 2.12.0
   freezed_annotation: ^2.4.4
   path_provider: ^2.1.5
+  # Wave 7B2 — pure-Dart relay client (publish + receive over Nostr WebSocket).
+  # `web_socket_channel` was already a transitive dep via flutter_test; promote
+  # to a direct dep so the relay-publish path doesn't depend on a transitive.
+  web_socket_channel: ^3.0.1
 
 dev_dependencies:
   flutter_test:

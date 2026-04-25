@@ -580,3 +580,147 @@ pub fn mls_directory() -> Result<Vec<MlsMemberRefV3>, String> {
     let bundle = slot.as_ref().ok_or("call mls_init first")?;
     Ok(bundle.member_addresses.clone())
 }
+
+// ── Nostr publish helpers (Wave 7B2 — mobile relay-publish path) ───────────
+//
+// The Dart RelayService opens raw WebSockets to each configured Nostr relay
+// and ships envelopes wrapped as NIP-01 events. The secp256k1 + Schnorr
+// signing happens here so we don't have to vendor a Dart secp256k1 stack —
+// `phantomchat_relays::NostrEvent::new` is the canonical reference; this
+// helper produces a byte-identical wire frame (kind 1059 — gift wrap, hex
+// content) using the SAME ephemeral-keypair-per-process strategy the
+// desktop transport uses.
+
+use secp256k1::{KeyPair, Message, Secp256k1, SecretKey};
+use sha2::{Digest, Sha256};
+
+/// Nostr Kind 1059 — Gift Wrap (NIP-59). Matches `phantomchat_relays::lib`
+/// so a Mobile-published event is indistinguishable on the wire from a
+/// Desktop-published one.
+const NOSTR_KIND_PHANTOM: u64 = 1059;
+
+/// Per-process ephemeral session keypair. Generated lazily on first
+/// `nostr_build_event` call and re-used for the rest of the process —
+/// matches `phantomchat_relays::session_keypair()`'s lifetime so each
+/// app launch presents a fresh pseudonym to relay operators.
+static NOSTR_SESSION_KP: OnceCell<KeyPair> = OnceCell::new();
+
+fn nostr_session_kp() -> &'static KeyPair {
+    NOSTR_SESSION_KP.get_or_init(|| {
+        let secp = Secp256k1::new();
+        let secret = SecretKey::new(&mut rand::rngs::OsRng);
+        KeyPair::from_secret_key(&secp, &secret)
+    })
+}
+
+/// Output of [`nostr_build_event`] — the JSON wire frame the Dart side
+/// sends straight over the WebSocket plus the event id (so the Dart side
+/// can match incoming `["OK", <id>, accepted, msg]` ack frames against
+/// the publish in flight).
+#[derive(Clone, Debug)]
+pub struct NostrEventWire {
+    /// Full `["EVENT", { … }]` JSON ready for `WsMessage::Text`.
+    pub publish_json: String,
+    /// Hex event id (matches `id` field in the event body). The Dart
+    /// publisher tracks this to pair OK-ack frames with the in-flight
+    /// publish promise.
+    pub event_id: String,
+}
+
+/// Wrap raw envelope bytes into a signed Nostr `["EVENT", …]` publish
+/// frame. Caller is responsible for the WebSocket transport.
+///
+/// Wire format (canonical, matches `phantomchat_relays::NostrEvent::new`):
+///
+/// 1. `pubkey`     = hex(x-only ephemeral session key, 32 B)
+/// 2. `content`    = hex(envelope_bytes)
+/// 3. `tags`       = `[]`
+/// 4. `kind`       = 1059
+/// 5. `created_at` = unix seconds
+/// 6. `id`         = SHA256(canonical-JSON([0, pubkey, created_at, kind, tags, content]))
+/// 7. `sig`        = secp256k1 Schnorr over the id bytes
+pub fn nostr_build_event(envelope_bytes: Vec<u8>) -> Result<NostrEventWire, String> {
+    let kp = nostr_session_kp();
+    let secp = Secp256k1::new();
+
+    // x-only pubkey: drop the 0x02/0x03 parity prefix that
+    // `PublicKey::serialize` (compressed) prepends, leaving the bare 32-byte
+    // x coordinate Nostr expects.
+    let pubkey_hex = hex::encode(&kp.public_key().serialize()[1..]);
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("clock: {e}"))?
+        .as_secs();
+    let content = hex::encode(&envelope_bytes);
+    let tags: Vec<Vec<String>> = vec![];
+
+    // Canonical id-preimage: NIP-01 mandates this exact array shape +
+    // `serde_json` default (no whitespace) serialisation.
+    let id_preimage = serde_json::json!([
+        0,
+        pubkey_hex,
+        created_at,
+        NOSTR_KIND_PHANTOM,
+        tags,
+        content,
+    ]);
+    let id_bytes_full = serde_json::to_vec(&id_preimage)
+        .map_err(|e| format!("id preimage serialise: {e}"))?;
+    let id_hash = Sha256::digest(&id_bytes_full);
+    let id_hex = hex::encode(id_hash);
+
+    // Schnorr sign over the 32-byte id hash.
+    let msg = Message::from_slice(id_hash.as_slice())
+        .map_err(|e| format!("nostr id->Message: {e}"))?;
+    let sig = secp.sign_schnorr(&msg, kp);
+    let sig_hex = hex::encode(sig.as_ref());
+
+    // Final event body. Field order is irrelevant for relays (they parse
+    // into a struct), but we list it in the same order as the canonical
+    // pre-image for easier human inspection.
+    let event = serde_json::json!({
+        "id": id_hex,
+        "pubkey": pubkey_hex,
+        "created_at": created_at,
+        "kind": NOSTR_KIND_PHANTOM,
+        "tags": tags,
+        "content": content,
+        "sig": sig_hex,
+    });
+    let publish_json = serde_json::json!(["EVENT", event]).to_string();
+    Ok(NostrEventWire { publish_json, event_id: id_hex })
+}
+
+/// Build a `["REQ", <sub_id>, {"kinds":[1059]}]` subscription frame the
+/// Dart side sends straight after a successful WebSocket connect (or
+/// reconnect). Centralised here so a future field tweak (e.g. adding a
+/// `since` filter) only changes one place.
+pub fn nostr_subscription_req(sub_id: String) -> String {
+    serde_json::json!(["REQ", sub_id, {"kinds": [NOSTR_KIND_PHANTOM]}]).to_string()
+}
+
+/// Decode a `["EVENT", sub_id, { …, "content": <hex>, … }]` frame down to
+/// the raw envelope bytes the existing receive pipeline (`receive_full_v3`
+/// → `RelayService.feedEnvelope`) expects.
+///
+/// `Ok(None)` means the frame was a non-EVENT command (`OK`, `EOSE`,
+/// `NOTICE`) or had a content field we couldn't hex-decode. The Dart side
+/// uses `null` to skip silently rather than logging on every relay control
+/// frame.
+pub fn nostr_extract_event_payload(frame_text: String) -> Result<Option<Vec<u8>>, String> {
+    let v: serde_json::Value = serde_json::from_str(&frame_text)
+        .map_err(|e| format!("nostr frame parse: {e}"))?;
+    let arr = v.as_array().ok_or_else(|| "frame not a JSON array".to_string())?;
+    let cmd = arr.first().and_then(|x| x.as_str()).unwrap_or("");
+    if cmd != "EVENT" {
+        return Ok(None);
+    }
+    // ["EVENT", sub_id, event_obj] — content lives in event_obj.content.
+    let event_obj = arr.get(2).ok_or_else(|| "EVENT frame missing event obj".to_string())?;
+    let content_hex = event_obj
+        .get("content")
+        .and_then(|c| c.as_str())
+        .ok_or_else(|| "EVENT frame missing content field".to_string())?;
+    let bytes = hex::decode(content_hex).map_err(|e| format!("content hex decode: {e}"))?;
+    Ok(Some(bytes))
+}

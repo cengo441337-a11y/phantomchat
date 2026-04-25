@@ -6,9 +6,9 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `mls_slot`, `mls_with_group`, `sessions`
+// These functions are ignored because they are not marked as `pub`: `mls_slot`, `mls_with_group`, `nostr_session_kp`, `sessions`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MlsBundle`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`
 
 String generatePhantomId() => RustLib.instance.api.crateApiGeneratePhantomId();
 
@@ -202,6 +202,39 @@ Future<List<MlsMemberInfoV3>> mlsListMembers() =>
 Future<List<MlsMemberRefV3>> mlsDirectory() =>
     RustLib.instance.api.crateApiMlsDirectory();
 
+/// Wrap raw envelope bytes into a signed Nostr `["EVENT", …]` publish
+/// frame. Caller is responsible for the WebSocket transport.
+///
+/// Wire format (canonical, matches `phantomchat_relays::NostrEvent::new`):
+///
+/// 1. `pubkey`     = hex(x-only ephemeral session key, 32 B)
+/// 2. `content`    = hex(envelope_bytes)
+/// 3. `tags`       = `[]`
+/// 4. `kind`       = 1059
+/// 5. `created_at` = unix seconds
+/// 6. `id`         = SHA256(canonical-JSON([0, pubkey, created_at, kind, tags, content]))
+/// 7. `sig`        = secp256k1 Schnorr over the id bytes
+Future<NostrEventWire> nostrBuildEvent({required List<int> envelopeBytes}) =>
+    RustLib.instance.api.crateApiNostrBuildEvent(envelopeBytes: envelopeBytes);
+
+/// Build a `["REQ", <sub_id>, {"kinds":[1059]}]` subscription frame the
+/// Dart side sends straight after a successful WebSocket connect (or
+/// reconnect). Centralised here so a future field tweak (e.g. adding a
+/// `since` filter) only changes one place.
+Future<String> nostrSubscriptionReq({required String subId}) =>
+    RustLib.instance.api.crateApiNostrSubscriptionReq(subId: subId);
+
+/// Decode a `["EVENT", sub_id, { …, "content": <hex>, … }]` frame down to
+/// the raw envelope bytes the existing receive pipeline (`receive_full_v3`
+/// → `RelayService.feedEnvelope`) expects.
+///
+/// `Ok(None)` means the frame was a non-EVENT command (`OK`, `EOSE`,
+/// `NOTICE`) or had a content field we couldn't hex-decode. The Dart side
+/// uses `null` to skip silently rather than logging on every relay control
+/// frame.
+Future<Uint8List?> nostrExtractEventPayload({required String frameText}) =>
+    RustLib.instance.api.crateApiNostrExtractEventPayload(frameText: frameText);
+
 class MlsMemberInfoV3 {
   final String credentialLabel;
   final String signaturePubHex;
@@ -256,6 +289,33 @@ class MlsMemberRefV3 {
           label == other.label &&
           address == other.address &&
           signingPubHex == other.signingPubHex;
+}
+
+/// Output of [`nostr_build_event`] — the JSON wire frame the Dart side
+/// sends straight over the WebSocket plus the event id (so the Dart side
+/// can match incoming `["OK", <id>, accepted, msg]` ack frames against
+/// the publish in flight).
+class NostrEventWire {
+  /// Full `["EVENT", { … }]` JSON ready for `WsMessage::Text`.
+  final String publishJson;
+
+  /// Hex event id (matches `id` field in the event body). The Dart
+  /// publisher tracks this to pair OK-ack frames with the in-flight
+  /// publish promise.
+  final String eventId;
+
+  const NostrEventWire({required this.publishJson, required this.eventId});
+
+  @override
+  int get hashCode => publishJson.hashCode ^ eventId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is NostrEventWire &&
+          runtimeType == other.runtimeType &&
+          publishJson == other.publishJson &&
+          eventId == other.eventId;
 }
 
 /// Outcome of [`receive_full_v3`] — plaintext + sealed-sender attribution

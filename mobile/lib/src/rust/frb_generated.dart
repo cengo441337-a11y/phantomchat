@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -910508301;
+  int get rustContentHash => 1074652651;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -137,6 +137,16 @@ abstract class RustLibApi extends BaseApi {
   String? crateApiMlsSelfLabel();
 
   Future<String> crateApiMlsSelfSigningPubHex();
+
+  Future<NostrEventWire> crateApiNostrBuildEvent({
+    required List<int> envelopeBytes,
+  });
+
+  Future<Uint8List?> crateApiNostrExtractEventPayload({
+    required String frameText,
+  });
+
+  Future<String> crateApiNostrSubscriptionReq({required String subId});
 
   Future<void> crateApiPerformPanicWipe({required String dbPath});
 
@@ -763,6 +773,102 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "mls_self_signing_pub_hex", argNames: []);
 
   @override
+  Future<NostrEventWire> crateApiNostrBuildEvent({
+    required List<int> envelopeBytes,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_prim_u_8_loose(envelopeBytes, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 21,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_nostr_event_wire,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiNostrBuildEventConstMeta,
+        argValues: [envelopeBytes],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNostrBuildEventConstMeta => const TaskConstMeta(
+    debugName: "nostr_build_event",
+    argNames: ["envelopeBytes"],
+  );
+
+  @override
+  Future<Uint8List?> crateApiNostrExtractEventPayload({
+    required String frameText,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(frameText, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 22,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_list_prim_u_8_strict,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiNostrExtractEventPayloadConstMeta,
+        argValues: [frameText],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNostrExtractEventPayloadConstMeta =>
+      const TaskConstMeta(
+        debugName: "nostr_extract_event_payload",
+        argNames: ["frameText"],
+      );
+
+  @override
+  Future<String> crateApiNostrSubscriptionReq({required String subId}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(subId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 23,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiNostrSubscriptionReqConstMeta,
+        argValues: [subId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNostrSubscriptionReqConstMeta =>
+      const TaskConstMeta(
+        debugName: "nostr_subscription_req",
+        argNames: ["subId"],
+      );
+
+  @override
   Future<void> crateApiPerformPanicWipe({required String dbPath}) {
     return handler.executeNormal(
       NormalTask(
@@ -772,7 +878,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 24,
             port: port_,
           );
         },
@@ -804,7 +910,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 25,
             port: port_,
           );
         },
@@ -836,7 +942,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 26,
             port: port_,
           );
         },
@@ -871,7 +977,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 27,
             port: port_,
           );
         },
@@ -905,7 +1011,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 28,
             port: port_,
           );
         },
@@ -941,7 +1047,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 29,
             port: port_,
           );
         },
@@ -974,7 +1080,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(modeStr, serializer);
           sse_encode_opt_String(proxyAddr, serializer);
           sse_encode_bool(useNym, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 30)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -1002,7 +1108,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 31,
             port: port_,
           );
         },
@@ -1086,6 +1192,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       label: dco_decode_String(arr[0]),
       address: dco_decode_String(arr[1]),
       signingPubHex: dco_decode_String(arr[2]),
+    );
+  }
+
+  @protected
+  NostrEventWire dco_decode_nostr_event_wire(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return NostrEventWire(
+      publishJson: dco_decode_String(arr[0]),
+      eventId: dco_decode_String(arr[1]),
     );
   }
 
@@ -1241,6 +1359,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       address: var_address,
       signingPubHex: var_signingPubHex,
     );
+  }
+
+  @protected
+  NostrEventWire sse_decode_nostr_event_wire(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_publishJson = sse_decode_String(deserializer);
+    var var_eventId = sse_decode_String(deserializer);
+    return NostrEventWire(publishJson: var_publishJson, eventId: var_eventId);
   }
 
   @protected
@@ -1413,6 +1539,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.label, serializer);
     sse_encode_String(self.address, serializer);
     sse_encode_String(self.signingPubHex, serializer);
+  }
+
+  @protected
+  void sse_encode_nostr_event_wire(
+    NostrEventWire self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.publishJson, serializer);
+    sse_encode_String(self.eventId, serializer);
   }
 
   @protected
