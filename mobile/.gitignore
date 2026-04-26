@@ -43,3 +43,10 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Cross-compiled native libs staged by scripts/build-android.sh
+/android/app/src/main/jniLibs/
+
+# Rust wrapper crate build cache (Cargo.lock IS checked in per cargo guidance
+# for binary-shaped crates — this cdylib ships as the Android JNI lib).
+/rust/target/
