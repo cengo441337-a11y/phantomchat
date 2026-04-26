@@ -14,18 +14,26 @@ MODE="release"
 echo "[1/4] Regenerating flutter_rust_bridge bindings…"
 (cd "$REPO_ROOT/mobile" && flutter_rust_bridge_codegen generate)
 
-echo "[2/4] Cross-compiling Rust core for Android (${ABIS[*]})…"
-cd "$REPO_ROOT/core"
+echo "[2/4] Cross-compiling phantomchat_mobile for Android (${ABIS[*]})…"
+# IMPORTANT: build the mobile/rust/ wrapper crate, NOT core/. The FRB-
+# generated Dart code (mobile/lib/src/rust/frb_generated.dart) dlopens
+# `libphantomchat_mobile.so` (matches the wrapper's [package].name).
+# If we built core/ here, RustLib.init() throws "not initialized — did
+# you forget RustLib.init?" because FRB cannot find its symbols by name
+# in libphantomchat_core.so.
+cd "$REPO_ROOT/mobile/rust"
 ndk_args=()
 for abi in "${ABIS[@]}"; do ndk_args+=("-t" "$abi"); done
 cargo ndk "${ndk_args[@]}" \
     -o "$REPO_ROOT/mobile/android/app/src/main/jniLibs" \
-    build "$([ "$MODE" = release ] && echo --release)" \
-    --no-default-features --features ffi-mobile
-# Strip incidental transitive .so files cargo-ndk may leave behind
+    build "$([ "$MODE" = release ] && echo --release)"
+# phantomchat_core is statically linked into libphantomchat_mobile.so
+# via the wrapper crate's dep; we don't need (and shouldn't ship) a
+# separate libphantomchat_core.so. Also strip transient cargo-ndk debris.
 for abi in "${ABIS[@]}"; do
     find "$REPO_ROOT/mobile/android/app/src/main/jniLibs/$abi" \
-         -name 'libif_watch-*.so' -delete 2>/dev/null || true
+         \( -name 'libif_watch-*.so' -o -name 'libphantomchat_core.so' \) \
+         -delete 2>/dev/null || true
 done
 
 echo "[3/4] flutter pub get…"
