@@ -3750,6 +3750,123 @@ fn mark_onboarded(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// ── Wave 7C: enterprise pre-seeded bootstrap ────────────────────────────────
+//
+// `bootstrap.json` is a per-org pre-seed file that the templater
+// (`tools/phantom-build-org-msi`) bakes into an enterprise deploy artifact.
+// On first launch the desktop reads it (admin-pushed via Group Policy /
+// Intune file deploy OR bundled inside the MSI install dir), generates a
+// fresh per-install identity, pre-populates the contact directory + relay
+// list, and skips the onboarding wizard entirely.
+//
+// Schema mirrors `tools/phantom-build-org-msi/src/main.rs::BootstrapFile`
+// 1:1 — bump `BOOTSTRAP_SCHEMA_VERSION` on the templater side AND here in
+// lock-step.
+
+const BOOTSTRAP_SCHEMA_VERSION: u32 = 1;
+const BOOTSTRAP_FILE: &str = "bootstrap.json";
+
+#[derive(Debug, Deserialize)]
+struct BootstrapFile {
+    schema_version: u32,
+    #[serde(default)]
+    org_name: String,
+    #[serde(default)]
+    org_id: String,
+    /// Reserved for future use (signing org-internal directory updates).
+    /// Persisted into `org_bootstrap.json` but not yet wired into any
+    /// send/receive path. Kept here so the desktop side knows about the
+    /// field and round-trips it cleanly when the templater bumps schema.
+    #[serde(default)]
+    org_secret: String,
+    #[serde(default)]
+    default_relays: Vec<String>,
+    #[serde(default)]
+    directory: Vec<BootstrapDirectoryEntry>,
+    #[serde(default)]
+    auto_join_lan_org_code: Option<String>,
+    #[serde(default)]
+    branding: BootstrapBranding,
+}
+
+#[derive(Debug, Deserialize)]
+struct BootstrapDirectoryEntry {
+    label: String,
+    address: String,
+    #[serde(default)]
+    signing_pub_hex: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct BootstrapBranding {
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    primary_color: Option<String>,
+}
+
+/// Search path for the pre-seeded bootstrap file. Order matters: the
+/// per-user `app_data_dir` location is checked first because it's the
+/// canonical drop-zone for admin-pushed config (Group Policy file deploy,
+/// Intune copy, deploy.ps1 from the templater) AND it survives MSI
+/// upgrades (per-user data is not touched by `msiexec /i`). The
+/// `<exe_parent>` location is the fallback for true MSI re-bundling
+/// (tauri's MSI files dir) — useful once Wave 7C-followup ships a real
+/// WiX shim.
+fn bootstrap_search_paths(app: &AppHandle) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(dir) = app_data(app) {
+        out.push(dir.join(BOOTSTRAP_FILE));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            out.push(parent.join(BOOTSTRAP_FILE));
+        }
+    }
+    out
+}
+
+/// Look for `bootstrap.json` and, if found + valid, apply it. Returns
+/// `Ok(true)` when a bootstrap was successfully applied (caller should
+/// then auto-mark the install as onboarded so the wizard never shows);
+/// `Ok(false)` when no bootstrap was found (normal path — let the wizard
+/// run); `Err(...)` on a hard validation/IO error against a present-but-
+/// malformed file.
+///
+/// Hard constraint: this function ONLY runs when no identity exists yet
+/// (`keys.json` missing) AND the install is not already onboarded. That
+/// keeps a malicious bootstrap dropped on a populated install from
+/// clobbering existing state.
+fn try_apply_bootstrap(app: AppHandle) -> Result<bool, String> {
+    // Don't even consider the bootstrap if the user is already onboarded
+    // OR if a keyfile already exists. This is the single source of truth
+    // for "fresh install" — anything else is treated as a normal startup.
+    if is_onboarded(app.clone()) {
+        return Ok(false);
+    }
+    let keyfile = keys_path(&app).map_err(|e| e.to_string())?;
+    if keyfile.exists() {
+        return Ok(false);
+    }
+
+    // Locate + parse bootstrap. A missing file is the normal case → just
+    // return false. A present-but-broken file is loud → return Err so
+    // the operator notices in `audit.log` + stderr.
+    let mut found_path: Option<PathBuf> = None;
+    let mut raw_bytes: Option<Vec<u8>> = None;
+    for candidate in bootstrap_search_paths(&app) {
+        if candidate.exists() {
+            match fs::read(&candidate) {
+                Ok(b) => {
+                    found_path = Some(candidate);
+                    raw_bytes = Some(b);
+                    break;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "bootstrap: read {} failed: {} — trying next path",
+                        candidate.display(),
+                        e
 // ── Crash reporting ─────────────────────────────────────────────────────────
 //
 // MVP design:
@@ -4476,6 +4593,150 @@ async fn ingest_lan_peer(app: &AppHandle, peer: DiscoveredPeer) {
                 }
             }
         }
+    }
+    let (boot_path, raw) = match (found_path, raw_bytes) {
+        (Some(p), Some(r)) => (p, r),
+        _ => return Ok(false),
+    };
+
+    let parsed: BootstrapFile = serde_json::from_slice(&raw)
+        .map_err(|e| format!("bootstrap parse {}: {}", boot_path.display(), e))?;
+    if parsed.schema_version != BOOTSTRAP_SCHEMA_VERSION {
+        return Err(format!(
+            "bootstrap {} has schema_version={} — this build only supports version {}",
+            boot_path.display(),
+            parsed.schema_version,
+            BOOTSTRAP_SCHEMA_VERSION
+        ));
+    }
+
+    // 1. Generate fresh identity (same write_identity helper the wizard's
+    //    generate_identity command uses, kept additive so the wizard path
+    //    stays untouched).
+    let identity = write_identity(&keyfile)
+        .map_err(|e| format!("bootstrap: identity gen failed: {}", e))?;
+    // `signing_pub_short` is the 16-hex-char prefix of the freshly-
+    // generated identity. We use it as the self-exclusion key against
+    // `directory[].signing_pub_hex` (full 64-char hex) — `starts_with`
+    // gives us a 64-bit collision domain inside a single org directory,
+    // which is astronomically safe.
+    let self_signing_pub_short = identity.signing_pub_short.clone();
+
+    // 2. Pre-populate contacts.json from directory[] (excluding self).
+    let contacts_p = contacts_path(&app).map_err(|e| e.to_string())?;
+    let mut book = ContactBook::default();
+    let mut contacts_added = 0usize;
+    let mut contacts_skipped_self = 0usize;
+    for entry in &parsed.directory {
+        // Self-exclusion: a directory entry whose signing_pub_hex starts
+        // with our own short signing-pub prefix is "us" (probability of
+        // collision in a same-org directory is astronomical for a 64-bit
+        // prefix). The directory is the org-wide list, so the install
+        // doesn't a-priori know which entry is itself — we mark all
+        // others as contacts and rely on (a) Wave 7A mDNS auto-discovery
+        // for onsite + (b) other org members adding this fresh identity
+        // through their own contact-add flow for remote.
+        if !entry.signing_pub_hex.is_empty()
+            && entry.signing_pub_hex.starts_with(&self_signing_pub_short)
+        {
+            contacts_skipped_self += 1;
+            continue;
+        }
+        book.contacts.push(Contact {
+            label: entry.label.clone(),
+            address: entry.address.clone(),
+            signing_pub: if entry.signing_pub_hex.is_empty() {
+                None
+            } else {
+                Some(entry.signing_pub_hex.clone())
+            },
+        });
+        contacts_added += 1;
+    }
+    save_contacts(&contacts_p, &book)
+        .map_err(|e| format!("bootstrap: write contacts.json: {}", e))?;
+
+    // 3. Pre-populate relays.json from default_relays.
+    if !parsed.default_relays.is_empty() {
+        if let Err(e) = save_relays(&app, &parsed.default_relays) {
+            eprintln!("bootstrap: write relays.json failed: {}", e);
+        }
+    }
+
+    // 4. Persist branding + window title (best-effort).
+    if let Some(display_name) = parsed
+        .branding
+        .display_name
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        // Stamp into me.json so MLS Welcome metadata shows the branded
+        // label as the inviter.
+        let _ = save_me(
+            &app,
+            &MeDisk {
+                label: display_name.clone(),
+            },
+        );
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.set_title(&display_name);
+        }
+    }
+
+    // 5. Persist the org bootstrap blob into a separate sidecar so a
+    //    follow-up wave can read `org_secret` / `org_id` without re-parsing
+    //    the original bootstrap.json (which the admin may delete after
+    //    apply). Best-effort.
+    if let Ok(dir) = app_data(&app) {
+        let sidecar = dir.join("org_bootstrap.json");
+        let blob = serde_json::json!({
+            "schema_version": parsed.schema_version,
+            "org_name":   parsed.org_name,
+            "org_id":     parsed.org_id,
+            "org_secret": parsed.org_secret,
+            "branding": {
+                "display_name":  parsed.branding.display_name,
+                "primary_color": parsed.branding.primary_color,
+            },
+        });
+        if let Ok(buf) = serde_json::to_vec_pretty(&blob) {
+            let _ = fs::write(&sidecar, buf);
+        }
+    }
+
+    // 6. Best-effort LAN auto-join. Wave 7A's `lan_org_join` is on a
+    //    separate branch (`feat/wave7-mdns-lan-discovery`) and not yet
+    //    merged into this worktree's base. When that PR lands, replace
+    //    this stub with `let _ = lan_org_join(app.clone(), code.clone());`
+    //    — the bootstrap.json field is wire-compatible already.
+    if let Some(code) = parsed.auto_join_lan_org_code.as_ref() {
+        eprintln!(
+            "bootstrap: auto_join_lan_org_code {:?} present — Wave 7A `lan_org_join` not yet merged into this branch; skipping (best-effort)",
+            code
+        );
+    }
+
+    // 7. Audit + auto-mark onboarded so the wizard never shows.
+    audit(
+        &app,
+        "bootstrap",
+        "applied",
+        serde_json::json!({
+            "org_id": parsed.org_id,
+            "org_name_len": parsed.org_name.len(),
+            "directory_entries": parsed.directory.len(),
+            "contacts_added": contacts_added,
+            "contacts_skipped_self": contacts_skipped_self,
+            "relay_count": parsed.default_relays.len(),
+            "lan_code_present": parsed.auto_join_lan_org_code.is_some(),
+            "source_path": boot_path.display().to_string(),
+        }),
+    );
+    if let Err(e) = mark_onboarded(app.clone()) {
+        eprintln!("bootstrap: mark_onboarded failed: {} — continuing", e);
+    }
+    Ok(true)
         let _ = app.emit("lan_peer_discovered", peer);
     }
 }
@@ -4749,6 +5010,25 @@ pub fn run() {
             let handle = app.handle().clone();
             let _ = app_data(&handle);
 
+            // ── Wave 7C: enterprise pre-seeded bootstrap ─────────────────
+            // If a `bootstrap.json` is present (admin-pushed via Group
+            // Policy / Intune file deploy or bundled inside the MSI),
+            // apply it BEFORE the wizard's `is_onboarded` check fires on
+            // the frontend. `try_apply_bootstrap` is idempotent + a no-op
+            // on already-onboarded installs, so re-launches are safe.
+            // Failures are logged but never fatal — the wizard fallback
+            // path stays available for the user.
+            match try_apply_bootstrap(handle.clone()) {
+                Ok(true) => {
+                    eprintln!("bootstrap: applied — onboarding wizard will be skipped");
+                }
+                Ok(false) => {
+                    // Normal startup — no bootstrap or already-onboarded.
+                }
+                Err(e) => {
+                    eprintln!("bootstrap: apply failed: {} — falling back to wizard", e);
+                }
+            }
             // Install the panic hook so any subsequent panic appends a
             // structured row to `crashes.jsonl` BEFORE the runtime
             // aborts. Must happen after `app_data()` so the hook's
