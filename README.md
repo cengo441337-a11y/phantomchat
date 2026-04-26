@@ -309,6 +309,9 @@ PhantomChat verteidigt gegen:
 | Quantencomputer (Shor) | ML-KEM-1024 Hybrid — beide Seiten müssen gleichzeitig brechen |
 | Spam / Sybil-Angriffe | Hashcash PoW |
 | Gerätekompromittierung | SQLCipher · Panic Wipe · PIN/Biometrie (geplant) |
+| Filesystem-Diebstahl (gestohlenes Notebook) | OS-Keystore (DPAPI / Keychain / libsecret) statt Plaintext-`keys.json` — siehe [`desktop/README.md` § Key storage](desktop/README.md#key-storage-wave-8h--os-secure-keystore) |
+| Memory-Dump (`gcore`, Hibernation-File) | `Zeroize`/`ZeroizeOnDrop` auf allen privaten Schlüsseltypen, `Zeroizing<Vec<u8>>` auf transienten Plaintext-Buffern |
+| Forensische Recovery nach „Wipe All Data" | Pre-Delete Zero-Overwrite + `fsync` + Truncate für jede Datei ≤ 100 MiB im app-data-dir |
 
 Vollständige Dokumentation: [docs/SECURITY.md](docs/SECURITY.md)
 
