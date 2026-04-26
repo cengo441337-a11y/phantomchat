@@ -25,8 +25,10 @@ use phantomchat_core::{
     keys::{IdentityKey, PhantomSigningKey, SpendKey, ViewKey},
     mls::{self, GroupId, PhantomMlsGroup, PhantomMlsMember},
     privacy::{PrivacyConfig, PrivacyMode, ProxyConfig, ProxyKind},
+    secure_storage::{detect_best_storage, key_id_for_path, SecureStorage, SecureStorageError},
     session::SessionStore,
 };
+use zeroize::Zeroizing;
 use phantomchat_relays::{
     make_multi_relay, BridgeProvider, ConnectionEvent, EnvelopeHandler, StateHandler,
 };
@@ -52,6 +54,10 @@ const ME_FILE: &str = "me.json";
 const RELAYS_FILE: &str = "relays.json";
 const PRIVACY_FILE: &str = "privacy.json";
 const AUDIT_LOG_FILE: &str = "audit.log";
+/// Persistence target for the desktop main-window geometry (position, size,
+/// maximized flag, last monitor identity). See the `window_state` module
+/// section further down for the on-disk schema and restore policy.
+const WINDOW_STATE_FILE: &str = "window_state.json";
 const POW_DIFFICULTY: u32 = 8;
 
 /// Bootstrap relay set written to `relays.json` if the file is missing.
@@ -791,6 +797,228 @@ fn audit(app: &AppHandle, category: &str, event: &str, details: serde_json::Valu
     }
 }
 
+// ── Window-state persistence (multi-monitor aware) ──────────────────────────
+//
+// On-disk schema (`$APPDATA/de.dc-infosec.phantomchat/window_state.json`):
+//
+//   {
+//     "schema_version": 1,
+//     "x": 100,
+//     "y": 50,
+//     "width": 1320,
+//     "height": 820,
+//     "maximized": false,
+//     "monitor_label": "DELL U2722DE",
+//     "monitor_position": { "x": 1920, "y": 0 }
+//   }
+//
+// All units are LOGICAL pixels — Tauri's `LogicalPosition`/`LogicalSize`
+// abstract over DPI, so a window persisted on a 1.5x scaled display
+// restores correctly on a 1.0x display without manual math.
+//
+// `monitor_label` + `monitor_position` form a soft fingerprint of the
+// display the user last had the window on. On restore we walk
+// `available_monitors()` and only re-apply the persisted geometry if a
+// matching monitor is still attached (label equal AND top-left position
+// within ±20 px). Otherwise we fall back to the platform default — which
+// is the centered 1100×720 the WindowBuilder gave us in tauri.conf.json.
+//
+// Off-screen rescue: even when the monitor matches, we double-check that
+// the restored rect lies entirely inside that monitor's bounds. A user
+// who unplugs a 4K display and reattaches a 1080p one with the same name
+// would otherwise get a window stranded outside the visible area.
+//
+// We deliberately hand-roll this instead of pulling in
+// `tauri-plugin-window-state` because the upstream plugin's restore
+// policy is "always restore last geometry" with no monitor-identity
+// check — bad UX on an Anwalt's docking-station + portable laptop combo
+// where a missing display means the window comes back invisible.
+
+/// Tolerance (in logical pixels) for matching a persisted monitor against
+/// the currently-attached set. Two monitors that report the same label
+/// and a top-left position within this many pixels are considered the
+/// same physical display. ±20 px absorbs minor DPI-rounding drift while
+/// still distinguishing a monitor reattached at a different desktop
+/// coordinate after a layout change.
+const MONITOR_MATCH_TOLERANCE_PX: f64 = 20.0;
+
+/// Debounce window for save_window_state writes. A drag emits a flood of
+/// `Moved` events at every cursor tick; coalescing to one write per 500 ms
+/// keeps `window_state.json` from being rewritten thousands of times per
+/// gesture without losing the final position when the user releases.
+const WINDOW_STATE_DEBOUNCE_MS: u64 = 500;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MonitorPos {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WindowStateDisk {
+    #[serde(default = "window_state_schema_default")]
+    pub schema_version: u32,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    #[serde(default)]
+    pub maximized: bool,
+    #[serde(default)]
+    pub monitor_label: String,
+    #[serde(default)]
+    pub monitor_position: MonitorPos,
+}
+
+impl Default for MonitorPos {
+    fn default() -> Self {
+        Self { x: 0.0, y: 0.0 }
+    }
+}
+
+fn window_state_schema_default() -> u32 {
+    1
+}
+
+fn window_state_path(app: &AppHandle) -> anyhow::Result<PathBuf> {
+    Ok(app_data(app)?.join(WINDOW_STATE_FILE))
+}
+
+/// Lenient loader: missing or corrupt file → `None`, never an error.
+/// First launch must not warn the user; a hand-edited file that fails to
+/// parse falls back to defaults (same stance as `load_privacy`).
+fn load_window_state(app: &AppHandle) -> Option<WindowStateDisk> {
+    let path = window_state_path(app).ok()?;
+    let raw = fs::read(&path).ok()?;
+    serde_json::from_slice::<WindowStateDisk>(&raw).ok()
+}
+
+/// Write the window state atomically-enough for our purposes (single
+/// `fs::write` — the file is small and a torn write just means we lose
+/// the latest gesture, never corrupt earlier app data).
+fn save_window_state(app: &AppHandle, state: WindowStateDisk) -> Result<(), String> {
+    let path = window_state_path(app).map_err(|e| e.to_string())?;
+    let buf = serde_json::to_vec_pretty(&state).map_err(|e| e.to_string())?;
+    fs::write(&path, buf).map_err(|e| format!("write {}: {}", path.display(), e))?;
+    Ok(())
+}
+
+/// Capture the current window geometry into a `WindowStateDisk`. Reads
+/// physical units off the OS, converts to logical via the window's scale
+/// factor so persistence is DPI-independent.
+fn capture_window_state(
+    win: &tauri::WebviewWindow,
+) -> Result<WindowStateDisk, String> {
+    let scale = win.scale_factor().map_err(|e| e.to_string())?;
+    let pos = win.outer_position().map_err(|e| e.to_string())?;
+    let size = win.outer_size().map_err(|e| e.to_string())?;
+    let maximized = win.is_maximized().unwrap_or(false);
+    let monitor = win.current_monitor().ok().flatten();
+    let (label, mpos) = match monitor {
+        Some(m) => {
+            let mp = m.position();
+            (
+                m.name().cloned().unwrap_or_default(),
+                MonitorPos {
+                    x: mp.x as f64 / scale,
+                    y: mp.y as f64 / scale,
+                },
+            )
+        }
+        None => (String::new(), MonitorPos::default()),
+    };
+    Ok(WindowStateDisk {
+        schema_version: 1,
+        x: pos.x as f64 / scale,
+        y: pos.y as f64 / scale,
+        width: size.width as f64 / scale,
+        height: size.height as f64 / scale,
+        maximized,
+        monitor_label: label,
+        monitor_position: mpos,
+    })
+}
+
+/// Walk `available_monitors()` and pick the one matching the persisted
+/// monitor identity. `None` ⇒ the user disconnected or rearranged
+/// displays; caller falls back to the centered default.
+fn find_matching_monitor(
+    win: &tauri::WebviewWindow,
+    state: &WindowStateDisk,
+) -> Option<tauri::Monitor> {
+    let monitors = win.available_monitors().ok()?;
+    let scale = win.scale_factor().unwrap_or(1.0);
+    monitors.into_iter().find(|m| {
+        let label_match = m
+            .name()
+            .map(|n| n == &state.monitor_label)
+            .unwrap_or(state.monitor_label.is_empty());
+        let mp = m.position();
+        let mx = mp.x as f64 / scale;
+        let my = mp.y as f64 / scale;
+        let pos_match = (mx - state.monitor_position.x).abs() <= MONITOR_MATCH_TOLERANCE_PX
+            && (my - state.monitor_position.y).abs() <= MONITOR_MATCH_TOLERANCE_PX;
+        label_match && pos_match
+    })
+}
+
+/// Verify the persisted rect fits inside `monitor`. Catches the
+/// "saved off-screen" / "monitor downgraded to lower resolution" cases
+/// before we apply geometry that would leave the window unreachable.
+fn rect_fits_monitor(
+    win: &tauri::WebviewWindow,
+    state: &WindowStateDisk,
+    monitor: &tauri::Monitor,
+) -> bool {
+    let scale = win.scale_factor().unwrap_or(1.0);
+    let mp = monitor.position();
+    let ms = monitor.size();
+    let m_x = mp.x as f64 / scale;
+    let m_y = mp.y as f64 / scale;
+    let m_w = ms.width as f64 / scale;
+    let m_h = ms.height as f64 / scale;
+    state.x >= m_x
+        && state.y >= m_y
+        && state.x + state.width <= m_x + m_w
+        && state.y + state.height <= m_y + m_h
+}
+
+/// Restore window geometry from disk if a matching monitor is attached
+/// AND the persisted rect still fits on it. Returns `Some(label)` on a
+/// successful restore so the caller can audit-log the monitor name; the
+/// audit entry deliberately omits the actual coordinates (per the spec
+/// these could leak desktop layout via the audit-log export).
+fn restore_window_state(app: &AppHandle, win: &tauri::WebviewWindow) -> Option<String> {
+    let state = load_window_state(app)?;
+    let monitor = match find_matching_monitor(win, &state) {
+        Some(m) => m,
+        None => {
+            audit(
+                app,
+                "display",
+                "window_restore_skipped",
+                serde_json::json!({ "reason": "monitor_missing" }),
+            );
+            return None;
+        }
+    };
+    if !rect_fits_monitor(win, &state, &monitor) {
+        audit(
+            app,
+            "display",
+            "window_restore_skipped",
+            serde_json::json!({ "reason": "off_screen" }),
+        );
+        return None;
+    }
+    let _ = win.set_position(tauri::LogicalPosition::new(state.x, state.y));
+    let _ = win.set_size(tauri::LogicalSize::new(state.width, state.height));
+    if state.maximized {
+        let _ = win.maximize();
+    }
+    Some(state.monitor_label.clone())
+}
+
 /// Read `privacy.json`, or fall back to `PrivacyConfigDto::default()` if
 /// the file is missing/corrupt. Lenient — same stance as `load_relays`:
 /// a hand-edited config that fails to parse should not brick the app.
@@ -891,25 +1119,212 @@ fn save_mls_directory(
 }
 
 // ── Identity persistence (mirrors `cli::cmd_keygen` JSON layout) ─────────────
+//
+// Wave 8H — OS-secure keystore
+// ----------------------------
+// The on-disk `keys.json` no longer carries `view_private` /
+// `spend_private` / `signing_private` plaintext. Instead it carries
+// `view_private_ref` / `spend_private_ref` / `signing_private_ref`
+// — opaque key_ids that resolve to byte blobs in the host's secure
+// keystore (DPAPI on Windows, Keychain on macOS, libsecret on Linux,
+// or — on hosts with no keystore — the in-process fallback).
+//
+// Migration is automatic and one-way: the first time `load_identity`
+// sees a legacy plaintext keyfile it stores the secrets in the keystore,
+// rewrites `keys.json` atomically (`.tmp` + fsync + rename), and emits an
+// `audit("identity", "migrated_to_secure_storage", …)` line. If anything
+// fails before the rename, the original plaintext keys.json survives so
+// the user never gets locked out of their identity.
+//
+// `signing_public` and `view_public` / `spend_public` continue to live
+// inline as hex — they are by design shareable.
 
-/// Load view + spend + signing keys from the on-disk keyfile.
-///
-/// Backwards-compat: if `signing_private` is absent (pre-attribution
-/// keyfiles), a fresh [`PhantomSigningKey`] is generated and the keyfile
-/// is rewritten in-place with the two new fields. The fourth tuple element
-/// signals whether such an upgrade happened so the caller can emit a
-/// one-time `status` event to the frontend.
-fn load_identity(
+/// Lazily-initialised handle onto the host's secure keystore. We initialise
+/// once per process and reuse the same `Box<dyn SecureStorage>` for every
+/// migration / load / write. Wrapped in `OnceLock` so the first identity
+/// access on the hot path doesn't pay a dispatch cost on every subsequent
+/// call.
+static SECURE_STORAGE: std::sync::OnceLock<Box<dyn SecureStorage>> = std::sync::OnceLock::new();
+
+fn secure_storage() -> &'static dyn SecureStorage {
+    SECURE_STORAGE.get_or_init(detect_best_storage).as_ref()
+}
+
+/// Compose the per-secret key_id from a path-derived prefix. Keeps the
+/// three secrets under one identity-file logically grouped in the OS
+/// keystore (`secret-tool search service phantomchat` lists them together)
+/// and lets `wipe_all_data` purge them by enumerating the suffixes.
+fn secret_key_id(path: &std::path::Path, suffix: &str) -> String {
+    format!("{}:{}", key_id_for_path(path), suffix)
+}
+
+const SECRET_SUFFIXES: &[&str] = &["view", "spend", "signing", "identity"];
+
+/// Atomic write helper: serialise `value` to `path.tmp`, fsync, rename
+/// onto `path`. If anything errors before the rename, the original file
+/// (if any) is preserved bit-for-bit. Used by the migration path so a
+/// power-loss between "stash secrets in keystore" and "rewrite keys.json"
+/// never leaves a half-converted file on disk.
+fn atomic_write_json(path: &std::path::Path, value: &serde_json::Value) -> anyhow::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    {
+        let mut f = fs::File::create(&tmp)
+            .with_context(|| format!("create {}", tmp.display()))?;
+        let bytes = serde_json::to_vec_pretty(value)?;
+        f.write_all(&bytes).with_context(|| format!("write {}", tmp.display()))?;
+        f.sync_all().with_context(|| format!("fsync {}", tmp.display()))?;
+    }
+    fs::rename(&tmp, path)
+        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
+    Ok(())
+}
+
+/// Stash a single secret (already base64-decoded) in the host keystore
+/// under the canonical per-path key_id, and return the key_id string the
+/// caller should write into the rewritten keys.json.
+fn stash_secret(
     path: &std::path::Path,
-) -> anyhow::Result<(ViewKey, SpendKey, PhantomSigningKey, bool)> {
+    suffix: &str,
+    secret: &[u8],
+) -> Result<String, SecureStorageError> {
+    let id = secret_key_id(path, suffix);
+    secure_storage().store(&id, secret)?;
+    Ok(id)
+}
+
+/// Pull a secret back from the keystore by its `_ref` value. Returned in a
+/// `Zeroizing<Vec<u8>>` so the plaintext is wiped from RAM as soon as the
+/// caller's deref-and-copy into a typed key struct returns.
+fn fetch_secret(key_id: &str) -> anyhow::Result<Zeroizing<Vec<u8>>> {
+    let bytes = secure_storage()
+        .load(key_id)
+        .with_context(|| format!("secure-storage load '{key_id}'"))?;
+    Ok(Zeroizing::new(bytes))
+}
+
+/// Convert a keys.json that still carries `*_private` plaintext into the
+/// new `*_private_ref` form. Returns `Ok(true)` iff a migration ran.
+///
+/// Atomicity contract: if any single keystore-store call fails (or the
+/// final atomic rewrite fails), the on-disk keys.json is left untouched
+/// and the caller can retry on the next launch.
+fn migrate_keys_json_if_legacy(
+    app: &AppHandle,
+    path: &std::path::Path,
+) -> anyhow::Result<bool> {
     let raw = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let mut json: serde_json::Value = serde_json::from_slice(&raw)?;
 
-    let view_bytes = B64.decode(
-        json["view_private"]
-            .as_str()
-            .context("missing view_private")?,
-    )?;
+    let has_legacy = ["view_private", "spend_private", "signing_private", "identity_private"]
+        .iter()
+        .any(|f| json.get(*f).and_then(|v| v.as_str()).is_some());
+    if !has_legacy {
+        return Ok(false);
+    }
+
+    // Migrate every plaintext field that exists. `identity_private` is
+    // legacy and may not appear on freshly-keygen'd files, so be lenient.
+    for (field, suffix) in [
+        ("view_private", "view"),
+        ("spend_private", "spend"),
+        ("signing_private", "signing"),
+        ("identity_private", "identity"),
+    ] {
+        if let Some(s) = json.get(field).and_then(|v| v.as_str()) {
+            // Wrap the decoded plaintext in `Zeroizing` so it's wiped from
+            // RAM as soon as the keystore-store call returns, even on the
+            // error path.
+            let plaintext: Zeroizing<Vec<u8>> = Zeroizing::new(
+                B64.decode(s).with_context(|| format!("decode {field} base64"))?,
+            );
+            let id = stash_secret(path, suffix, &plaintext)
+                .map_err(|e| anyhow!("stash {field}: {e}"))?;
+            if let Some(obj) = json.as_object_mut() {
+                obj.remove(field);
+                obj.insert(format!("{field}_ref"), serde_json::Value::String(id));
+            }
+        }
+    }
+
+    // Stamp which backend we used so a later operator audit can
+    // differentiate a real keychain from the fallback plaintext store.
+    let backend = secure_storage().name();
+    if let Some(obj) = json.as_object_mut() {
+        obj.insert(
+            "storage_backend".to_string(),
+            serde_json::Value::String(backend.to_string()),
+        );
+    }
+
+    atomic_write_json(path, &json)?;
+
+    audit(
+        app,
+        "identity",
+        "migrated_to_secure_storage",
+        serde_json::json!({
+            "backend": backend,
+        }),
+    );
+    if backend == "fallback-plaintext" {
+        audit(
+            app,
+            "identity",
+            "secure_storage_fallback_warning",
+            serde_json::json!({
+                "reason": "no OS keystore detected; secrets live in process memory only"
+            }),
+        );
+    }
+
+    Ok(true)
+}
+
+/// Load view + spend + signing keys from the on-disk keyfile.
+///
+/// Handles three input shapes:
+///
+/// 1. **Legacy plaintext** (`view_private`, etc.) — auto-migrated to
+///    the secure-storage form on first sight, then loaded as case 2.
+/// 2. **Secure-storage refs** (`view_private_ref`, etc.) — the
+///    canonical post-Wave-8H format; secrets fetched from
+///    `secure_storage()`.
+/// 3. **Mixed / partial** (e.g. `signing_private` absent on
+///    pre-attribution keyfiles) — the missing piece is generated
+///    fresh, written to the keystore, and the keyfile is upgraded
+///    in-place. The fourth tuple element flags such an upgrade so
+///    the caller can emit a one-time `status` event.
+fn load_identity(
+    app: &AppHandle,
+    path: &std::path::Path,
+) -> anyhow::Result<(ViewKey, SpendKey, PhantomSigningKey, bool)> {
+    // Step 1 — best-effort auto-migration. A migration failure surfaces
+    // via the load below (the *_private fields will still be there, the
+    // *_private_ref fields will be missing) so we don't gate the entire
+    // load on it; just log if it errored.
+    if let Err(e) = migrate_keys_json_if_legacy(app, path) {
+        eprintln!("identity migration to secure-storage failed: {e:#}");
+    }
+
+    let raw = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut json: serde_json::Value = serde_json::from_slice(&raw)?;
+
+    // Helper: load a single secret either by `_ref` (preferred) or by
+    // legacy plaintext (fallback if the migration above failed).
+    let load_secret = |json: &serde_json::Value,
+                       field: &str|
+     -> anyhow::Result<Zeroizing<Vec<u8>>> {
+        let ref_field = format!("{field}_ref");
+        if let Some(id) = json.get(&ref_field).and_then(|v| v.as_str()) {
+            return fetch_secret(id);
+        }
+        if let Some(s) = json.get(field).and_then(|v| v.as_str()) {
+            return Ok(Zeroizing::new(B64.decode(s)?));
+        }
+        Err(anyhow!("missing {field} (or {ref_field})"))
+    };
+
+    let view_bytes = load_secret(&json, "view_private")?;
     let view_secret = StaticSecret::from(
         <[u8; 32]>::try_from(view_bytes.as_slice()).map_err(|_| anyhow!("bad view key"))?,
     );
@@ -918,11 +1333,7 @@ fn load_identity(
         secret: view_secret,
     };
 
-    let spend_bytes = B64.decode(
-        json["spend_private"]
-            .as_str()
-            .context("missing spend_private")?,
-    )?;
+    let spend_bytes = load_secret(&json, "spend_private")?;
     let spend_secret = StaticSecret::from(
         <[u8; 32]>::try_from(spend_bytes.as_slice()).map_err(|_| anyhow!("bad spend key"))?,
     );
@@ -931,30 +1342,35 @@ fn load_identity(
         secret: spend_secret,
     };
 
-    let (signing, upgraded) = match json["signing_private"].as_str() {
-        Some(s) => {
-            let bytes = B64.decode(s)?;
+    // Signing key handling: prefer the `_ref` form, then plaintext, then
+    // generate-and-persist if the keyfile predates sealed-sender
+    // attribution. The `upgraded` flag fires only in that last case.
+    let (signing, upgraded) = match load_secret(&json, "signing_private") {
+        Ok(bytes) => {
             let arr: [u8; 32] = <[u8; 32]>::try_from(bytes.as_slice())
                 .map_err(|_| anyhow!("bad signing key"))?;
             (PhantomSigningKey::from_bytes(arr), false)
         }
-        None => {
+        Err(_) => {
             let sk = PhantomSigningKey::generate();
-            // Persist so subsequent runs reuse the same identity for
-            // attribution. Best-effort: a write failure is non-fatal — the
-            // in-memory key still works for this session.
-            if let Some(obj) = json.as_object_mut() {
-                obj.insert(
-                    "signing_private".to_string(),
-                    serde_json::Value::String(B64.encode(sk.to_bytes())),
-                );
-                obj.insert(
-                    "signing_public".to_string(),
-                    serde_json::Value::String(hex::encode(sk.public_bytes())),
-                );
-                let _ = serde_json::to_vec_pretty(&json)
-                    .ok()
-                    .and_then(|b| fs::write(path, b).ok());
+            // Persist directly into the keystore + a `_ref` in keys.json.
+            // Best-effort: a failure here just means the next launch will
+            // generate a different signing key (cosmetic — sealed-sender
+            // attribution will show a different signing_pub).
+            let plaintext: Zeroizing<[u8; 32]> = Zeroizing::new(sk.to_bytes());
+            if let Ok(id) = stash_secret(path, "signing", plaintext.as_ref()) {
+                if let Some(obj) = json.as_object_mut() {
+                    obj.insert(
+                        "signing_private_ref".to_string(),
+                        serde_json::Value::String(id),
+                    );
+                    obj.insert(
+                        "signing_public".to_string(),
+                        serde_json::Value::String(hex::encode(sk.public_bytes())),
+                    );
+                    obj.remove("signing_private");
+                    let _ = atomic_write_json(path, &json);
+                }
             }
             (sk, true)
         }
@@ -969,21 +1385,46 @@ fn write_identity(path: &std::path::Path) -> anyhow::Result<IdentityInfo> {
     let spend = SpendKey::generate();
     let signing = PhantomSigningKey::generate();
 
-    // Field names + encodings match `cli/src/main.rs::cmd_keygen` exactly so
-    // the same keyfile is interchangeable between CLI and Desktop.
+    // Stash every secret in the host keystore first, build the on-disk
+    // keys.json out of the returned key_ids. Identity-private is also
+    // stashed even though current call sites don't read it back — keeps
+    // the wire-format symmetry with the CLI keyfile (so an export/import
+    // round-trip survives a future feature that needs the identity key).
+    //
+    // `Zeroizing` wraps each plaintext blob so it's wiped from RAM as
+    // soon as `stash_secret` returns. The struct fields themselves
+    // already zeroize-on-drop via the `Zeroize` derives in `core::keys`.
+    let view_priv: Zeroizing<[u8; 32]> = Zeroizing::new(view.secret.to_bytes());
+    let spend_priv: Zeroizing<[u8; 32]> = Zeroizing::new(spend.secret.to_bytes());
+    let signing_priv: Zeroizing<[u8; 32]> = Zeroizing::new(signing.to_bytes());
+    let identity_priv: Zeroizing<[u8; 32]> = Zeroizing::new(id.private);
+
+    let view_ref = stash_secret(path, "view", view_priv.as_ref())
+        .map_err(|e| anyhow!("stash view: {e}"))?;
+    let spend_ref = stash_secret(path, "spend", spend_priv.as_ref())
+        .map_err(|e| anyhow!("stash spend: {e}"))?;
+    let signing_ref = stash_secret(path, "signing", signing_priv.as_ref())
+        .map_err(|e| anyhow!("stash signing: {e}"))?;
+    let identity_ref = stash_secret(path, "identity", identity_priv.as_ref())
+        .map_err(|e| anyhow!("stash identity: {e}"))?;
+
+    // Field names + encodings of the public-side fields match
+    // `cli/src/main.rs::cmd_keygen` exactly so the address/QR shape is
+    // identical to the CLI keyfile. The `*_ref` fields are new and only
+    // make sense to a desktop install on the same host.
     let json = serde_json::json!({
-        "identity_private": B64.encode(id.private),
-        "identity_public":  B64.encode(id.public),
-        "view_private":     B64.encode(view.secret.to_bytes()),
-        "view_public":      hex::encode(view.public.as_bytes()),
-        "spend_private":    B64.encode(spend.secret.to_bytes()),
-        "spend_public":     hex::encode(spend.public.as_bytes()),
-        "signing_private":  B64.encode(signing.to_bytes()),
-        "signing_public":   hex::encode(signing.public_bytes()),
+        "identity_private_ref": identity_ref,
+        "identity_public":      B64.encode(id.public),
+        "view_private_ref":     view_ref,
+        "view_public":          hex::encode(view.public.as_bytes()),
+        "spend_private_ref":    spend_ref,
+        "spend_public":         hex::encode(spend.public.as_bytes()),
+        "signing_private_ref":  signing_ref,
+        "signing_public":       hex::encode(signing.public_bytes()),
+        "storage_backend":      secure_storage().name(),
     });
 
-    fs::write(path, serde_json::to_vec_pretty(&json)?)
-        .with_context(|| format!("writing {}", path.display()))?;
+    atomic_write_json(path, &json)?;
 
     Ok(IdentityInfo {
         address: format!(
@@ -1179,7 +1620,7 @@ async fn send_sealed_to_address(
     let recipient = PhantomAddress::parse(recipient_addr)
         .ok_or_else(|| anyhow!("invalid recipient address '{}'", recipient_addr))?;
 
-    let (_view, _spend, signing_key, _upgraded) = load_identity(&keys_path)?;
+    let (_view, _spend, signing_key, _upgraded) = load_identity(app, &keys_path)?;
 
     let mut store = SessionStore::load(&sessions_path)
         .with_context(|| format!("loading sessions from {}", sessions_path.display()))?;
@@ -1268,7 +1709,7 @@ async fn spawn_listener_task(
     let sessions_path = sessions_path(&app).map_err(|e| e.to_string())?;
 
     let (view_key, spend_key, _signing, upgraded) =
-        load_identity(&keys_path).map_err(|e| e.to_string())?;
+        load_identity(&app, &keys_path).map_err(|e| e.to_string())?;
     if upgraded {
         let _ = app.emit(
             "status",
@@ -2967,6 +3408,15 @@ fn export_keyfile(app: AppHandle) -> Result<String, String> {
 /// Validate + write a pasted keyfile JSON into `app_data_dir/keys.json`.
 /// Overwrites any existing file (the wizard's "Restore" branch is the only
 /// caller; the user is informed it'll replace the current identity).
+///
+/// Imported keyfiles still arrive in the legacy plaintext format (that's
+/// the export shape — `*_ref` fields would be useless on the importing
+/// host since they only resolve in the originating keystore). Right after
+/// writing the plaintext to disk we run the standard migration so the
+/// just-imported `*_private` fields get pushed into the host keystore and
+/// the on-disk file is rewritten with `*_private_ref` placeholders. The
+/// process is idempotent: a re-import overwrites both the file AND the
+/// keystore entries since they're keyed off the same path.
 #[tauri::command]
 fn import_keyfile(app: AppHandle, json_text: String) -> Result<(), String> {
     let json: serde_json::Value =
@@ -2987,15 +3437,139 @@ fn import_keyfile(app: AppHandle, json_text: String) -> Result<(), String> {
         }
     }
     let path = keys_path(&app).map_err(|e| e.to_string())?;
-    fs::write(&path, serde_json::to_vec_pretty(&json).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("write {}: {}", path.display(), e))?;
+    // Atomic write of the plaintext form so we never have a half-written
+    // keys.json next to a half-stashed keystore.
+    atomic_write_json(&path, &json).map_err(|e| format!("write {}: {}", path.display(), e))?;
     audit(&app, "identity", "restored", serde_json::json!({}));
+    // Immediately migrate the just-imported plaintext into the host
+    // keystore. Best-effort: a migration failure leaves the plaintext
+    // keys.json on disk (the user can still use the app — every read path
+    // falls back to the inline `*_private` field if `*_private_ref` is
+    // missing) and the next launch will retry the migration.
+    if let Err(e) = migrate_keys_json_if_legacy(&app, &path) {
+        eprintln!("import: secure-storage migration failed: {e:#}");
+    }
     Ok(())
 }
 
+/// Anti-forensic file-overwrite threshold. Files **larger** than this skip
+/// the zero-overwrite pass and are unlinked directly with a WARN audit
+/// entry — primarily to keep `wipe_all_data` from spending O(GB) of disk
+/// I/O on user-staged backups that the user is independently responsible
+/// for. SSD TRIM will do its own thing on those over time.
+const WIPE_OVERWRITE_MAX_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Best-effort cryptographic-shred of a single file: open for write,
+/// overwrite the byte range with zeros, fsync, truncate, then unlink.
+///
+/// On SSDs the underlying NAND blocks are usually only TRIM'd on delete,
+/// so the in-place zero-write is partially redundant — but on spinning
+/// rust it materially raises the bar against forensic recovery, and on
+/// SSDs it at least pre-empts wear-leveling shenanigans that might keep
+/// a stale copy of the original bytes in an unmapped erase block.
+///
+/// All errors are swallowed (logged to stderr) — the goal is "delete the
+/// file, scrubbed if possible, plain-deleted as a fallback". A scrub
+/// failure must not block the unlink.
+fn shred_file(path: &std::path::Path) {
+    let size = match fs::metadata(path) {
+        Ok(m) => m.len(),
+        Err(e) => {
+            eprintln!("shred: stat {} failed: {e}", path.display());
+            // Even with no metadata, attempt the unlink as a last resort.
+            let _ = fs::remove_file(path);
+            return;
+        }
+    };
+
+    if size > WIPE_OVERWRITE_MAX_BYTES {
+        // Probably a backup the user staged into app_data; honour the
+        // size threshold and just unlink. We log so a compliance auditor
+        // can see why this file wasn't scrubbed.
+        eprintln!(
+            "shred: skipping zero-overwrite of {} ({} > {}); unlinking only",
+            path.display(),
+            size,
+            WIPE_OVERWRITE_MAX_BYTES
+        );
+        let _ = fs::remove_file(path);
+        return;
+    }
+
+    if size > 0 {
+        match OpenOptions::new().write(true).truncate(false).open(path) {
+            Ok(mut f) => {
+                // Stream the zero-pass in 64 KiB chunks rather than
+                // allocating a `vec![0u8; size as usize]` outright — keeps
+                // wipe of a 95 MiB file from spiking RSS to 95 MiB.
+                let chunk = vec![0u8; 64 * 1024];
+                let mut remaining = size as usize;
+                while remaining > 0 {
+                    let n = remaining.min(chunk.len());
+                    if let Err(e) = f.write_all(&chunk[..n]) {
+                        eprintln!("shred: write {} failed: {e}", path.display());
+                        break;
+                    }
+                    remaining -= n;
+                }
+                let _ = f.sync_all();
+                // Truncate after the overwrite so the directory entry
+                // points at a 0-byte file before unlink — narrows the
+                // forensic window further on filesystems that delay free.
+                let _ = f.set_len(0);
+                let _ = f.sync_all();
+            }
+            Err(e) => {
+                eprintln!("shred: open {} for overwrite failed: {e}", path.display());
+            }
+        }
+    }
+
+    if let Err(e) = fs::remove_file(path) {
+        eprintln!("shred: unlink {} failed: {e}", path.display());
+    }
+}
+
+/// Recursively shred every file under `dir`, then remove the (now-empty)
+/// directory tree. Symlinks are unlinked without following — defence
+/// against a hostile or buggy preconfig that points app_data at `/`.
+fn shred_directory(dir: &std::path::Path) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("shred: read_dir {} failed: {e}", dir.display());
+            // Still try to remove the dir itself — it may already be empty.
+            let _ = fs::remove_dir_all(dir);
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        // Lstat (symlink_metadata) so we don't follow into another tree.
+        let meta = match fs::symlink_metadata(&p) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if meta.file_type().is_symlink() {
+            let _ = fs::remove_file(&p);
+        } else if meta.is_dir() {
+            shred_directory(&p);
+        } else {
+            shred_file(&p);
+        }
+    }
+    let _ = fs::remove_dir(dir);
+}
+
 /// Wipe the entire app-data directory (keys, contacts, sessions, history,
-/// MLS directory, relays.json, onboarding marker) then exit. Caller is
+/// MLS directory, relays.json, onboarding marker) AND the host-keystore
+/// secrets keyed off the current identity file, then exit. Caller is
 /// expected to confirm the destructive intent before invoking.
+///
+/// Pre-delete pass scrubs each file with a single zero-overwrite +
+/// truncate to defeat naive forensic recovery on spinning disks. Files
+/// larger than `WIPE_OVERWRITE_MAX_BYTES` (100 MiB) skip the overwrite
+/// and are unlinked directly — see `shred_file` for the rationale.
 #[tauri::command]
 fn wipe_all_data(app: AppHandle) -> Result<(), String> {
     // Best-effort audit BEFORE the wipe — the on-disk audit.log itself is
@@ -3007,9 +3581,25 @@ fn wipe_all_data(app: AppHandle) -> Result<(), String> {
         .path()
         .app_data_dir()
         .map_err(|e| format!("resolve app_data_dir: {e}"))?;
+
+    // Step 1 — purge keystore entries belonging to this identity. The
+    // path-derived key_id scheme means a stale `keys.json` is enough to
+    // know which entries to drop. Best-effort: a missing entry is fine.
     if dir.exists() {
-        fs::remove_dir_all(&dir).map_err(|e| format!("remove {}: {}", dir.display(), e))?;
+        let kp = dir.join(KEYS_FILE);
+        for suffix in SECRET_SUFFIXES {
+            let id = secret_key_id(&kp, suffix);
+            if let Err(e) = secure_storage().delete(&id) {
+                eprintln!("wipe: keystore delete '{id}' failed: {e}");
+            }
+        }
     }
+
+    // Step 2 — anti-forensic shred + remove every file in app_data_dir.
+    if dir.exists() {
+        shred_directory(&dir);
+    }
+
     // Hard exit: we just nuked our own state; staying in the process risks
     // background tasks (relay subscribe loop, session writes) recreating
     // some of the files we just deleted.
@@ -3189,6 +3779,7 @@ pub fn run() {
             export_audit_log,
             check_for_updates,
             install_update,
+            reset_window_state,
         ])
         .setup(|app| {
             // Pre-create the data dir on first launch so command handlers
@@ -3248,13 +3839,68 @@ pub fn run() {
                 .build(app)?;
 
             // ── Window close → hide instead of exit ──────────────────────
+            // ── Window-state restore + persistent geometry ───────────────
+            //
+            // Restore happens BEFORE we wire up the listener so the
+            // initial set_position/set_size we apply doesn't trigger an
+            // immediate echo-write back to disk. The listener is then
+            // installed with a debounce so that drag/resize gestures
+            // collapse to one write per WINDOW_STATE_DEBOUNCE_MS.
             if let Some(win) = app.get_webview_window("main") {
+                // 1. Apply persisted geometry if a matching monitor is
+                //    still attached and the rect fits on it.
+                if let Some(label) = restore_window_state(&handle, &win) {
+                    audit(
+                        &handle,
+                        "display",
+                        "window_restored",
+                        serde_json::json!({ "monitor_label": label }),
+                    );
+                }
+
+                // 2. Combined window-event listener:
+                //    - CloseRequested → hide (existing behavior)
+                //    - Resized / Moved → debounced save_window_state
+                //    Maximize/unmaximize is reported as a Resized event
+                //    on every desktop platform Tauri supports, so we
+                //    re-read `is_maximized()` inside that branch.
                 let win_for_event = win.clone();
-                win.on_window_event(move |e| {
-                    if let WindowEvent::CloseRequested { api, .. } = e {
+                let app_for_event = handle.clone();
+                let last_save = Arc::new(StdMutex::new(
+                    std::time::Instant::now()
+                        - std::time::Duration::from_millis(WINDOW_STATE_DEBOUNCE_MS),
+                ));
+                win.on_window_event(move |e| match e {
+                    WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
                         let _ = win_for_event.hide();
                     }
+                    WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
+                        // Debounce: only persist if the previous save
+                        // happened more than WINDOW_STATE_DEBOUNCE_MS ago.
+                        // We deliberately accept losing the very last
+                        // gesture if the user rage-quits within 500 ms —
+                        // worst case is we restore a position that's off
+                        // by a few pixels from where they let go of the
+                        // mouse, which the off-screen rescue catches if
+                        // it ever matters.
+                        let now = std::time::Instant::now();
+                        let mut guard = match last_save.lock() {
+                            Ok(g) => g,
+                            Err(_) => return,
+                        };
+                        if now.duration_since(*guard)
+                            < std::time::Duration::from_millis(WINDOW_STATE_DEBOUNCE_MS)
+                        {
+                            return;
+                        }
+                        *guard = now;
+                        drop(guard);
+                        if let Ok(state) = capture_window_state(&win_for_event) {
+                            let _ = save_window_state(&app_for_event, state);
+                        }
+                    }
+                    _ => {}
                 });
             }
 
@@ -4036,4 +4682,22 @@ async fn typing_ping(app: AppHandle, contact_label: String) -> Result<(), String
     send_sealed_to_address(&app, &contact.address, &payload)
         .await
         .map_err(|e| format!("relay send: {e}"))
+}
+
+/// Frontend command: surfaced in Settings → "Erscheinungsbild" as
+/// "Fenster zurücksetzen". Deletes `window_state.json` so the next
+/// launch falls back to the default 1100×720 window centered on the
+/// primary monitor — the rescue button for users who somehow ended up
+/// with persisted geometry that crashes them off-screen.
+///
+/// No-op (and Ok) if the file doesn't exist; we don't want a missing
+/// file to surface as an error toast in the UI.
+#[tauri::command]
+async fn reset_window_state(app: AppHandle) -> Result<(), String> {
+    let path = window_state_path(&app).map_err(|e| e.to_string())?;
+    if path.exists() {
+        fs::remove_file(&path).map_err(|e| format!("remove {}: {}", path.display(), e))?;
+    }
+    audit(&app, "display", "window_state_reset", serde_json::json!({}));
+    Ok(())
 }

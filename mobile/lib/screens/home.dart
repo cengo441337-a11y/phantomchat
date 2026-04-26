@@ -10,6 +10,8 @@ import '../widgets/cyber_card.dart';
 import 'chat.dart';
 import 'qr_scan.dart';
 import 'settings.dart';
+import 'channels.dart';
+import 'package:path_provider/path_provider.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -325,6 +327,18 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           const SizedBox(width: 8),
           GestureDetector(
+            onTap: _openChannels,
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                border: Border.all(color: kCyan.withOpacity(0.4)),
+                color: kBgCard,
+              ),
+              child: const Icon(Icons.groups_outlined, color: kCyan, size: 20),
+            ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
             onTap: _showMyId,
             child: Container(
               padding: const EdgeInsets.all(8),
@@ -352,6 +366,22 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _openChannels() async {
+    final dir = await getApplicationSupportDirectory();
+    final mlsDir = '${dir.path}/mls';
+    final selfLabel = (_identity?.nickname.isNotEmpty ?? false)
+        ? _identity!.nickname
+        : 'phantom';
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            ChannelsScreen(storageDir: mlsDir, selfLabel: selfLabel),
       ),
     );
   }
