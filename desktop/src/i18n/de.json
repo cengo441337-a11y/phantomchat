@@ -405,6 +405,11 @@
     "copy": "Adresse kopieren",
     "copied": "Kopiert!"
   },
+  "mention": {
+    "header": "Mitglied erwähnen",
+    "empty": "(keine passenden Mitglieder)",
+    "aria_label": "Ein Gruppenmitglied erwähnen",
+    "notify_title": "Erwähnt von {{label}}"
   "messages": {
     "reply": {
       "toolbar_button": "Antworten",

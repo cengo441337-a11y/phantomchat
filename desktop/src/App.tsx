@@ -35,6 +35,7 @@ import IdentityGate from "./components/IdentityGate";
 import SettingsPanel from "./components/SettingsPanel";
 import OnboardingWizard from "./components/OnboardingWizard";
 import SearchPanel from "./components/SearchPanel";
+import { plaintextMentions } from "./lib/mentions";
 
 type LeftPaneTab = "contacts" | "channels";
 
@@ -113,6 +114,10 @@ export default function App() {
   // ── Identity / boot state ──────────────────────────────────────────────
   const [address, setAddress] = useState<string | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
+  /// Local user's `me.json` label, used as the canonical "self" name
+  /// for the mention auto-complete + the loud `notify_mention` trigger.
+  /// Empty string until the boot probe resolves.
+  const [myLabel, setMyLabel] = useState<string>("");
 
   // ── Auto-updater banner ───────────────────────────────────────────────
   // Set on the cold-start `check_for_updates` round-trip if the endpoint
@@ -400,6 +405,16 @@ export default function App() {
         setAddress(null);
         return;
       }
+      // Pull the persisted self-label so the mention pipeline can render
+      // an extra-prominent pill (and trigger `notify_mention`) when a
+      // peer addresses us by name. Empty string is fine — it short-
+      // circuits the local-mention check inside `plaintextMentions`.
+      try {
+        const lbl = await invoke<string>("get_my_label");
+        setMyLabel(lbl ?? "");
+      } catch {
+        /* not fatal */
+      }
       try {
         const cs = await invoke<Contact[]>("list_contacts");
         setContacts(cs);
@@ -488,6 +503,19 @@ export default function App() {
     listen<MlsGroupMessage>("mls_message", e => {
       const { from_label, plaintext } = e.payload;
       pushMlsLog("incoming", `${from_label}: ${plaintext}`);
+      // Mention check: if the message names US (by `me.label`), fire the
+      // loud `notify_mention` so the user sees the system-shelf entry
+      // even if the window is focused. We use the latest `myLabel` via
+      // closure — it's set at boot and only changes via Settings.
+      if (myLabel && from_label !== myLabel) {
+        const hits = plaintextMentions(plaintext, [myLabel]);
+        if (hits.length > 0) {
+          void invoke("notify_mention", {
+            fromLabel: from_label,
+            body: plaintext,
+          }).catch(err => console.warn("notify_mention failed:", err));
+        }
+      }
     }).then(u => unlisteners.push(u));
 
     listen<MlsEpochEvent>("mls_epoch", e => {
@@ -606,6 +634,7 @@ export default function App() {
     return () => {
       unlisteners.forEach(u => u());
     };
+  }, [pushMlsLog, refreshMlsStatus, myLabel]);
   }, [pushMlsLog, refreshMlsStatus, t]);
 
   // ── Send action ────────────────────────────────────────────────────────
@@ -1029,6 +1058,11 @@ export default function App() {
             onOpenFolder={handleOpenDownloadsFolder}
             highlightedIdx={searchHighlightIdx}
             onMarkRead={handleMarkRead}
+            knownMentionLabels={[
+              myLabel,
+              ...(mlsStatus?.members.map(m => m.label) ?? []),
+              ...contacts.map(c => c.label),
+            ].filter(Boolean)}
             onReplyTo={(msgId, preview) => {
               setReplyingTo({
                 msg_id: msgId,
@@ -1054,6 +1088,16 @@ export default function App() {
               if (exp === undefined) return null;
               return exp > Date.now() ? activeLabel : null;
             })()}
+            // Mention auto-complete is only meaningful inside an MLS
+            // group (1:1 chats have a single peer — no need to disambig-
+            // uate). Pass the directory only when we're on the channels
+            // tab AND a group is active; otherwise the popover stays
+            // suppressed inside InputBar.
+            mlsDirectory={
+              leftTab === "channels" && mlsStatus?.in_group
+                ? mlsStatus.members
+                : undefined
+            }
             replyingTo={replyingTo}
             onCancelReply={() => setReplyingTo(null)}
             onSendReply={handleSendReply}

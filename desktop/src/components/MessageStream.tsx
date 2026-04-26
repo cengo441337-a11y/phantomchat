@@ -1,3 +1,9 @@
+import { useEffect, useMemo, useRef } from "react";
+import { useTranslation } from "react-i18next";
+import type { MsgLine } from "../types";
+import { renderMarkdown } from "../lib/markdown";
+import { autoLinkify } from "../lib/linkify";
+import { detectMentions } from "../lib/mentions";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { MsgLine, ReactionEntry } from "../types";
@@ -23,6 +29,11 @@ interface Props {
   /// over the receipt wire. Skipped if the row has no `msg_id` (legacy
   /// pre-feature persisted history rows) or if we already fired for it.
   onMarkRead?: (msgId: string, fromLabel: string) => void;
+  /// Labels eligible to be rendered as @-mention pills. Contains the
+  /// local `me.label`, every active MLS group member's label, and every
+  /// 1:1 contact label. Empty / undefined disables mention rendering
+  /// entirely (text rows render as plain markdown + auto-links only).
+  knownMentionLabels?: string[];
   /// Called when the user clicks the row toolbar's "Reply" button. The
   /// parent stashes the (msg_id, body_preview) pair in its `replyingTo`
   /// state and the InputBar shows the quote block above the input.
@@ -99,6 +110,7 @@ export default function MessageStream({
   onOpenFolder,
   highlightedIdx,
   onMarkRead,
+  knownMentionLabels,
   onReplyTo,
   onReact,
 }: Props) {
@@ -217,6 +229,15 @@ export default function MessageStream({
   }, [highlightedIdx]);
 
   const title = activeLabel ? `#${activeLabel}` : t("message_stream.title_default");
+
+  // Stable label-set for the mention rewriter — only re-derive when the
+  // upstream array's contents change. Re-deriving on every render would
+  // also re-run `detectMentions` for every row's body memo below.
+  const mentionLabels = useMemo(
+    () => (knownMentionLabels ? knownMentionLabels.filter(Boolean) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [knownMentionLabels?.join("")],
+  );
 
   return (
     <section className="flex-1 flex flex-col bg-bg-deep/70 backdrop-blur-[1px] border-b border-dim-green/40 overflow-hidden pc-pane pc-pane-magenta">
@@ -450,15 +471,17 @@ export default function MessageStream({
                   {m.body}
                 </span>
               ) : (
-                <span
-                  className={
-                    m.kind === "system"
-                      ? "text-soft-grey italic"
-                      : "text-neon-green/90"
-                  }
-                >
-                  {m.body}
-                </span>
+                // Text body: pipe through markdown -> auto-linkify ->
+                // mention pills. Every stage HTML-escapes its inputs,
+                // so a literal <script> from a peer renders as visible
+                // text rather than executing. The system row inten-
+                // tionally bypasses the rich pipeline — its strings
+                // come from our own i18n bundle, never from a peer.
+                <RenderedBody
+                  body={m.body}
+                  isSystem={m.kind === "system"}
+                  mentionLabels={mentionLabels}
+                />
               )}
 
               {isUnbound && onBindClick && (
@@ -592,5 +615,41 @@ export default function MessageStream({
         <div ref={bottomRef} />
       </div>
     </section>
+  );
+}
+
+/// Memoised text-body renderer. Runs the markdown → auto-link → mention
+/// pipeline once per (body, mentionLabels) tuple, then plugs the result
+/// in via `dangerouslySetInnerHTML`. The pipeline escapes every text run
+/// before composing HTML, so a peer's literal `<script>alert(1)</script>`
+/// shows up as visible text (not executed).
+function RenderedBody({
+  body,
+  isSystem,
+  mentionLabels,
+}: {
+  body: string;
+  isSystem: boolean;
+  mentionLabels: string[];
+}) {
+  const html = useMemo(() => {
+    if (isSystem) return null;
+    const md = renderMarkdown(body);
+    const linked = autoLinkify(md);
+    const { html: withMentions } = detectMentions(linked, mentionLabels);
+    return withMentions;
+    // mentionLabels is memoised by the parent; re-run only when the
+    // body text or label-set actually changes.
+  }, [body, isSystem, mentionLabels]);
+
+  if (isSystem) {
+    return <span className="text-soft-grey italic">{body}</span>;
+  }
+  return (
+    <span
+      className="text-neon-green/90 break-words [&_a]:break-all"
+      // eslint-disable-next-line react/no-danger
+      dangerouslySetInnerHTML={{ __html: html ?? "" }}
+    />
   );
 }
