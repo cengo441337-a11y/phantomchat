@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+// ignore: unused_import
+import 'package:cryptography_flutter/cryptography_flutter.dart';
 import 'services/background_service_config.dart';
 import 'services/storage_service.dart';
 import 'screens/onboarding.dart';
@@ -29,6 +31,12 @@ Future<RustBootState> _bootRust() async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Importing cryptography_flutter is enough — Flutter's plugin
+  // auto-registration installs FlutterCryptography as the default
+  // Cryptography instance, so PBKDF2 / HKDF / AES-GCM all use JNI
+  // (Android Keystore) or ObjC (iOS CommonCrypto) without an explicit
+  // enable() call. The unused_import lint above is intentional: we
+  // need the side-effect of plugin registration, not any symbol.
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(

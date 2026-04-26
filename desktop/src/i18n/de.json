@@ -2,7 +2,14 @@
   "app": {
     "header": {
       "brand_subtitle": "DC INFOSEC 2026",
-      "you_label": "Sie:"
+      "you_label": "Sie:",
+      "update_button_idle": "↻ Updates",
+      "update_button_checking": "prüfe…",
+      "update_button_installing": "installiere…",
+      "update_button_install": "v{{version}} installieren",
+      "update_status_up_to_date": "aktuell",
+      "update_status_failed": "Prüfung fehlgeschlagen",
+      "update_status_failed_title": "Updater-Fehler: {{error}}"
     },
     "tabs": {
       "contacts": "Kontakte",

@@ -135,6 +135,19 @@ export default function App() {
   const [updateAvailable, setUpdateAvailable] = useState<UpdateInfo | null>(
     null,
   );
+  // Header-button state machine. The cold-start auto-check is silent, but
+  // the manual button surfaces every state including failures — users were
+  // hitting the silent-fail path on broken networks / TLS / signature
+  // errors and reporting "the updater doesn't work" because nothing was
+  // visible. `error` carries the backend's error string for the tooltip.
+  type UpdateBtnState =
+    | { kind: "idle" }
+    | { kind: "checking" }
+    | { kind: "up_to_date" }
+    | { kind: "available"; info: UpdateInfo }
+    | { kind: "installing" }
+    | { kind: "error"; error: string };
+  const [updateBtn, setUpdateBtn] = useState<UpdateBtnState>({ kind: "idle" });
 
   // ── First-launch wizard ────────────────────────────────────────────────
   // `null` while we're still asking the backend; `true`/`false` once the
@@ -422,6 +435,46 @@ export default function App() {
       }
     })();
   }, []);
+
+  // ── Manual update-check from the header button ─────────────────────────
+  // Distinct from the cold-start probe: surfaces every state (incl. errors)
+  // so the user can tell at a glance whether the updater is reachable. On
+  // "available" the same button flips to "install v…" and triggers the
+  // download/apply path. The cold-start banner is also kept in sync so the
+  // top-of-window strip disappears once the user is on the latest version.
+  async function handleUpdateButton() {
+    if (updateBtn.kind === "available") {
+      setUpdateBtn({ kind: "installing" });
+      try {
+        await invoke("install_update");
+        // Tauri restarts the app on Windows/macOS; this state is mostly a
+        // graceful fallback for Linux AppImage where the user manually
+        // relaunches.
+        setUpdateBtn({ kind: "idle" });
+      } catch (e) {
+        setUpdateBtn({ kind: "error", error: String(e) });
+      }
+      return;
+    }
+    setUpdateBtn({ kind: "checking" });
+    try {
+      const info = await invoke<UpdateInfo>("check_for_updates");
+      if (info.available) {
+        setUpdateAvailable(info);
+        setUpdateBtn({ kind: "available", info });
+      } else {
+        setUpdateAvailable(null);
+        setUpdateBtn({ kind: "up_to_date" });
+        // Auto-revert after 4s so the button doesn't sit on "up to date"
+        // forever — feels stale on long sessions.
+        setTimeout(() => {
+          setUpdateBtn(prev => (prev.kind === "up_to_date" ? { kind: "idle" } : prev));
+        }, 4000);
+      }
+    } catch (e) {
+      setUpdateBtn({ kind: "error", error: String(e) });
+    }
+  }
 
   // ── Boot: load history + get_address + list_contacts + start_listener ──
   useEffect(() => {
@@ -1073,8 +1126,48 @@ export default function App() {
           <span className="text-soft-grey">·</span>
           <span className="text-cyber-cyan text-xs font-display">{t("app.header.brand_subtitle")}</span>
         </div>
-        <div className="text-xs text-soft-grey truncate max-w-[60%]" title={address}>
-          {t("app.header.you_label")} <span className="text-neon-green">{shortAddr(address)}</span>
+        <div className="flex items-center gap-3">
+          {/* Manual update-check button — distinct from the silent
+              cold-start probe. Click runs check_for_updates; on "available"
+              the same button flips into the install action. Errors surface
+              in-place so a misconfigured endpoint or unreachable update
+              server shows up in the UI instead of failing silently. */}
+          <button
+            onClick={() => void handleUpdateButton()}
+            disabled={updateBtn.kind === "checking" || updateBtn.kind === "installing"}
+            title={
+              updateBtn.kind === "error"
+                ? t("app.header.update_status_failed_title", { error: updateBtn.error })
+                : undefined
+            }
+            className={
+              "px-2 py-0.5 text-[10px] uppercase tracking-widest border transition-colors disabled:opacity-50 " +
+              (updateBtn.kind === "available"
+                ? "text-neon-green border-neon-green hover:bg-neon-green/10"
+                : updateBtn.kind === "error"
+                ? "text-red-300 border-red-500/60 hover:bg-red-900/30"
+                : updateBtn.kind === "up_to_date"
+                ? "text-soft-grey border-dim-green/40"
+                : "text-cyber-cyan border-cyber-cyan/50 hover:bg-cyber-cyan/10")
+            }
+          >
+            {updateBtn.kind === "checking"
+              ? t("app.header.update_button_checking")
+              : updateBtn.kind === "installing"
+              ? t("app.header.update_button_installing")
+              : updateBtn.kind === "available"
+              ? t("app.header.update_button_install", {
+                  version: updateBtn.info.version ?? "?",
+                })
+              : updateBtn.kind === "up_to_date"
+              ? t("app.header.update_status_up_to_date")
+              : updateBtn.kind === "error"
+              ? t("app.header.update_status_failed")
+              : t("app.header.update_button_idle")}
+          </button>
+          <div className="text-xs text-soft-grey truncate max-w-[60%]" title={address}>
+            {t("app.header.you_label")} <span className="text-neon-green">{shortAddr(address)}</span>
+          </div>
         </div>
       </header>
 

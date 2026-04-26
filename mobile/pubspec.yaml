@@ -1,7 +1,7 @@
 name: phantomchat
 description: PhantomChat — decentralized encrypted messenger
 publish_to: none
-version: 1.0.3+4
+version: 1.0.4+5
 
 environment:
   sdk: ^3.11.4
@@ -54,6 +54,7 @@ dependencies:
   # cryptography) — make it explicit so we can use the streaming SHA256
   # API directly in update_service.dart for chunked APK hashing.
   crypto: ^3.0.0
+  cryptography_flutter: ^2.3.4
 
 dev_dependencies:
   flutter_test:

@@ -79,10 +79,17 @@ class AppLockService {
   /// Default inactivity timeout in seconds. User-configurable at runtime.
   static const int defaultAutoLockSeconds = 60;
 
-  /// PBKDF2 iteration count for newly-set PINs. OWASP 2023 baseline for
-  /// PBKDF2-HMAC-SHA256. Stored per-user in `_kPinIters` so this constant
-  /// can move forward without invalidating existing hashes.
-  static const int currentPbkdf2Iters = 600000;
+  /// PBKDF2 iteration count for newly-set PINs. 50k is an intentional
+  /// compromise: the hash already lives in Android Keystore / iOS
+  /// Keychain (hardware-backed where available), so iter count is the
+  /// second line of defence, not the first. With cryptography_flutter
+  /// native, 600k = ~150 ms; on older / emulator-class hardware where
+  /// the package falls back to pure-Dart, 600k = 30-60 s of UI freeze
+  /// at PIN-confirm. 50k stays sub-second across all paths. Stored per-
+  /// user in `_kPinIters` so this constant can be bumped to 600k once
+  /// shipping devices run native KDF — `verifyPin` reads the stored
+  /// count back, so existing PINs keep verifying after a bump.
+  static const int currentPbkdf2Iters = 50000;
 
   /// Iteration count used by builds before the iter-count was persisted.
   /// Verification falls back to this when `_kPinIters` is absent so
