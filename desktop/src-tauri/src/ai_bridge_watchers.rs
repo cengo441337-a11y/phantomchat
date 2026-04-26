@@ -586,7 +586,12 @@ pub fn start_scheduler(app: AppHandle, send_message_inner: SendDispatcher) {
     // loop itself stays responsive.
     let in_flight: Arc<AsyncMutex<()>> = Arc::new(AsyncMutex::new(()));
 
-    tokio::spawn(async move {
+    // `tauri::async_runtime::spawn` (rather than `tokio::spawn`) because
+    // `start_scheduler` is invoked from `Builder::setup`, which runs
+    // before tokio is current on the calling thread — `tokio::spawn`
+    // would panic with "no reactor running". The inner `tokio::spawn`
+    // below is fine because by then we're inside an async context.
+    tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         // First tick fires immediately — harmless, just causes one
         // extra schedule scan a few ms after spawn.
