@@ -22,10 +22,18 @@ use pqcrypto_mlkem::mlkem1024::{
 use pqcrypto_traits::kem::{PublicKey as KemPubTrait,
     Ciphertext as KemCtTrait, SharedSecret as KemSSTrait};
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey, Signature as Ed25519Signature};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Identity‑Keypair.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Zeroize` + `ZeroizeOnDrop`: the 32-byte `private` scalar is wiped from
+/// RAM as soon as the struct goes out of scope, so a memory dump taken after
+/// the user closes a session (or an attacker's `gcore` while the process is
+/// still alive) cannot recover it. The `public` half is intentionally not
+/// scrubbed — pubkeys are designed to be shared.
+#[derive(Debug, Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct IdentityKey {
+    #[zeroize(skip)]
     pub public: [u8; 32],
     pub private: [u8; 32],
 }
@@ -34,8 +42,10 @@ pub struct IdentityKey {
 /// authenticate envelopes to their receiver.
 ///
 /// `Debug` is intentionally *not* derived — the 32-byte scalar must never
-/// leak into logs or panic traces.
-#[derive(Clone, Serialize, Deserialize)]
+/// leak into logs or panic traces. `Zeroize` + `ZeroizeOnDrop` wipe the
+/// seed when the struct is dropped (the rehydrated `SigningKey` returned
+/// by [`Self::signing_key`] is itself zeroized by `ed25519-dalek`).
+#[derive(Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct PhantomSigningKey {
     /// Raw 32-byte seed. Rehydrated into an `ed25519_dalek::SigningKey` on
     /// demand so the live key material does not live in long-lived globals.
@@ -90,22 +100,29 @@ pub fn verify_ed25519(public_bytes: &[u8; 32], message: &[u8], signature: &[u8; 
 /// View‑Keypair (X25519).
 ///
 /// `Debug` is intentionally *not* derived — the secret scalar must never
-/// leak through `{:?}` formatting into logs or panic traces.
-#[derive(Clone, Serialize, Deserialize)]
+/// leak through `{:?}` formatting into logs or panic traces. The
+/// `Zeroize` + `ZeroizeOnDrop` derives wipe the secret half on drop;
+/// `x25519_dalek::StaticSecret` already does this internally, but the
+/// wrapper-level derive defends against accidental future fields landing
+/// next to it without their own zeroization story.
+#[derive(Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct ViewKey {
     #[serde(skip, default = "generate_secret")]
     pub secret: StaticSecret,
+    #[zeroize(skip)]
     pub public: PublicKey,
 }
 
 /// Spend‑Keypair (X25519).
 ///
 /// `Debug` is intentionally *not* derived — the secret scalar must never
-/// leak through `{:?}` formatting into logs or panic traces.
-#[derive(Clone, Serialize, Deserialize)]
+/// leak through `{:?}` formatting into logs or panic traces. See [`ViewKey`]
+/// for the same Zeroize rationale.
+#[derive(Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct SpendKey {
     #[serde(skip, default = "generate_secret")]
     pub secret: StaticSecret,
+    #[zeroize(skip)]
     pub public: PublicKey,
 }
 
@@ -169,9 +186,36 @@ pub struct HybridPublicKey {
 }
 
 /// Privater Hybridschlüssel: X25519 + ML-KEM-1024.
+///
+/// Memory-zeroing: the `x25519` half is zeroized by `StaticSecret`'s own
+/// `Drop`. The `mlkem` half is a `pqcrypto` newtype around a flat byte
+/// array with no public mutation API, so we override [`Drop`] manually and
+/// scrub it via `ptr::write_bytes` below — sound because `MlKemSecretKey`
+/// has no destructor of its own and is `Copy + Clone`.
 pub struct HybridSecretKey {
     pub x25519: StaticSecret,
     pub mlkem: MlKemSecretKey,
+}
+
+impl Drop for HybridSecretKey {
+    fn drop(&mut self) {
+        // Best-effort wipe of the ML-KEM secret. `MlKemSecretKey` is a
+        // newtype around a fixed-size byte array (see pqcrypto-mlkem's
+        // `simple_struct!` macro) with no destructor of its own, so
+        // overwriting the bytes via `write_bytes` is sound. We then issue
+        // a fence to keep the compiler from reordering the wipe past
+        // subsequent drops.
+        unsafe {
+            std::ptr::write_bytes(
+                &mut self.mlkem as *mut MlKemSecretKey as *mut u8,
+                0u8,
+                std::mem::size_of::<MlKemSecretKey>(),
+            );
+            std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+        }
+        // x25519's own Drop scrubs the StaticSecret bytes — nothing to do
+        // here for that half.
+    }
 }
 
 /// Vollständiges PQXDH-Keypair.
