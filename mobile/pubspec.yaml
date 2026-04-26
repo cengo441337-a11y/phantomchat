@@ -28,6 +28,10 @@ dependencies:
   # Wave 8B — background relay-listener
   flutter_background_service: ^5.0.0
   flutter_local_notifications: ^17.2.2
+  # Battery-optimisation opt-out flow (Settings + first-launch wizard).
+  # On Xiaomi/Huawei/OnePlus/Samsung this keeps the relay/connection-keeper
+  # alive across Doze; without it the OEM kills the process within minutes.
+  disable_battery_optimization: ^1.1.1
 
 dev_dependencies:
   flutter_test:

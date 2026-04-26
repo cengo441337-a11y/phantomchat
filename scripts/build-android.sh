@@ -34,7 +34,21 @@ echo "[3/4] flutter pub get…"
 echo "[4/4] Building APK ($MODE)…"
 cd "$REPO_ROOT/mobile"
 if [ "$MODE" = release ]; then
-    flutter build apk --release --target-platform android-arm64 --split-per-abi
+    # --obfuscate         : symbol-rename Dart code in the AOT snapshot so
+    #                       reverse-engineers cannot trivially read class /
+    #                       method / variable names. Combined with the Rust
+    #                       core's own LTO+strip this leaves nothing readable.
+    # --split-debug-info  : the original Dart symbols are still needed to map
+    #                       obfuscated stack-traces back to source. Persisted
+    #                       under build/symbols/ — never shipped, but checked
+    #                       in via .gitignore exception so the team can decode
+    #                       crash reports collected from production devices.
+    mkdir -p "$REPO_ROOT/mobile/build/symbols"
+    flutter build apk --release \
+        --target-platform android-arm64 \
+        --split-per-abi \
+        --obfuscate \
+        --split-debug-info="$REPO_ROOT/mobile/build/symbols/"
 else
     flutter build apk --debug --target-platform android-arm64
 fi

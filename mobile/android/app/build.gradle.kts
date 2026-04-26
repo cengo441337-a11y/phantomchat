@@ -46,6 +46,11 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // Strip ~80 unused Material Design / AndroidX locale resources.
+        // The PhantomChat UI ships only English + German; keeping every
+        // bundled locale wastes ~1–2 MB in the final APK with zero benefit.
+        resourceConfigurations += listOf("en", "de")
     }
 
     signingConfigs {

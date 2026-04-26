@@ -1,7 +1,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
-    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Network: required to reach IPFS gateways and (later) relay nodes. -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- App-lock: biometric unlock via local_auth. USE_FINGERPRINT (deprecated
+         API 28) is intentionally NOT declared — USE_BIOMETRIC supersedes it. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
+    <!-- "Add contact via QR" scanner — see lib/screens/qr_scan.dart. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Background-delivery: lets the user opt out of OEM battery optimisation
+         so the relay/connection-keeper survives Doze on Xiaomi/Huawei/Samsung. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <!-- Wave 8B: background relay-listener foreground service -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -9,9 +20,10 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
-        android:label="phantomchat"
+        android:label="@string/app_name"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
             android:exported="true"
