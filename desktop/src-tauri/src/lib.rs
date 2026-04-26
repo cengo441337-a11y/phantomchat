@@ -663,6 +663,13 @@ pub struct AppState {
     /// instead of a half-open hang. AsyncMutex so we can hold it across
     /// the (async) take + spawn.
     pub subscriber: AsyncMutex<Option<ListenerControl>>,
+    /// Live LAN-org broadcaster + browser state. `None` until
+    /// `lan_org_create` / `lan_org_join` (or the auto-rehydrate path on
+    /// startup) brings up the mDNS daemon. Held behind an `AsyncMutex`
+    /// so the join/leave commands — which await disk I/O and the daemon
+    /// shutdown — can hold the lock across `.await` points without
+    /// poisoning a std mutex.
+    pub lan_org: AsyncMutex<Option<LanOrg>>,
 }
 
 /// Control handle for one in-flight relay-subscriber task. `shutdown_tx`
@@ -3726,6 +3733,617 @@ fn mark_onboarded(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// ── LAN org: zero-touch mDNS discovery for office deployments ───────────────
+//
+// Goal: turn 30-PC enrollment from "all 30 users manually exchange
+// `phantom:view:spend` addresses" (870 manual steps) into 30 × (paste 6-digit
+// code → done). The first install runs `lan_org_create` which generates a
+// 6-character org code (`XXX-XXX`, alphabet excludes 0/O/1/I/L) and starts an
+// mDNS broadcast on `_phantomchat._tcp.local.` with TXT records:
+//
+//     org=<code>          // shared secret — also the discovery filter
+//     label=<my_label>    // human-readable name (from me.json)
+//     addr=<phantom:…>    // 1:1 contact address
+//     sigpub=<hex>        // Ed25519 sealed-sender pubkey
+//
+// Subsequent installs run `lan_org_join(code)` which broadcasts the SAME
+// service (so the whole org converges into a mesh) AND continuously browses
+// for matching peers. Each match is deduped by `signing_pub_hex`, persisted
+// to `lan_org.json` next to `keys.json`, and auto-added as a 1:1 contact via
+// the same code path used by `add_contact` (idempotent — skipped when the
+// label is already taken). Discovered peers are NOT auto-added as MLS group
+// members; that stays an explicit user action.
+//
+// Authentication model: shared-secret only. Anyone with the org code who is
+// on the same broadcast domain can announce themselves as a peer. There is
+// NO cryptographic verification of org membership beyond "you typed the
+// right code". The Wizard surfaces this explicitly so a user doesn't enable
+// mDNS on a hostile network (cafés, hotels, conferences). MVP is single
+// broadcast domain — multi-LAN scenarios (e.g. two offices over a VPN) are
+// out of scope.
+//
+// `lan_org.json` on-disk shape:
+//
+//     { "code": "X9K-3PT",
+//       "discovered": [
+//         { "label": "alice",
+//           "address": "phantom:view:spend",
+//           "signing_pub_hex": "deadbeef…",
+//           "last_seen": 1712345678 }, … ] }
+//
+// On every app start, if `lan_org.json` exists we re-arm the broadcast +
+// browse from `setup()` so the office mesh keeps reconverging without user
+// intervention. Audit log entries: `lan/created`, `lan/joined`,
+// `lan/peer_added`, `lan/left`.
+
+const LAN_ORG_FILE: &str = "lan_org.json";
+const LAN_ORG_SERVICE_TYPE: &str = "_phantomchat._tcp.local.";
+/// Unambiguous-character alphabet for the 6-char org code. Excludes
+/// `0/O/1/I/L` to prevent dictation/typing mistakes when an admin reads
+/// the code out loud to a colleague over the office. 31 chars; 6 chars
+/// gives 31^6 ≈ 8.87 × 10^8 codes which is ample for the office-sized
+/// scope (a full room of users would have to randomly collide on a 6-char
+/// code, which is far below birthday risk for a small org).
+const LAN_ORG_CODE_ALPHABET: &[u8] = b"23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+
+/// One discovered LAN peer. Minimal copy of what we need to add the peer
+/// as a 1:1 contact + render in the Settings panel. Persisted to
+/// `lan_org.json` so a restart doesn't show "0 peers" until the next
+/// browse round-trip lands.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DiscoveredPeer {
+    pub label: String,
+    pub address: String,
+    pub signing_pub_hex: String,
+    /// Unix epoch seconds of the most-recent mDNS announcement we saw.
+    /// Used by the Settings panel's "last discovery" surface.
+    pub last_seen: u64,
+}
+
+/// Live LAN-org state. The `broadcaster` field holds the running
+/// `ServiceDaemon` if we're broadcasting; `None` means we tore it down.
+/// `discovered` is the deduplicated peer set, persisted to disk on every
+/// mutation.
+pub struct LanOrg {
+    pub code: String,
+    pub broadcaster: Option<mdns_sd::ServiceDaemon>,
+    pub discovered: Vec<DiscoveredPeer>,
+    /// Set when an mDNS browse-event handler successfully resolved a peer
+    /// — surfaced via `lan_org_status`. `None` if we've been broadcasting
+    /// but haven't seen a peer yet.
+    pub last_discovery_ts: Option<u64>,
+    /// Background JoinHandle for the browse-event drain task. Kept so
+    /// `lan_org_leave` can cancel it; otherwise the task would keep
+    /// holding a Receiver into a torn-down ServiceDaemon.
+    pub browse_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct LanOrgDisk {
+    #[serde(default)]
+    code: String,
+    #[serde(default)]
+    discovered: Vec<DiscoveredPeer>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct LanOrgStatus {
+    pub active: bool,
+    pub code: Option<String>,
+    pub peer_count: u32,
+    pub last_discovery_ts: Option<String>,
+}
+
+fn lan_org_path(app: &AppHandle) -> anyhow::Result<PathBuf> {
+    Ok(app_data(app)?.join(LAN_ORG_FILE))
+}
+
+fn load_lan_org(path: &std::path::Path) -> Option<LanOrgDisk> {
+    let raw = fs::read(path).ok()?;
+    serde_json::from_slice::<LanOrgDisk>(&raw).ok()
+}
+
+fn save_lan_org_disk(path: &std::path::Path, disk: &LanOrgDisk) -> anyhow::Result<()> {
+    fs::write(path, serde_json::to_vec_pretty(disk)?)
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+/// Generate a fresh 6-character org code formatted as `XXX-XXX`. CSPRNG
+/// (`OsRng`) seeds every character independently; the alphabet excludes
+/// ambiguous glyphs (see [`LAN_ORG_CODE_ALPHABET`]).
+fn generate_org_code() -> String {
+    use rand::rngs::OsRng;
+    use rand::Rng;
+
+    let mut rng = OsRng;
+    let mut chars = String::with_capacity(7);
+    for i in 0..6 {
+        let idx = rng.gen_range(0..LAN_ORG_CODE_ALPHABET.len());
+        chars.push(LAN_ORG_CODE_ALPHABET[idx] as char);
+        if i == 2 {
+            chars.push('-');
+        }
+    }
+    chars
+}
+
+/// Current wall-clock seconds since the unix epoch. Returns `0` on the
+/// (impossible) clock-pre-1970 case rather than panicking — `lan_org.json`
+/// is purely a UI surface, never a security invariant.
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Build TXT records for our outgoing mDNS service announcement. Order is
+/// stable so the wire bytes are diff-friendly across sessions.
+fn build_lan_txt_records(
+    code: &str,
+    label: &str,
+    address: &str,
+    sigpub_hex: &str,
+) -> std::collections::HashMap<String, String> {
+    let mut props = std::collections::HashMap::new();
+    props.insert("org".to_string(), code.to_string());
+    props.insert("label".to_string(), label.to_string());
+    props.insert("addr".to_string(), address.to_string());
+    props.insert("sigpub".to_string(), sigpub_hex.to_string());
+    props
+}
+
+/// Resolve our own `(label, address, signing_pub_hex)` triple for the
+/// outgoing TXT records. Falls back to the first 8 chars of the signing
+/// pubkey hex when the user hasn't set a display name yet — same pattern
+/// as `resolve_self_label` for MLS Welcomes.
+fn resolve_self_lan_advertisement(
+    app: &AppHandle,
+) -> Result<(String, String, String), String> {
+    let keys_path = keys_path(app).map_err(|e| e.to_string())?;
+    if !keys_path.exists() {
+        return Err("no identity yet — call generate_identity first".into());
+    }
+    let address = address_from_keyfile(&keys_path).map_err(|e| e.to_string())?;
+    let raw = fs::read(&keys_path).map_err(|e| e.to_string())?;
+    let json: serde_json::Value = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
+    let sigpub = json["signing_public"]
+        .as_str()
+        .ok_or_else(|| "missing signing_public in keys.json".to_string())?
+        .to_string();
+    let me = load_me(app);
+    let label = if me.label.trim().is_empty() {
+        sigpub.chars().take(8).collect()
+    } else {
+        me.label.trim().to_string()
+    };
+    Ok((label, address, sigpub))
+}
+
+/// Spawn a `ServiceDaemon`, register our outgoing service, and (if
+/// `with_browse` is true) start a continuous browse for the same service
+/// type filtering by the org-code TXT match. Returns the daemon + an
+/// optional JoinHandle for the browse-drain task.
+///
+/// The daemon binds to UDP 5353 on every available interface — both IPv4
+/// and IPv6 — so the office mesh works regardless of whether the network
+/// is dual-stack or v4-only. mdns-sd silently skips interfaces it can't
+/// bind to (e.g. a Docker bridge with no multicast group), so a partially
+/// firewalled host still announces on the interfaces it CAN reach.
+fn start_lan_daemon(
+    app: &AppHandle,
+    code: &str,
+    with_browse: bool,
+) -> Result<(mdns_sd::ServiceDaemon, Option<tokio::task::JoinHandle<()>>), String> {
+    use mdns_sd::{ServiceDaemon, ServiceInfo};
+
+    let (label, address, sigpub_hex) = resolve_self_lan_advertisement(app)?;
+    let txt = build_lan_txt_records(code, &label, &address, &sigpub_hex);
+
+    let daemon = ServiceDaemon::new()
+        .map_err(|e| format!("ServiceDaemon::new: {e}"))?;
+
+    // Instance name. We use the first 16 chars of our signing-pub hex so
+    // every member of the org broadcasts a stable, identity-derived name
+    // that survives restarts (mDNS drops duplicate names on the wire, so
+    // a stable name avoids name-flap if two laptops on the same org code
+    // happen to share a prefix). The full sigpub is in the TXT record.
+    let instance_name = format!("phantomchat-{}", &sigpub_hex.chars().take(16).collect::<String>());
+    let host_name = format!("{}.local.", instance_name);
+
+    // Port 0 — we don't expose a TCP service yet. mDNS still propagates
+    // the TXT record without a usable port; the txt records are all the
+    // discovery layer needs. (Future: a real port for direct LAN sync.)
+    let info = ServiceInfo::new(
+        LAN_ORG_SERVICE_TYPE,
+        &instance_name,
+        &host_name,
+        "",
+        0u16,
+        Some(txt),
+    )
+    .map_err(|e| format!("ServiceInfo::new: {e}"))?
+    // `enable_addr_auto` lets mdns-sd auto-detect host IPs from the
+    // active interfaces — without it, the empty `host_ip` would emit
+    // an unresolvable A/AAAA record.
+    .enable_addr_auto();
+
+    daemon
+        .register(info)
+        .map_err(|e| format!("daemon.register: {e}"))?;
+
+    let browse_task = if with_browse {
+        let receiver = daemon
+            .browse(LAN_ORG_SERVICE_TYPE)
+            .map_err(|e| format!("daemon.browse: {e}"))?;
+        let app_for_browse = app.clone();
+        let code_for_browse = code.to_string();
+        let task = tokio::spawn(async move {
+            // Drain the synchronous channel on a blocking-friendly task.
+            // mdns-sd's `Receiver` is a flume channel which exposes a
+            // non-async `recv` — so we hop into a blocking helper to
+            // avoid stalling the tokio runtime.
+            loop {
+                let event = match tokio::task::spawn_blocking({
+                    let r = receiver.clone();
+                    move || r.recv()
+                })
+                .await
+                {
+                    Ok(Ok(ev)) => ev,
+                    // `recv` Err means daemon was shut down; graceful exit.
+                    Ok(Err(_)) => break,
+                    Err(_) => break,
+                };
+                match event {
+                    mdns_sd::ServiceEvent::ServiceResolved(info) => {
+                        let props_map: std::collections::HashMap<String, String> = info
+                            .get_properties()
+                            .iter()
+                            .map(|p| (p.key().to_string(), p.val_str().to_string()))
+                            .collect();
+                        let other_org = match props_map.get("org") {
+                            Some(s) => s.clone(),
+                            None => continue,
+                        };
+                        if other_org != code_for_browse {
+                            continue;
+                        }
+                        let other_sigpub = match props_map.get("sigpub") {
+                            Some(s) => s.clone(),
+                            None => continue,
+                        };
+                        // Skip our own broadcast — no point adding ourselves.
+                        let self_sigpub = match resolve_self_lan_advertisement(&app_for_browse) {
+                            Ok((_, _, s)) => s,
+                            Err(_) => String::new(),
+                        };
+                        if other_sigpub.eq_ignore_ascii_case(&self_sigpub) {
+                            continue;
+                        }
+                        let other_label = props_map
+                            .get("label")
+                            .cloned()
+                            .unwrap_or_else(|| other_sigpub.chars().take(8).collect());
+                        let other_addr = match props_map.get("addr") {
+                            Some(s) => s.clone(),
+                            None => continue,
+                        };
+                        if PhantomAddress::parse(&other_addr).is_none() {
+                            // Skip malformed addresses silently — could be
+                            // a stale/buggy peer; no need to surface as an
+                            // error to the user.
+                            continue;
+                        }
+                        ingest_lan_peer(
+                            &app_for_browse,
+                            DiscoveredPeer {
+                                label: other_label,
+                                address: other_addr,
+                                signing_pub_hex: other_sigpub,
+                                last_seen: unix_now_secs(),
+                            },
+                        )
+                        .await;
+                    }
+                    mdns_sd::ServiceEvent::SearchStopped(_) => break,
+                    _ => {}
+                }
+            }
+        });
+        Some(task)
+    } else {
+        None
+    };
+
+    Ok((daemon, browse_task))
+}
+
+/// Idempotent ingest path for a freshly-resolved LAN peer. Dedupes by
+/// `signing_pub_hex` — refreshes the `last_seen` timestamp on a re-hit,
+/// appends + persists + auto-adds-as-contact on a first-hit. Emits the
+/// `lan_peer_discovered` event so the React UI can refresh without
+/// polling. Auto-binds the contact's `signing_pub` so the very first
+/// incoming sealed-sender envelope from the peer resolves to its label.
+async fn ingest_lan_peer(app: &AppHandle, peer: DiscoveredPeer) {
+    let state = match app.try_state::<AppState>() {
+        Some(s) => s,
+        None => return,
+    };
+    let mut guard = state.lan_org.lock().await;
+    let lan = match guard.as_mut() {
+        Some(l) => l,
+        None => return,
+    };
+    let pub_hex_lower = peer.signing_pub_hex.to_lowercase();
+    let mut is_new = false;
+    if let Some(existing) = lan
+        .discovered
+        .iter_mut()
+        .find(|p| p.signing_pub_hex.eq_ignore_ascii_case(&pub_hex_lower))
+    {
+        existing.last_seen = peer.last_seen;
+        // Tolerate label / address drift (a peer may have updated them
+        // between sessions). Last writer wins.
+        existing.label = peer.label.clone();
+        existing.address = peer.address.clone();
+    } else {
+        lan.discovered.push(peer.clone());
+        is_new = true;
+    }
+    lan.last_discovery_ts = Some(peer.last_seen);
+    let code = lan.code.clone();
+    let snapshot = lan.discovered.clone();
+    drop(guard);
+
+    // Persist BEFORE doing any contact-side mutation so a crash mid-add
+    // doesn't lose the discovery itself.
+    if let Ok(path) = lan_org_path(app) {
+        let _ = save_lan_org_disk(
+            &path,
+            &LanOrgDisk {
+                code,
+                discovered: snapshot,
+            },
+        );
+    }
+
+    if is_new {
+        // Auto-add as a 1:1 contact via the same on-disk path that
+        // `add_contact` writes. Idempotent — if the label is already taken
+        // we skip silently (the user already has them under a different
+        // label). We DO bind the signing_pub on insert so the first
+        // incoming sealed-sender envelope renders with the human label
+        // instead of `?<8hex>`.
+        if let Ok(contacts_path) = contacts_path(app) {
+            let mut book = load_contacts(&contacts_path);
+            // Skip if any existing contact already has this signing_pub
+            // (don't double-add under a different label) OR has the same
+            // label (label collision — leave the user-set one alone).
+            let already = book.contacts.iter().any(|c| {
+                c.label == peer.label
+                    || c.signing_pub
+                        .as_deref()
+                        .map(|h| h.eq_ignore_ascii_case(&peer.signing_pub_hex))
+                        .unwrap_or(false)
+            });
+            if !already {
+                book.contacts.push(Contact {
+                    label: peer.label.clone(),
+                    address: peer.address.clone(),
+                    signing_pub: Some(peer.signing_pub_hex.clone()),
+                });
+                if save_contacts(&contacts_path, &book).is_ok() {
+                    audit(
+                        app,
+                        "lan",
+                        "peer_added",
+                        serde_json::json!({ "label": peer.label }),
+                    );
+                }
+            }
+        }
+        let _ = app.emit("lan_peer_discovered", peer);
+    }
+}
+
+/// Best-effort daemon shutdown. mdns-sd's `shutdown` is a graceful op —
+/// peers see a goodbye packet so they can age our entry out instead of
+/// waiting for the TTL to expire.
+fn stop_lan_daemon(daemon: &mdns_sd::ServiceDaemon) {
+    let _ = daemon.shutdown();
+}
+
+#[tauri::command]
+async fn lan_org_create(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let mut guard = state.lan_org.lock().await;
+    if guard.is_some() {
+        return Err("already in a LAN org — call lan_org_leave first".into());
+    }
+    let code = generate_org_code();
+    let (daemon, browse_task) = start_lan_daemon(&app, &code, true)?;
+    *guard = Some(LanOrg {
+        code: code.clone(),
+        broadcaster: Some(daemon),
+        discovered: Vec::new(),
+        last_discovery_ts: None,
+        browse_task,
+    });
+    drop(guard);
+    if let Ok(path) = lan_org_path(&app) {
+        let _ = save_lan_org_disk(
+            &path,
+            &LanOrgDisk {
+                code: code.clone(),
+                discovered: Vec::new(),
+            },
+        );
+    }
+    audit(
+        &app,
+        "lan",
+        "created",
+        serde_json::json!({ "code": code }),
+    );
+    Ok(code)
+}
+
+#[tauri::command]
+async fn lan_org_join(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    code: String,
+) -> Result<(), String> {
+    // Light validation. We accept the canonical `XXX-XXX` form OR a
+    // hyphen-less `XXXXXX` (some users will paste without the hyphen).
+    let cleaned: String = code
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    if cleaned.len() != 6 {
+        return Err(format!(
+            "invalid org code — expected 6 alphanumeric chars (got {})",
+            cleaned.len()
+        ));
+    }
+    if !cleaned
+        .as_bytes()
+        .iter()
+        .all(|b| LAN_ORG_CODE_ALPHABET.contains(b))
+    {
+        return Err("invalid org code — contains ambiguous chars (0/O/1/I/L)".into());
+    }
+    let canonical = format!("{}-{}", &cleaned[..3], &cleaned[3..]);
+
+    let mut guard = state.lan_org.lock().await;
+    if guard.is_some() {
+        return Err("already in a LAN org — call lan_org_leave first".into());
+    }
+    let (daemon, browse_task) = start_lan_daemon(&app, &canonical, true)?;
+    // Rehydrate any prior discovered peers if `lan_org.json` carried them
+    // and the codes match (a re-join with the same code preserves history).
+    let prior = lan_org_path(&app)
+        .ok()
+        .and_then(|p| load_lan_org(&p))
+        .filter(|d| d.code == canonical)
+        .map(|d| d.discovered)
+        .unwrap_or_default();
+    *guard = Some(LanOrg {
+        code: canonical.clone(),
+        broadcaster: Some(daemon),
+        discovered: prior.clone(),
+        last_discovery_ts: None,
+        browse_task,
+    });
+    drop(guard);
+    if let Ok(path) = lan_org_path(&app) {
+        let _ = save_lan_org_disk(
+            &path,
+            &LanOrgDisk {
+                code: canonical.clone(),
+                discovered: prior,
+            },
+        );
+    }
+    audit(
+        &app,
+        "lan",
+        "joined",
+        serde_json::json!({ "code": canonical }),
+    );
+    Ok(())
+}
+
+#[tauri::command]
+async fn lan_org_status(state: State<'_, AppState>) -> Result<LanOrgStatus, String> {
+    let guard = state.lan_org.lock().await;
+    Ok(match guard.as_ref() {
+        None => LanOrgStatus {
+            active: false,
+            code: None,
+            peer_count: 0,
+            last_discovery_ts: None,
+        },
+        Some(lan) => LanOrgStatus {
+            active: lan.broadcaster.is_some(),
+            code: Some(lan.code.clone()),
+            peer_count: lan.discovered.len() as u32,
+            last_discovery_ts: lan.last_discovery_ts.map(|ts| ts.to_string()),
+        },
+    })
+}
+
+#[tauri::command]
+async fn lan_org_leave(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut guard = state.lan_org.lock().await;
+    let lan = match guard.take() {
+        Some(l) => l,
+        None => return Err("not in a LAN org".into()),
+    };
+    drop(guard);
+    if let Some(d) = lan.broadcaster.as_ref() {
+        stop_lan_daemon(d);
+    }
+    if let Some(t) = lan.browse_task {
+        t.abort();
+    }
+    if let Ok(path) = lan_org_path(&app) {
+        // Best-effort: unlink the persisted file so the next launch
+        // doesn't auto-rehydrate a torn-down org.
+        let _ = fs::remove_file(&path);
+    }
+    audit(
+        &app,
+        "lan",
+        "left",
+        serde_json::json!({ "code": lan.code }),
+    );
+    Ok(())
+}
+
+/// Setup-time helper: re-arm the broadcaster + browser if `lan_org.json`
+/// already exists from a previous session. Best-effort — a daemon spawn
+/// failure (e.g. UDP 5353 blocked by a firewall) is logged via stderr but
+/// MUST NOT prevent the app from booting; the user can manually retry
+/// from the Settings panel.
+async fn rehydrate_lan_org_on_startup(app: AppHandle) {
+    let path = match lan_org_path(&app) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let disk = match load_lan_org(&path) {
+        Some(d) if !d.code.is_empty() => d,
+        _ => return,
+    };
+    let state = match app.try_state::<AppState>() {
+        Some(s) => s,
+        None => return,
+    };
+    let (daemon, browse_task) = match start_lan_daemon(&app, &disk.code, true) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("lan_org rehydrate skipped: {e}");
+            return;
+        }
+    };
+    let mut guard = state.lan_org.lock().await;
+    *guard = Some(LanOrg {
+        code: disk.code,
+        broadcaster: Some(daemon),
+        discovered: disk.discovered,
+        last_discovery_ts: None,
+        browse_task,
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -3779,6 +4397,10 @@ pub fn run() {
             export_audit_log,
             check_for_updates,
             install_update,
+            lan_org_create,
+            lan_org_join,
+            lan_org_status,
+            lan_org_leave,
             reset_window_state,
         ])
         .setup(|app| {
@@ -3786,6 +4408,19 @@ pub fn run() {
             // never have to defensively `mkdir -p` on the hot path.
             let handle = app.handle().clone();
             let _ = app_data(&handle);
+
+            // ── LAN org rehydrate ───────────────────────────────────────
+            // If `lan_org.json` exists from a previous session, re-arm
+            // the mDNS broadcast + browse so the office mesh keeps
+            // converging without user intervention. Best-effort — a
+            // failure (e.g. UDP 5353 firewalled) is logged via stderr but
+            // does NOT block the app from launching. Spawned on the
+            // tokio runtime so the synchronous setup hook returns
+            // promptly.
+            let lan_handle = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                rehydrate_lan_org_on_startup(lan_handle).await;
+            });
 
             // ── System tray ──────────────────────────────────────────────
             // Build a minimal menu: Show/Hide toggles main window, Status

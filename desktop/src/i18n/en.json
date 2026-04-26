@@ -73,6 +73,24 @@
     "nav": {
       "back": "back",
       "next": "next"
+    },
+    "lan": {
+      "header": "join existing LAN org (optional)",
+      "description": "If your colleagues are already running PhantomChat on the same network, paste the 6-digit org code they shared with you. We'll auto-discover them in the background.",
+      "skip_button": "Skip — single user / remote setup",
+      "join_button": "Join with code",
+      "create_button": "Create new LAN org",
+      "creating": "creating…",
+      "confirm_join_button": "Join",
+      "joining": "joining…",
+      "code_placeholder": "XXX-XXX",
+      "your_code_label": "your org code",
+      "copy_button": "copy code",
+      "copied_button": "copied!",
+      "share_with_colleagues": "Share this code with your colleagues during their onboarding. They'll paste it into the same step on their machines.",
+      "discovering_in_background": "Discovering peers in background…",
+      "skipped_message": "skipped — you can join later via Settings → LAN Org.",
+      "warning": "Caution: only use this on trusted office networks. mDNS broadcasts your address to all devices on the LAN. Don't enable on public Wi-Fi (cafés, hotels, conferences)."
     }
   },
   "settings": {
@@ -158,6 +176,24 @@
       "cancel_button": "cancel",
       "must_type_delete": "type DELETE exactly to confirm",
       "wipe_failed": "wipe failed: {{error}}"
+    },
+    "lan": {
+      "title": "lan org",
+      "description": "Zero-touch peer discovery for office LANs. Anyone running PhantomChat on the same network with the same 6-character org code is auto-added as a contact.",
+      "code_label": "org code",
+      "peer_count_label": "discovered peers",
+      "last_discovery_label": "last discovery",
+      "show_code_button": "show org code",
+      "hide_code_button": "hide code",
+      "copy_button": "copy",
+      "copied_button": "copied!",
+      "leave_button": "leave LAN org",
+      "code_placeholder": "XXX-XXX",
+      "join_button": "join",
+      "joining": "joining…",
+      "create_button": "create new",
+      "creating": "creating…",
+      "warning": "Caution: only use this on trusted office networks. mDNS broadcasts your address to all devices on the LAN. Don't enable on public Wi-Fi (cafés, hotels, conferences)."
     }
   },
   "contacts_pane": {
