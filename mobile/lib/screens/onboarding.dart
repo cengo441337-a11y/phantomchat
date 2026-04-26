@@ -108,20 +108,33 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     // Force a PIN to be configured before the main app becomes reachable.
     // The lock screen in setupMode double-enters + confirms the PIN and
     // calls onUnlocked once it's stored in secure storage.
+    //
+    // We must NOT capture `context` (the onboarding State's context) for
+    // the post-PIN navigation: pushReplacement below disposes this State
+    // before the user finishes PIN entry, so by the time `onUnlocked`
+    // fires the captured context is dead and `Navigator.of(context)`
+    // throws "Looking up a deactivated widget's ancestor is unsafe."
+    // The 600k-iter PBKDF2 hang in 1.0.3 happened to mask this — once
+    // the hash returns quickly the navigation crash surfaces.
+    //
+    // Wrap the LockScreen in a Builder so onUnlocked can use a context
+    // that lives inside the new route (LockScreen's own subtree).
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
-        pageBuilder: (_, _, _) => LockScreen(
-          setupMode: true,
-          onUnlocked: () {
-            Navigator.of(context).pushReplacement(
-              PageRouteBuilder(
-                pageBuilder: (_, _, _) => const HomeScreen(),
-                transitionDuration: const Duration(milliseconds: 400),
-                transitionsBuilder: (_, anim, _, child) =>
-                    FadeTransition(opacity: anim, child: child),
-              ),
-            );
-          },
+        pageBuilder: (_, _, _) => Builder(
+          builder: (lockCtx) => LockScreen(
+            setupMode: true,
+            onUnlocked: () {
+              Navigator.of(lockCtx).pushReplacement(
+                PageRouteBuilder(
+                  pageBuilder: (_, _, _) => const HomeScreen(),
+                  transitionDuration: const Duration(milliseconds: 400),
+                  transitionsBuilder: (_, anim, _, child) =>
+                      FadeTransition(opacity: anim, child: child),
+                ),
+              );
+            },
+          ),
         ),
         transitionDuration: const Duration(milliseconds: 400),
         transitionsBuilder: (_, anim, _, child) =>

@@ -1,7 +1,7 @@
 name: phantomchat
 description: PhantomChat — decentralized encrypted messenger
 publish_to: none
-version: 1.0.4+5
+version: 1.0.5+6
 
 environment:
   sdk: ^3.11.4
@@ -58,6 +58,12 @@ dependencies:
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+  # End-to-end smoke tests. Drives the real app on a connected device via
+  # WidgetTester so we cover platform plugins (FRB / secure_storage /
+  # SharedPreferences) that pure Dart unit tests can't reach. Run with
+  # `flutter test integration_test/` against a connected emulator.
+  integration_test:
     sdk: flutter
   flutter_lints: ^6.0.0
   freezed: ^2.5.7
