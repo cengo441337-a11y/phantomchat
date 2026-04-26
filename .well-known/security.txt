@@ -1,0 +1,23 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+# PhantomChat — security.txt (RFC 9116)
+#
+# Mirrored to https://dc-infosec.de/.well-known/security.txt
+# and https://updates.dc-infosec.de/.well-known/security.txt.
+# Repo of record: https://github.com/cengo441337-a11y/phantomchat
+
+Contact: mailto:admin@dc-infosec.de
+Encryption: https://github.com/cengo441337-a11y/phantomchat/raw/main/keys/security.asc
+Acknowledgments: https://github.com/cengo441337-a11y/phantomchat/blob/main/docs/HALL-OF-FAME.md
+Policy: https://github.com/cengo441337-a11y/phantomchat/blob/main/docs/SECURITY.md
+Preferred-Languages: de, en
+Canonical: https://dc-infosec.de/.well-known/security.txt
+Expires: 2027-04-26T00:00:00.000Z
+-----BEGIN PGP SIGNATURE-----
+
+iIoEARYKADIWIQQPjaJYG4oUKJ8PL9fvCG2CmRSg4wUCae3/FRQcYWRtaW5AZGMt
+aW5mb3NlYy5kZQAKCRDvCG2CmRSg49tiAP9noF6eEzPOrS6Ue5ZfIVGkrg6KaBMo
+/es2V+9pvHfAIgEA+4sJZob8Gn/IfUHwmkhczmQSPOB+VJAzJwL5GVEgJAI=
+=vMeO
+-----END PGP SIGNATURE-----

@@ -285,11 +285,12 @@ phantomchat/
 │       ├── lib.rs             NostrRelay · StealthNostrRelay · Factory
 │       └── nostr.rs           NIP-01 Event-Typen · Schnorr-Signierung
 ├── cli/               Cyberpunk Terminal Interface
-├── mobile/            Flutter App (Android / iOS)
-│   └── lib/
-│       ├── services/          privacy_service.dart · ipfs_service.dart
-│       └── src/ui/            privacy_settings_view.dart · profile_view.dart
-├── docs/              SECURITY.md · PRIVACY.md
+├── mobile/            Flutter App (Android)
+│   └── lib/                   screens · services · widgets · src/rust (FRB)
+├── docs/              SECURITY.md · PRIVACY.md · HALL-OF-FAME.md ·
+│                      REPRODUCIBLE-BUILDS.md · RELAY-SELFHOSTING.md
+├── keys/              security.asc (PGP, RFC 9116 disclosure key)
+├── .well-known/       security.txt (RFC 9116)
 ├── spec/              SPEC.md Protokollspezifikation
 ├── infra/             docker-compose.yml (Relay-Infrastruktur)
 └── CHANGELOG.md
@@ -343,8 +344,10 @@ phantomchat/
 │   └── tests/             9 integration-test suites, 64 tests
 ├── cli/               phantom — the cyberpunk CLI
 ├── relays/            Nostr + SOCKS5 relay adapters
-├── mobile/            Flutter App (Android / iOS) via flutter_rust_bridge
-├── docs/              SPEC.md, PRIVACY.md, SECURITY.md
+├── mobile/            Flutter App (Android) via flutter_rust_bridge
+├── docs/              SPEC.md, PRIVACY.md, SECURITY.md, HALL-OF-FAME.md, REPRODUCIBLE-BUILDS.md
+├── keys/              security.asc (PGP disclosure key)
+├── .well-known/       security.txt (RFC 9116)
 ├── infra/             docker-compose for hosting your own Nostr relay
 └── CHANGELOG.md
 ```
@@ -459,7 +462,7 @@ Dual-Perspektive:
 - **Code:** MIT — siehe [LICENSE](LICENSE).
 - **Krypto-Claims:** PhantomChat ist **nicht extern auditiert**. Verlasse dich nicht auf diese Codebase für Hochrisiko-Kommunikation bis ein qualifizierter Auditor die Implementation freigegeben hat.
 
-Sicherheitslücken bitte privat an **admin@dc-infosec.de** melden, nicht über öffentliche Issues.
+Sicherheitslücken bitte privat an **admin@dc-infosec.de** melden, nicht über öffentliche Issues — PGP-verschlüsselt mit dem Key in [`keys/security.asc`](keys/security.asc) (Fingerprint `0F8D A258 1B8A 1428 9F0F  2FD7 EF08 6D82 9914 A0E3`). Vollständige Disclosure-Policy + SLA + Safe-Harbor-Klausel: [`docs/SECURITY.md`](docs/SECURITY.md). Forschende-Anerkennung: [`docs/HALL-OF-FAME.md`](docs/HALL-OF-FAME.md).
 
 ---
 
