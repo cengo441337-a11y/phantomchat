@@ -22,6 +22,16 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_rust_bridge: 2.12.0
   freezed_annotation: ^2.4.4
+  # Wave 7B2 — pure-Dart relay client (publish + receive over Nostr WebSocket).
+  path_provider: ^2.1.5
+  web_socket_channel: ^3.0.1
+  # Wave 8B — background relay-listener
+  flutter_background_service: ^5.0.0
+  flutter_local_notifications: ^17.2.2
+  # Battery-optimisation opt-out flow (Settings + first-launch wizard).
+  # On Xiaomi/Huawei/OnePlus/Samsung this keeps the relay/connection-keeper
+  # alive across Doze; without it the OEM kills the process within minutes.
+  disable_battery_optimization: ^1.1.1
 
 dev_dependencies:
   flutter_test:
