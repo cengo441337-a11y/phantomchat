@@ -3,6 +3,7 @@ members = [
     "core",
     "cli",
     "relays",
-    "desktop/src-tauri"
+    "desktop/src-tauri",
+    "tools/phantom-build-org-msi"
 ]
 resolver = "2"

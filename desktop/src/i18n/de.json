@@ -73,6 +73,24 @@
     "nav": {
       "back": "Zurück",
       "next": "Weiter"
+    },
+    "lan": {
+      "header": "Bestehender LAN-Organisation beitreten (optional)",
+      "description": "Falls Ihre Kolleginnen und Kollegen PhantomChat bereits im selben Netzwerk verwenden, fügen Sie hier den 6-stelligen Organisationscode ein, den sie Ihnen mitgeteilt haben. Wir erkennen die übrigen Teilnehmer dann automatisch im Hintergrund.",
+      "skip_button": "Überspringen — Einzelnutzer / Remote-Einrichtung",
+      "join_button": "Mit Code beitreten",
+      "create_button": "Neue LAN-Organisation erstellen",
+      "creating": "Wird erstellt…",
+      "confirm_join_button": "Beitreten",
+      "joining": "Wird beigetreten…",
+      "code_placeholder": "XXX-XXX",
+      "your_code_label": "Ihr Organisationscode",
+      "copy_button": "Code kopieren",
+      "copied_button": "Kopiert!",
+      "share_with_colleagues": "Teilen Sie diesen Code Ihren Kolleginnen und Kollegen während deren Einrichtung mit. Sie geben ihn im selben Schritt auf ihren Geräten ein.",
+      "discovering_in_background": "Teilnehmer werden im Hintergrund erkannt…",
+      "skipped_message": "Übersprungen — Sie können später unter Einstellungen → LAN-Organisation beitreten.",
+      "warning": "Achtung: Verwenden Sie diese Funktion nur in vertrauenswürdigen Büronetzwerken. mDNS sendet Ihre Adresse an alle Geräte im LAN. Bitte nicht in öffentlichen WLANs aktivieren (Cafés, Hotels, Konferenzen)."
     }
   },
   "settings": {
@@ -87,6 +105,50 @@
       "display_name_saved": "gespeichert",
       "display_name_hint": "Dieser Name wird Personen angezeigt, die Sie zu MLS-Gruppen einladen (im Welcome-Wrapper). Bei 1:1-Chats wird er nur in Ihrer eigenen Oberfläche verwendet.",
       "backup_button": "Schlüsseldatei sichern"
+    },
+    "backup": {
+      "title": "Sicherung & Wiederherstellung",
+      "intro": "Erstellen Sie eine verschlüsselte Sicherung Ihrer Identität, Kontakte, Sitzungen und Nachrichten. Erforderlich nach §147 AO / GoBD bei steuerrelevanter Kommunikation (10 Jahre Aufbewahrungspflicht).",
+      "export_button": "Sicherung erstellen",
+      "export_picker_title": "PhantomChat-Sicherung speichern unter",
+      "export_filter_name": "PhantomChat-Sicherung",
+      "export_in_progress": "Wird verschlüsselt (Argon2id ist bewusst langsam — etwa 1 Sekunde)…",
+      "export_success_title": "Sicherung erstellt",
+      "export_success_size": "{{size}} Bytes · {{count}} Dateien",
+      "export_success_sha": "SHA-256: {{sha}}",
+      "export_failed": "Sicherung fehlgeschlagen: {{error}}",
+      "import_button": "Sicherung importieren",
+      "import_picker_title": "PhantomChat-Sicherung öffnen",
+      "import_verifying": "Sicherungsmetadaten werden geprüft…",
+      "import_meta_title": "Sicherungsdetails",
+      "import_meta_created": "Erstellt am",
+      "import_meta_host": "Host",
+      "import_meta_count": "Einträge",
+      "import_passphrase_label": "Passphrase",
+      "import_continue_button": "Prüfen",
+      "import_restore_button": "Jetzt wiederherstellen",
+      "import_cancel_button": "Abbrechen",
+      "import_warning": "⚠ Ihre aktuelle Identität, Kontakte und Nachrichten werden mit dem Inhalt der Sicherung ÜBERSCHRIEBEN. Dies kann nicht rückgängig gemacht werden.",
+      "import_in_progress": "Wird entschlüsselt und in den Live-Bestand übernommen…",
+      "import_success": "{{count}} Einträge wiederhergestellt · Empfänger neu gestartet",
+      "import_failed": "Wiederherstellung fehlgeschlagen: {{error}}",
+      "passphrase_label": "Passphrase",
+      "passphrase_placeholder": "mind. 12 Zeichen",
+      "passphrase_confirm_label": "Passphrase bestätigen",
+      "passphrase_mismatch": "Passphrasen stimmen nicht überein",
+      "passphrase_too_short": "Passphrase muss mindestens 12 Zeichen haben",
+      "strength_label": "Stärke",
+      "strength_very_weak": "sehr schwach",
+      "strength_weak": "schwach",
+      "strength_fair": "ausreichend",
+      "strength_strong": "stark",
+      "strength_very_strong": "sehr stark",
+      "strength_entropy": "{{bits}} Bit Entropie · gesch. Knackzeit: {{time}}",
+      "strength_hint": "Empfehlung: mindestens 16 Zeichen ODER eine Diceware-Passphrase mit 6 Wörtern. HINWEIS: Verlieren Sie die Passphrase, ist die Sicherung nicht wiederherstellbar.",
+      "modal_create_title": "Verschlüsselte Sicherung erstellen",
+      "modal_create_confirm": "Sicherung erstellen",
+      "modal_restore_confirm_title": "Wiederherstellung bestätigen",
+      "modal_restore_confirm": "Ja, meine Daten überschreiben"
     },
     "language": {
       "title": "Sprache",
@@ -149,6 +211,28 @@
       "col_event": "Ereignis",
       "col_details": "Details"
     },
+    "diagnostics": {
+      "title": "Diagnose",
+      "optin_label": "Crash-Reports senden (anonym)",
+      "optin_hint": "Standard: aus. Wenn aktiviert, lädt die Schaltfläche „Senden“ unten jeweils einen einzelnen Crash-Report per HTTPS hoch.",
+      "view_button": "Crash-Reports anzeigen",
+      "view_modal_title": "Crash-Reports",
+      "view_modal_close": "schließen",
+      "empty": "(keine Abstürze aufgezeichnet — nichts zu melden)",
+      "col_ts": "Zeitstempel",
+      "col_version": "Version",
+      "col_msg": "Panic",
+      "col_actions": "Aktionen",
+      "send_button": "Senden",
+      "sending": "Wird gesendet…",
+      "sent": "gesendet",
+      "send_failed": "Senden fehlgeschlagen: {{error}}",
+      "delete_row_button": "Löschen",
+      "clear_all_button": "Alle löschen",
+      "clear_failed": "Löschen fehlgeschlagen: {{error}}",
+      "load_failed": "Crash-Reports konnten nicht geladen werden: {{error}}",
+      "privacy_note": "Reports werden über HTTPS an updates.dc-infosec.de gesendet. Wir lesen nur die Crash-Daten — kein Nachrichteninhalt, keine Identität, keine Kontakte."
+    },
     "danger": {
       "title": "Gefahrenzone",
       "description": "Alle lokalen Daten löschen: Identität, Kontakte, Sitzungen, Nachrichten und MLS-Status. Die Anwendung wird unmittelbar danach geschlossen.",
@@ -158,6 +242,24 @@
       "cancel_button": "Abbrechen",
       "must_type_delete": "Bitte geben Sie zur Bestätigung exakt DELETE ein",
       "wipe_failed": "Löschen fehlgeschlagen: {{error}}"
+    },
+    "lan": {
+      "title": "LAN-Organisation",
+      "description": "Zero-Touch-Erkennung von Teilnehmern für Büronetzwerke. Wer im selben Netzwerk PhantomChat mit demselben 6-stelligen Organisationscode betreibt, wird automatisch als Kontakt hinzugefügt.",
+      "code_label": "Organisationscode",
+      "peer_count_label": "erkannte Teilnehmer",
+      "last_discovery_label": "letzte Erkennung",
+      "show_code_button": "Code anzeigen",
+      "hide_code_button": "Code verbergen",
+      "copy_button": "Kopieren",
+      "copied_button": "Kopiert!",
+      "leave_button": "LAN-Organisation verlassen",
+      "code_placeholder": "XXX-XXX",
+      "join_button": "Beitreten",
+      "joining": "Wird beigetreten…",
+      "create_button": "Neu erstellen",
+      "creating": "Wird erstellt…",
+      "warning": "Achtung: Verwenden Sie diese Funktion nur in vertrauenswürdigen Büronetzwerken. mDNS sendet Ihre Adresse an alle Geräte im LAN. Bitte nicht in öffentlichen WLANs aktivieren (Cafés, Hotels, Konferenzen)."
     }
   },
   "contacts_pane": {
@@ -351,5 +453,38 @@
     "loading": "QR-Code wird geladen…",
     "copy": "Adresse kopieren",
     "copied": "Kopiert!"
+  },
+  "mention": {
+    "header": "Mitglied erwähnen",
+    "empty": "(keine passenden Mitglieder)",
+    "aria_label": "Ein Gruppenmitglied erwähnen",
+    "notify_title": "Erwähnt von {{label}}"
+  "messages": {
+    "reply": {
+      "toolbar_button": "Antworten",
+      "toolbar_title": "Diese Nachricht in Ihrer Antwort zitieren",
+      "quote_jump_title": "Zur ursprünglichen Nachricht springen",
+      "cancel_aria": "Antwort abbrechen",
+      "cancel_title": "Antwort abbrechen"
+    },
+    "reactions": {
+      "toolbar_button": "Reagieren",
+      "toolbar_title": "Emoji-Reaktion hinzufügen",
+      "pill_title": "Reaktionen von {{senders}}"
+    },
+    "disappearing": {
+      "label": "Auto-Löschung",
+      "preset_off": "Aus",
+      "preset_min5": "5 Min.",
+      "preset_hour1": "1 Stunde",
+      "preset_hour24": "24 Stunden",
+      "preset_day7": "7 Tage",
+      "active_title": "Selbstlöschende Nachrichten: Einträge werden {{secs}} s nach dem Senden entfernt",
+      "inactive_title": "Selbstlöschende Nachrichten: aus",
+      "row_label": "in {{remaining}}",
+      "row_title": "Diese Nachricht wird automatisch gelöscht, sobald der Zähler abläuft",
+      "system_enabled": "Selbstlöschende Nachrichten aktiviert ({{secs}} s) für {{label}}",
+      "system_disabled": "Selbstlöschende Nachrichten deaktiviert für {{label}}"
+    }
   }
 }

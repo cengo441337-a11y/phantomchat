@@ -3,6 +3,16 @@ import { useTranslation } from "react-i18next";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
 import type { IncomingMessage, MsgLine } from "../types";
+import { useEffect, useMemo, useRef } from "react";
+import { useTranslation } from "react-i18next";
+import type { MsgLine } from "../types";
+import { renderMarkdown } from "../lib/markdown";
+import { autoLinkify } from "../lib/linkify";
+import { detectMentions } from "../lib/mentions";
+import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import type { MsgLine, ReactionEntry } from "../types";
+import EmojiPicker from "./EmojiPicker";
 
 interface Props {
   messages: MsgLine[];
@@ -28,6 +38,19 @@ interface Props {
   /// we route through the parent so it can switch the active conversation
   /// before scrolling. Receives the contact label of the starred row.
   onSwitchConversation?: (contactLabel: string) => void;
+  /// Labels eligible to be rendered as @-mention pills. Contains the
+  /// local `me.label`, every active MLS group member's label, and every
+  /// 1:1 contact label. Empty / undefined disables mention rendering
+  /// entirely (text rows render as plain markdown + auto-links only).
+  knownMentionLabels?: string[];
+  /// Called when the user clicks the row toolbar's "Reply" button. The
+  /// parent stashes the (msg_id, body_preview) pair in its `replyingTo`
+  /// state and the InputBar shows the quote block above the input.
+  onReplyTo?: (msgId: string, preview: string) => void;
+  /// Called when the user picks an emoji from the inline reaction picker.
+  /// Parent decides whether this is an "add" or "remove" action by
+  /// inspecting whether the active user (`"you"`) already reacted.
+  onReact?: (msgId: string, emoji: string, action: "add" | "remove") => void;
 }
 
 function truncateLabel(label: string): string {
@@ -63,6 +86,49 @@ function isImageFile(mime: string | undefined, filename: string): boolean {
   const dot = lower.lastIndexOf(".");
   if (dot < 0) return false;
   return IMAGE_EXTS.has(lower.slice(dot + 1));
+/// Format a remaining-seconds count as a coarse `<H>h <M>m` / `<M>m <S>s`
+/// label for the disappearing-messages countdown next to the timestamp.
+/// Negative values render as `0s` so the row briefly shows "expired" before
+/// the auto-purge sweep removes it.
+function humanTtl(remainingSecs: number): string {
+  if (remainingSecs <= 0) return "0s";
+  if (remainingSecs >= 86400) {
+    const d = Math.floor(remainingSecs / 86400);
+    const h = Math.floor((remainingSecs % 86400) / 3600);
+    return h > 0 ? `${d}d ${h}h` : `${d}d`;
+  }
+  if (remainingSecs >= 3600) {
+    const h = Math.floor(remainingSecs / 3600);
+    const m = Math.floor((remainingSecs % 3600) / 60);
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  }
+  if (remainingSecs >= 60) {
+    const m = Math.floor(remainingSecs / 60);
+    const s = remainingSecs % 60;
+    return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  }
+  return `${remainingSecs}s`;
+}
+
+/// Group reactions by emoji so the pill row reads `[👍 2] [❤️ 1]` instead
+/// of one pill per sender. Returns the grouped list with the senders
+/// preserved for the hover tooltip.
+function groupReactions(reactions: ReactionEntry[]): Array<{
+  emoji: string;
+  count: number;
+  senders: string[];
+}> {
+  const map = new Map<string, string[]>();
+  for (const r of reactions) {
+    const senders = map.get(r.emoji) ?? [];
+    senders.push(r.sender_label);
+    map.set(r.emoji, senders);
+  }
+  return Array.from(map.entries()).map(([emoji, senders]) => ({
+    emoji,
+    count: senders.length,
+    senders,
+  }));
 }
 
 export default function MessageStream({
@@ -73,10 +139,29 @@ export default function MessageStream({
   highlightedIdx,
   onMarkRead,
   onSwitchConversation,
+  knownMentionLabels,
+  onReplyTo,
+  onReact,
 }: Props) {
   const { t } = useTranslation();
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  /// Index of the row whose emoji picker is currently open. `null` =
+  /// no popover. Closing happens on outside click + Escape inside the
+  /// EmojiPicker component itself.
+  const [pickerForIdx, setPickerForIdx] = useState<number | null>(null);
+  /// Tick-tock for live disappearing-messages countdowns. We update once
+  /// per second so the "(in 4h 12m)" label re-renders without forcing
+  /// the parent's `messages` reducer to fire on every tick. Bumped once
+  /// per second only when at least one row actually has an `expires_at`
+  /// to avoid pointless re-renders on chats without disappearing on.
+  const [, setNowTick] = useState(0);
+  useEffect(() => {
+    const hasExpiring = messages.some(m => m.expires_at !== undefined);
+    if (!hasExpiring) return;
+    const id = window.setInterval(() => setNowTick(n => n + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [messages]);
   /// Set of `msg_id`s we've already fired `mark_read` for. Persists across
   /// re-renders via `useRef` so a rapid scroll doesn't trigger duplicate
   /// receipts for the same incoming row.
@@ -250,6 +335,15 @@ export default function MessageStream({
 
   const title = activeLabel ? `#${activeLabel}` : t("message_stream.title_default");
 
+  // Stable label-set for the mention rewriter — only re-derive when the
+  // upstream array's contents change. Re-deriving on every render would
+  // also re-run `detectMentions` for every row's body memo below.
+  const mentionLabels = useMemo(
+    () => (knownMentionLabels ? knownMentionLabels.filter(Boolean) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [knownMentionLabels?.join("")],
+  );
+
   return (
     <section className="flex-1 flex flex-col bg-bg-deep/70 backdrop-blur-[1px] border-b border-dim-green/40 overflow-hidden pc-pane pc-pane-magenta">
       <div className="flex items-center justify-between px-4 py-1.5 border-b border-dim-green/30">
@@ -277,6 +371,146 @@ export default function MessageStream({
           </button>
         </div>
       </div>
+      <div className="px-4 py-1.5 text-xs text-cyber-cyan uppercase tracking-widest border-b border-dim-green/30 font-display">
+        {title}
+      </div>
+      <div
+        ref={containerRef}
+        className="flex-1 overflow-y-auto px-4 py-3 space-y-1"
+      >
+        {messages.length === 0 && (
+          <div className="text-soft-grey italic text-xs">
+            {t("message_stream.empty")}
+          </div>
+        )}
+        {messages.map((m, i) => {
+          const arrow =
+            m.kind === "incoming" ? "◀" : m.kind === "outgoing" ? "▶" : "·";
+          const arrowColor =
+            m.kind === "incoming"
+              ? "text-cyber-cyan"
+              : m.kind === "outgoing"
+              ? "text-neon-green"
+              : "text-soft-grey";
+
+          // sig_ok defaults to `true` (system/outgoing have no signature
+          // semantics; old persisted rows pre-feature also default true).
+          const tampered = m.sig_ok === false;
+          const isUnbound =
+            m.kind === "incoming" && m.label.startsWith("?");
+          const isFile = m.row_kind === "file" && m.file_meta;
+          // File-row: hash mismatch flips us into a hard-warn red state
+          // distinct from the sig-tampered tint so the user can tell the
+          // two failure modes apart.
+          const fileHashBad =
+            isFile && m.file_meta?.sha256_ok === false;
+
+          // Run-once enter animation. We only animate the most recent
+          // batch — older rows would re-trigger on every re-render
+          // otherwise, which would look chaotic. Cheapest approach:
+          // animate only the row at the very bottom (`i === messages.length - 1`).
+          // The CSS `animation: ... both` keeps the final frame stable for
+          // any row that was previously animated.
+          const isLatest = i === messages.length - 1;
+          const enterClass = isLatest
+            ? m.kind === "incoming"
+              ? "pc-row-in-incoming"
+              : m.kind === "outgoing"
+              ? "pc-row-in-outgoing"
+              : ""
+            : "";
+
+          // ── Disappearing-messages countdown ───────────────────────────
+          // Compute remaining seconds against the live now-tick. Rows past
+          // their deadline render with "0s" briefly until the 60s purge
+          // sweep on the backend removes them and the parent drops them
+          // from React state via the `messages_purged` event.
+          const expiresInSecs =
+            m.expires_at !== undefined
+              ? Math.max(0, m.expires_at - Math.floor(Date.now() / 1000))
+              : null;
+
+          // ── Reply-quote click target ──────────────────────────────────
+          // When a row carries `reply_to`, clicking the quote block scrolls
+          // to the original message via the same data-attribute trick the
+          // search-jump uses.
+          const replyTarget = m.reply_to?.in_reply_to_msg_id;
+
+          // Group reactions for the pill row; cheap O(N) per render but
+          // the per-row reaction count is always tiny (single-digit).
+          const grouped = m.reactions ? groupReactions(m.reactions) : [];
+
+          return (
+            <div
+              key={i}
+              data-msg-idx={i}
+              data-msg-id={m.msg_id ?? ""}
+              className={
+                "group relative px-1 py-0.5 rounded " +
+                (tampered || fileHashBad
+                  ? "bg-red-900/30 border border-red-500/50 "
+                  : "") +
+                enterClass
+              }
+              title={
+                tampered
+                  ? t("message_stream.tampered_title")
+                  : fileHashBad
+                  ? t("message_stream.hash_mismatch_title")
+                  : undefined
+              }
+            >
+              {/* Reply-quote block — a slim magenta-tinted card above the
+                  message body. Click scrolls to the quoted row using the
+                  same data-msg-id lookup the search-jump path uses. */}
+              {m.reply_to && (
+                <button
+                  onClick={() => {
+                    if (!replyTarget) return;
+                    const root = containerRef.current;
+                    if (!root) return;
+                    const target = root.querySelector<HTMLElement>(
+                      `[data-msg-id="${CSS.escape(replyTarget)}"]`,
+                    );
+                    if (!target) return;
+                    target.scrollIntoView({
+                      behavior: "smooth",
+                      block: "center",
+                    });
+                    target.classList.remove("pc-search-pulse");
+                    void target.offsetWidth;
+                    target.classList.add("pc-search-pulse");
+                    window.setTimeout(() => {
+                      target.classList.remove("pc-search-pulse");
+                    }, 1600);
+                  }}
+                  className="ml-[80px] mb-0.5 block max-w-[80%] text-left text-xs px-2 py-1 rounded bg-neon-magenta/10 border-l-2 border-neon-magenta hover:bg-neon-magenta/20 transition-colors"
+                  title={t("messages.reply.quote_jump_title")}
+                >
+                  <span className="text-neon-magenta">{"↪"}</span>{" "}
+                  <span className="text-soft-grey italic">
+                    {m.reply_to.quoted_preview}
+                  </span>
+                </button>
+              )}
+
+              <div className="flex items-start gap-3 text-sm leading-snug font-mono">
+              <span className="text-soft-grey text-xs w-[64px] shrink-0">
+                {m.ts}
+                {expiresInSecs !== null && (
+                  <span
+                    className="block text-[9px] text-cyber-cyan/80"
+                    title={t("messages.disappearing.row_title")}
+                  >
+                    {t("messages.disappearing.row_label", {
+                      remaining: humanTtl(expiresInSecs),
+                    })}
+                  </span>
+                )}
+              </span>
+              <span className={`${arrowColor} font-bold w-4 shrink-0`}>
+                {arrow}
+              </span>
 
       <div className="flex-1 flex overflow-hidden">
         <div
@@ -515,6 +749,30 @@ export default function MessageStream({
                     {m.body}
                   </span>
                 )}
+                </span>
+              ) : tampered ? (
+                /* Subtle dual-pseudo glitch — see .pc-glitch in styles.css.
+                   data-text mirrors the body so ::before/::after can render
+                   the offset cyan/magenta copies. */
+                <span
+                  className="pc-glitch text-red-200/90"
+                  data-text={m.body}
+                >
+                  {m.body}
+                </span>
+              ) : (
+                // Text body: pipe through markdown -> auto-linkify ->
+                // mention pills. Every stage HTML-escapes its inputs,
+                // so a literal <script> from a peer renders as visible
+                // text rather than executing. The system row inten-
+                // tionally bypasses the rich pipeline — its strings
+                // come from our own i18n bundle, never from a peer.
+                <RenderedBody
+                  body={m.body}
+                  isSystem={m.kind === "system"}
+                  mentionLabels={mentionLabels}
+                />
+              )}
 
                 {isUnbound && onBindClick && (
                   <button
@@ -613,6 +871,121 @@ export default function MessageStream({
               >
                 ✕
               </button>
+              {/* Delivery-state ticks on outgoing rows. Pushed to the
+                  right edge with `ml-auto` so they sit flush against the
+                  pane border regardless of body length. Three tiers:
+                    "sent"      → single grey ✓
+                    "delivered" → double grey ✓✓
+                    "read"      → double cyan ✓✓ (cyber-cyan + bold) */}
+              {m.kind === "outgoing" && m.delivery_state && (
+                <span
+                  className={
+                    "ml-auto pl-2 text-xs select-none " +
+                    (m.delivery_state === "read"
+                      ? "text-cyber-cyan font-bold"
+                      : "text-soft-grey")
+                  }
+                  aria-label={`delivery: ${m.delivery_state}`}
+                  title={`delivery: ${m.delivery_state}`}
+                >
+                  {m.delivery_state === "sent" ? "✓" : "✓✓"}
+                </span>
+              )}
+              </div>
+
+              {/* Reactions pill row — grouped by emoji, count + sender
+                  tooltip. Click on an existing pill toggles the active
+                  user's vote for that emoji (add if "you" hasn't reacted
+                  with this emoji yet, remove otherwise). */}
+              {grouped.length > 0 && (
+                <div className="ml-[180px] mt-0.5 flex flex-wrap gap-1">
+                  {grouped.map(g => {
+                    const youReacted = g.senders.some(s => s === "you");
+                    return (
+                      <button
+                        key={g.emoji}
+                        onClick={() => {
+                          if (!m.msg_id || !onReact) return;
+                          onReact(
+                            m.msg_id,
+                            g.emoji,
+                            youReacted ? "remove" : "add",
+                          );
+                        }}
+                        title={t("messages.reactions.pill_title", {
+                          senders: g.senders.join(", "),
+                        })}
+                        className={
+                          "text-xs px-1.5 py-0.5 rounded-full border transition-colors " +
+                          (youReacted
+                            ? "bg-neon-magenta/20 border-neon-magenta/60 text-neon-magenta"
+                            : "bg-bg-elevated border-dim-green/40 text-soft-grey hover:border-neon-magenta/40")
+                        }
+                      >
+                        <span aria-hidden="true">{g.emoji}</span>{" "}
+                        <span className="font-bold">{g.count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Hover toolbar — appears on row hover for incoming /
+                  outgoing rows. System rows have no actionable content.
+                  Sits absolute in the row's top-right so it doesn't
+                  reflow the layout when toggling visibility. */}
+              {m.kind !== "system" && (onReplyTo || onReact) && (
+                <div
+                  className={
+                    "absolute right-2 top-0 -translate-y-1/2 flex items-center gap-1 " +
+                    "opacity-0 group-hover:opacity-100 transition-opacity " +
+                    "bg-bg-elevated border border-dim-green/40 rounded shadow-md px-1 py-0.5"
+                  }
+                >
+                  {onReplyTo && m.msg_id && (
+                    <button
+                      onClick={() => {
+                        if (!m.msg_id) return;
+                        onReplyTo(m.msg_id, m.body);
+                      }}
+                      className="text-xs text-cyber-cyan hover:text-neon-magenta px-1 transition-colors"
+                      title={t("messages.reply.toolbar_title")}
+                    >
+                      {t("messages.reply.toolbar_button")}
+                    </button>
+                  )}
+                  {onReact && m.msg_id && (
+                    <button
+                      onClick={() => setPickerForIdx(i)}
+                      className="text-xs text-cyber-cyan hover:text-neon-magenta px-1 transition-colors"
+                      title={t("messages.reactions.toolbar_title")}
+                    >
+                      {t("messages.reactions.toolbar_button")}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {pickerForIdx === i && onReact && m.msg_id && (
+                <EmojiPicker
+                  onSelect={emoji => {
+                    if (!m.msg_id) return;
+                    // If "you" already reacted with this exact emoji,
+                    // toggle remove; otherwise add. The backend de-dupes
+                    // identical add events server-side too, but we make
+                    // the UI feel snappy by inferring intent here.
+                    const youReactedSame = (m.reactions ?? []).some(
+                      r => r.sender_label === "you" && r.emoji === emoji,
+                    );
+                    onReact(
+                      m.msg_id,
+                      emoji,
+                      youReactedSame ? "remove" : "add",
+                    );
+                  }}
+                  onClose={() => setPickerForIdx(null)}
+                />
+              )}
             </div>
             {pinnedDrawerRows.length === 0 ? (
               <div className="text-soft-grey italic">
@@ -698,5 +1071,41 @@ export default function MessageStream({
         )}
       </div>
     </section>
+  );
+}
+
+/// Memoised text-body renderer. Runs the markdown → auto-link → mention
+/// pipeline once per (body, mentionLabels) tuple, then plugs the result
+/// in via `dangerouslySetInnerHTML`. The pipeline escapes every text run
+/// before composing HTML, so a peer's literal `<script>alert(1)</script>`
+/// shows up as visible text (not executed).
+function RenderedBody({
+  body,
+  isSystem,
+  mentionLabels,
+}: {
+  body: string;
+  isSystem: boolean;
+  mentionLabels: string[];
+}) {
+  const html = useMemo(() => {
+    if (isSystem) return null;
+    const md = renderMarkdown(body);
+    const linked = autoLinkify(md);
+    const { html: withMentions } = detectMentions(linked, mentionLabels);
+    return withMentions;
+    // mentionLabels is memoised by the parent; re-run only when the
+    // body text or label-set actually changes.
+  }, [body, isSystem, mentionLabels]);
+
+  if (isSystem) {
+    return <span className="text-soft-grey italic">{body}</span>;
+  }
+  return (
+    <span
+      className="text-neon-green/90 break-words [&_a]:break-all"
+      // eslint-disable-next-line react/no-danger
+      dangerouslySetInnerHTML={{ __html: html ?? "" }}
+    />
   );
 }

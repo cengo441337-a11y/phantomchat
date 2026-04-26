@@ -54,6 +54,32 @@ export interface IncomingMessage {
   /// Per-message "starred" / favourite flag. Same persistence + back-
   /// compat strategy as `pinned`.
   starred?: boolean;
+  /// Reply-thread metadata, populated when this row was sent via the
+  /// REPL-1: envelope. The MessageStream renders an inline magenta
+  /// "↪ <quoted_preview>" header that scrolls to the quoted row on click.
+  reply_to?: ReplyMeta;
+  /// Accumulated reactions for this row. Mutated in-place by the
+  /// `reaction_updated` event so the UI can group + count emoji pills.
+  reactions?: ReactionEntry[];
+  /// Unix-epoch second after which this row should be hidden + dropped
+  /// from on-disk history by the auto-purge sweep. Both endpoints stamp
+  /// independently from their local TTL setting at send/receive time.
+  expires_at?: number;
+}
+
+/// Per-message reply metadata mirrored from the Rust `ReplyMeta` struct.
+/// `quoted_preview` is the first ~80 chars of the quoted message body so
+/// the recipient can render the quote block without a history lookup.
+export interface ReplyMeta {
+  in_reply_to_msg_id: string;
+  quoted_preview: string;
+}
+
+/// One emoji-reaction entry on a message row. Aggregated client-side
+/// from the `RACT-1:` event stream.
+export interface ReactionEntry {
+  sender_label: string;
+  emoji: string;
 }
 
 export type MsgKind = "incoming" | "outgoing" | "system";
@@ -93,6 +119,17 @@ export interface MsgLine {
   /// listen for `message_state_changed` events.
   pinned?: boolean;
   starred?: boolean;
+  /// Reply-thread metadata. Populated for rows that quote an earlier
+  /// message; the stream renders the quote block above the body and
+  /// scrolls-to-quoted on click.
+  reply_to?: ReplyMeta;
+  /// Per-row aggregated emoji reactions. Mutated by the
+  /// `reaction_updated` event listener.
+  reactions?: ReactionEntry[];
+  /// Unix-epoch-second deadline for disappearing-messages auto-purge.
+  /// Rows past this deadline are hidden in the UI and removed by the
+  /// 60s backend purge sweep.
+  expires_at?: number;
 }
 
 /// Per-file metadata. Mirrors the Rust `FileMeta` struct.
@@ -289,6 +326,48 @@ export interface AuditEntry {
   details: Record<string, unknown>;
 }
 
+// ── Crash reporting (Diagnostics) ────────────────────────────────────────────
+//
+// Mirrors the Rust `CrashReport` struct. Each row is one captured panic:
+// timestamp, app version, OS, the panic's first-line message + source
+// location, and the captured backtrace. `user_dispatched` flips to `true`
+// after a successful POST via `dispatch_crash_report` so the UI can render
+// "already sent" instead of offering a re-send.
+export interface CrashReport {
+  ts: string;
+  version: string;
+  os: string;
+  panic_msg: string;
+  location: string;
+  backtrace: string;
+  user_dispatched?: boolean;
+// ── LAN org (mDNS zero-touch discovery) ─────────────────────────────────────
+//
+// Mirrors the Rust `LanOrgStatus` + `DiscoveredPeer` structs. The shared-
+// secret "org code" is the only authentication for mDNS-discovered peers;
+// they're auto-added as 1:1 contacts but NOT as MLS group members.
+
+/// Returned by `lan_org_status`. `active` is true iff a `ServiceDaemon` is
+/// running; `code` is the user-shareable 6-char `XXX-XXX` string;
+/// `peer_count` is the deduplicated discovered-peer count;
+/// `last_discovery_ts` is the unix-epoch-seconds string of the most-recent
+/// resolve (or null if we've broadcast but never seen a peer).
+export interface LanOrgStatus {
+  active: boolean;
+  code?: string | null;
+  peer_count: number;
+  last_discovery_ts?: string | null;
+}
+
+/// Pushed by the `lan_peer_discovered` event whenever the browse task
+/// resolves a never-before-seen peer with a matching org code.
+export interface DiscoveredPeer {
+  label: string;
+  address: string;
+  signing_pub_hex: string;
+  last_seen: number;
+}
+
 // ── Auto-updater wire types ──────────────────────────────────────────────────
 //
 // Mirrors the Rust `UpdateInfo` struct from the `check_for_updates` /
@@ -328,4 +407,57 @@ export interface MessageStateChangedEvent {
 export interface ConversationStateChangedEvent {
   contact_label: string;
   state: ConversationState;
+// ── Reply / reactions / disappearing-messages event payloads ────────────────
+//
+// All three are emitted by the Rust listener path that decodes the matching
+// `REPL-1:` / `RACT-1:` / `DISA-1:` envelope. The reply event reuses the
+// existing `message` channel (with `reply_to` populated) so React's reducer
+// stays the same. The other two get dedicated channels.
+
+/// Emitted on `reaction_updated` after the backend mutates a target row's
+/// reactions array. `reactions` is the FULL post-update list so the React
+/// reducer can patch in place without merging.
+export interface ReactionUpdatedEvent {
+  target_msg_id: string;
+  reactions: ReactionEntry[];
+}
+
+/// Emitted on `messages_purged` by the 60s auto-purge sweep. `msg_ids`
+/// is the list of rows the sweep removed from `messages.json` so the
+/// React state can drop them in lockstep.
+export interface MessagesPurgedEvent {
+  msg_ids: string[];
+}
+
+/// Emitted on `disappearing_ttl_changed` whenever a peer's `DISA-1:`
+/// envelope decodes (or our own `set_disappearing_ttl` succeeds locally).
+/// `ttl_secs == null` disables auto-purge for the conversation.
+export interface DisappearingTtlChangedEvent {
+  contact_label: string;
+  ttl_secs: number | null;
+// ── Encrypted backup / restore (Wave 8c, compliance Aufbewahrungspflicht) ────
+//
+// Mirror the three Rust DTOs returned by `export_backup` / `verify_backup`
+// / `import_backup`. Used by the Backup section of SettingsPanel to render
+// the success toast (sha256 + path), the pre-restore provenance preview,
+// and the post-restore item count.
+
+export interface BackupResult {
+  path: string;
+  size_bytes: number;
+  sha256_hex: string;
+  item_count: number;
+}
+
+export interface BackupMeta {
+  version: number;
+  created_at: string;
+  item_count: number;
+  host_label: string;
+}
+
+export interface RestoreResult {
+  items_restored: number;
+  identity_replaced: boolean;
+  requires_restart: boolean;
 }
