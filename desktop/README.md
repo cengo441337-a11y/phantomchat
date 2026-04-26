@@ -64,8 +64,10 @@ generated identity is persisted to the platform's standard app-data dir:
 | Windows  | `%APPDATA%\de.dc-infosec.phantomchat\`                         |
 
 Files written there: `keys.json`, `contacts.json`, `sessions.json`,
-`messages.json`, `relays.json`, `me.json`, `mls_directory.json`, plus the
-`mls_state/` subdir for OpenMLS group state.
+`messages.json`, `relays.json`, `me.json`, `mls_directory.json`,
+`privacy.json`, `audit.log`, plus the `mls_state/` subdir for OpenMLS
+group state. All of these are included in the encrypted `.pcbackup`
+export — see [Backup & Restore](#backup--restore) below.
 
 ## Key storage (Wave 8H — OS-secure keystore)
 
@@ -176,6 +178,80 @@ the main window between shown / hidden. Right-click opens a menu with
 `Show / Hide`, a status line (current connection state), and `Quit`.
 Closing the main window via the X hides it instead of exiting — quit
 through the tray menu.
+
+## Backup & Restore
+
+Steuerberater, Anwälte and other regulated professions are bound by §147 AO
+/ GoBD to retain client communication for **10 years**. PhantomChat ships
+an encrypted local-export path so a stolen, lost or dead laptop does not
+mean permanent loss of compliance-relevant correspondence.
+
+### Format
+
+A `.pcbackup` file is a regular ZIP (renamed extension) containing:
+
+- `backup-meta.json` — UNENCRYPTED. Schema version, timestamp, item count,
+  host label. Lets the restore UI surface "created at X by host Y, Z items"
+  before the user types the passphrase.
+- `wrapped-key.json` — UNENCRYPTED. The randomly generated 32-byte data
+  key, AEAD-wrapped under a passphrase-derived key (Argon2id KEK).
+- `<filename>.nonce` + `<filename>.ct` — per-file XChaCha20-Poly1305
+  ciphertexts. Files included: `keys.json`, `contacts.json`,
+  `sessions.json`, `messages.json`, `mls_directory.json`, `me.json`,
+  `relays.json`, `privacy.json`, `audit.log`, plus `mls_state/mls_state.bin`
+  and `mls_state/mls_meta.json`. Optional `disappearing.json`,
+  `lan_org.json`, `window_state.json` are picked up automatically when
+  present.
+
+KDF: **Argon2id** (m=64 MiB, t=3, p=1 — OWASP 2023 defaults).
+AEAD: **XChaCha20-Poly1305** (24-byte nonces → safe to generate with
+`OsRng` per file without tracking a counter).
+
+### Recommended cadence
+
+- **Weekly** for active deployments.
+- **Always** before a major OS update, before swapping the laptop SSD, or
+  before any drive-encryption change (BitLocker, LUKS rekey, FileVault
+  rotation).
+
+### Where to keep the file
+
+- **Two locations minimum.** Offline USB stick stored in a fireproof safe
+  + an encrypted cloud bucket (Tresorit, Proton Drive, or your own
+  Backblaze B2 with client-side encryption).
+- **Never** keep it on the same laptop you're protecting — that defeats
+  the entire point.
+
+### Passphrase strength
+
+- Minimum: 12 characters (enforced by the UI).
+- Recommended: **at least 16 characters** OR a **6-word diceware**
+  passphrase from the EFF wordlist.
+- Avoid reusing a password from any other service. Argon2id makes
+  per-passphrase brute-force expensive, but a leaked passphrase from
+  another breach is still game-over.
+
+> **Lose the passphrase = lose the backup.** There is no recovery path.
+> No vendor key escrow, no master password, no "forgot passphrase" link.
+> Write it down on paper and store it with the same care as the backup
+> file itself.
+
+### Restoring on a new machine
+
+1. Install PhantomChat on the new machine.
+2. On the first-launch wizard, click through to the main panel — you can
+   leave the auto-generated identity in place; it will be overwritten.
+3. Open `Settings → Backup & Restore → Sicherung importieren`.
+4. Select the `.pcbackup` file.
+5. Enter the passphrase. The verify step shows the backup metadata —
+   confirm it matches the source machine before continuing.
+6. Click `Jetzt wiederherstellen`. The relay listener stops, every entry
+   is decrypted into a temp dir, and atomically swapped onto the live
+   paths. The listener then restarts with the restored relay + privacy
+   config and the React layer reloads everything from disk.
+
+No restart is needed — the app is fully usable the moment the success
+toast appears.
 
 ## Tor mode
 

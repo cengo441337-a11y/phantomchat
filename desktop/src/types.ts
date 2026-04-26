@@ -303,3 +303,30 @@ export interface UpdateInfo {
   version?: string | null;
   release_notes?: string | null;
 }
+
+// ── Encrypted backup / restore (Wave 8c, compliance Aufbewahrungspflicht) ────
+//
+// Mirror the three Rust DTOs returned by `export_backup` / `verify_backup`
+// / `import_backup`. Used by the Backup section of SettingsPanel to render
+// the success toast (sha256 + path), the pre-restore provenance preview,
+// and the post-restore item count.
+
+export interface BackupResult {
+  path: string;
+  size_bytes: number;
+  sha256_hex: string;
+  item_count: number;
+}
+
+export interface BackupMeta {
+  version: number;
+  created_at: string;
+  item_count: number;
+  host_label: string;
+}
+
+export interface RestoreResult {
+  items_restored: number;
+  identity_replaced: boolean;
+  requires_restart: boolean;
+}
