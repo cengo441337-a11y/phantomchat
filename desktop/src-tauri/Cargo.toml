@@ -1,6 +1,6 @@
 [package]
 name = "phantomchat_desktop"
-version = "0.1.0"
+version = "3.0.0"
 edition = "2021"
 description = "PhantomChat desktop app (Tauri 2)"
 publish = false
@@ -95,6 +95,13 @@ tls_codec  = { version = "0.4", features = ["derive", "serde", "mls"] }
 #   than panicking, see `ai_bridge_stt::transcribe`.
 whisper-rs = { version = "0.16", optional = true, default-features = false, features = ["log_backend", "tracing_backend"] }
 symphonia  = { version = "0.5", optional = true, default-features = false, features = ["mp3", "aac", "isomp4", "ogg"] }
+
+# ── Wave 11E — proactive watchers ──────────────────────────────────────────
+# Pure-Rust cron-expression parser + iterator. No system deps. Used by the
+# watcher scheduler to compute the next fire timestamp for
+# `WatcherSchedule::Cron` entries. Not feature-gated — watchers are core
+# and stay available even in `cargo check --no-default-features` builds.
+cron = "0.12"
 
 [features]
 default = ["custom-protocol", "stt"]
