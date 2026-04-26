@@ -1,0 +1,24 @@
+name: record_linux
+description: |
+  Local stub satisfying the `record_linux` package contract so
+  `flutter build apk` does not choke on the signature drift between
+  the upstream `record_linux 0.7.2` and `record_platform_interface 1.5.x`.
+  We do not ship a Linux audio backend — this exists only to keep the
+  pub solver happy on Android-only builds.
+version: 99.0.0
+publish_to: none
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  record_platform_interface: ^1.5.0
+
+flutter:
+  plugin:
+    platforms:
+      linux:
+        pluginClass: RecordLinux
+        dartPluginClass: RecordLinux
