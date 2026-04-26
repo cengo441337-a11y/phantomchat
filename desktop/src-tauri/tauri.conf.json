@@ -47,7 +47,7 @@
     "shortDescription": "Encrypted corporate messenger",
     "longDescription": "PhantomChat \u2014 end-to-end encrypted messenger with stealth-tag scanning, double-ratchet sessions and PQXDH-hybrid envelopes.",
     "windows": {
-      "signCommand": "..\\scripts\\sign-windows.cmd %1"
+      "signCommand": "cmd /C ..\\..\\scripts\\sign-windows.cmd %1"
     }
   },
   "plugins": {
