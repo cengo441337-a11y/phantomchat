@@ -78,6 +78,24 @@
     "nav": {
       "back": "back",
       "next": "next"
+    },
+    "lan": {
+      "header": "join existing LAN org (optional)",
+      "description": "If your colleagues are already running PhantomChat on the same network, paste the 6-digit org code they shared with you. We'll auto-discover them in the background.",
+      "skip_button": "Skip — single user / remote setup",
+      "join_button": "Join with code",
+      "create_button": "Create new LAN org",
+      "creating": "creating…",
+      "confirm_join_button": "Join",
+      "joining": "joining…",
+      "code_placeholder": "XXX-XXX",
+      "your_code_label": "your org code",
+      "copy_button": "copy code",
+      "copied_button": "copied!",
+      "share_with_colleagues": "Share this code with your colleagues during their onboarding. They'll paste it into the same step on their machines.",
+      "discovering_in_background": "Discovering peers in background…",
+      "skipped_message": "skipped — you can join later via Settings → LAN Org.",
+      "warning": "Caution: only use this on trusted office networks. mDNS broadcasts your address to all devices on the LAN. Don't enable on public Wi-Fi (cafés, hotels, conferences)."
     }
   },
   "settings": {
@@ -92,6 +110,50 @@
       "display_name_saved": "saved",
       "display_name_hint": "This name is shown to people you invite to MLS groups (in the welcome wrapper). For 1:1 chats it is only used in your own UI.",
       "backup_button": "backup keyfile"
+    },
+    "backup": {
+      "title": "backup & restore",
+      "intro": "Export an encrypted snapshot of your identity, contacts, sessions and messages. Required by §147 AO / GoBD for tax-related communication (10-year retention).",
+      "export_button": "create backup",
+      "export_picker_title": "Save PhantomChat backup as",
+      "export_filter_name": "PhantomChat backup",
+      "export_in_progress": "encrypting (Argon2id is intentionally slow — ~1 second)…",
+      "export_success_title": "backup written",
+      "export_success_size": "{{size}} bytes · {{count}} files",
+      "export_success_sha": "SHA-256: {{sha}}",
+      "export_failed": "backup failed: {{error}}",
+      "import_button": "import backup",
+      "import_picker_title": "Open PhantomChat backup",
+      "import_verifying": "verifying backup metadata…",
+      "import_meta_title": "backup details",
+      "import_meta_created": "created at",
+      "import_meta_host": "host",
+      "import_meta_count": "items",
+      "import_passphrase_label": "passphrase",
+      "import_continue_button": "verify",
+      "import_restore_button": "restore now",
+      "import_cancel_button": "cancel",
+      "import_warning": "⚠ Your current identity, contacts and messages will be OVERWRITTEN with the backup contents. This cannot be undone.",
+      "import_in_progress": "decrypting and swapping live data…",
+      "import_success": "restored {{count}} items · listener restarted",
+      "import_failed": "restore failed: {{error}}",
+      "passphrase_label": "passphrase",
+      "passphrase_placeholder": "min. 12 characters",
+      "passphrase_confirm_label": "confirm passphrase",
+      "passphrase_mismatch": "passphrases do not match",
+      "passphrase_too_short": "passphrase must be at least 12 characters",
+      "strength_label": "strength",
+      "strength_very_weak": "very weak",
+      "strength_weak": "weak",
+      "strength_fair": "fair",
+      "strength_strong": "strong",
+      "strength_very_strong": "very strong",
+      "strength_entropy": "{{bits}} bits of entropy · est. crack time: {{time}}",
+      "strength_hint": "Recommendation: at least 16 characters OR a 6-word diceware passphrase. NOTE: if you lose the passphrase, the backup is unrecoverable.",
+      "modal_create_title": "Create encrypted backup",
+      "modal_create_confirm": "create backup",
+      "modal_restore_confirm_title": "Confirm restore",
+      "modal_restore_confirm": "yes, overwrite my data"
     },
     "language": {
       "title": "language",
@@ -164,6 +226,28 @@
       "col_event": "event",
       "col_details": "details"
     },
+    "diagnostics": {
+      "title": "diagnostics",
+      "optin_label": "Send crash reports (anonymous)",
+      "optin_hint": "Default: off. When on, the \"Send\" button below uploads a single crash report at a time over HTTPS.",
+      "view_button": "show crash reports",
+      "view_modal_title": "Crash reports",
+      "view_modal_close": "close",
+      "empty": "(no crashes recorded — nothing to report)",
+      "col_ts": "timestamp",
+      "col_version": "version",
+      "col_msg": "panic",
+      "col_actions": "actions",
+      "send_button": "send",
+      "sending": "sending…",
+      "sent": "sent",
+      "send_failed": "send failed: {{error}}",
+      "delete_row_button": "delete",
+      "clear_all_button": "delete all",
+      "clear_failed": "delete failed: {{error}}",
+      "load_failed": "failed to load crash reports: {{error}}",
+      "privacy_note": "Reports are sent over HTTPS to updates.dc-infosec.de. We only read the crash data — no message content, no identity, no contacts."
+    },
     "danger": {
       "title": "danger zone",
       "description": "Wipe all local data: identity, contacts, sessions, messages and MLS state. The app closes immediately afterwards.",
@@ -173,6 +257,24 @@
       "cancel_button": "cancel",
       "must_type_delete": "type DELETE exactly to confirm",
       "wipe_failed": "wipe failed: {{error}}"
+    },
+    "lan": {
+      "title": "lan org",
+      "description": "Zero-touch peer discovery for office LANs. Anyone running PhantomChat on the same network with the same 6-character org code is auto-added as a contact.",
+      "code_label": "org code",
+      "peer_count_label": "discovered peers",
+      "last_discovery_label": "last discovery",
+      "show_code_button": "show org code",
+      "hide_code_button": "hide code",
+      "copy_button": "copy",
+      "copied_button": "copied!",
+      "leave_button": "leave LAN org",
+      "code_placeholder": "XXX-XXX",
+      "join_button": "join",
+      "joining": "joining…",
+      "create_button": "create new",
+      "creating": "creating…",
+      "warning": "Caution: only use this on trusted office networks. mDNS broadcasts your address to all devices on the LAN. Don't enable on public Wi-Fi (cafés, hotels, conferences)."
     }
   },
   "contacts_pane": {
@@ -268,7 +370,56 @@
     "open_folder_button": "Open folder",
     "saved_to": "Saved to {{path}}",
     "bind_button": "bind",
-    "bind_button_title": "Bind {{label}} to a contact"
+    "bind_button_title": "Bind {{label}} to a contact",
+    "image_open_title": "Open {{filename}} in your default image viewer",
+    "image_tampered_caption": "tampered image — DO NOT OPEN",
+    "image_caption_received": "{{filename}} ({{size}})"
+  },
+  "messages": {
+    "pin": {
+      "pin_button": "Pin",
+      "unpin_button": "Unpin",
+      "pin_title": "Pin this message",
+      "unpin_title": "Unpin this message",
+      "pinned_badge_title": "Pinned message",
+      "header_button": "Pinned ({{count}})",
+      "drawer_title": "Pinned messages",
+      "drawer_empty": "(no pinned messages in this conversation)",
+      "jump_title": "Jump to message"
+    },
+    "star": {
+      "star_button": "Star",
+      "unstar_button": "Unstar",
+      "star_title": "Star this message",
+      "unstar_title": "Unstar this message",
+      "starred_badge_title": "Starred message",
+      "header_button": "Starred ({{count}})",
+      "drawer_title": "Starred messages",
+      "drawer_empty": "(no starred messages yet)",
+      "jump_title": "Switch to conversation and jump"
+    }
+  },
+  "conversation": {
+    "archive": {
+      "archive_button": "Archive",
+      "unarchive_button": "Unarchive",
+      "archive_title": "Move conversation to Archive",
+      "unarchive_title": "Move conversation back to the contact list",
+      "section_header": "Archive ({{count}})",
+      "section_empty": "(no archived conversations)",
+      "pin_button": "Pin to top",
+      "unpin_button": "Unpin",
+      "menu_aria": "Conversation menu"
+    }
+  },
+  "settings_archive": {
+    "title": "Archive",
+    "description": "Conversations you archived from the contact list. Click a label to restore it.",
+    "empty": "(no archived conversations)",
+    "clear_all_button": "Empty archive",
+    "clear_all_confirm": "Permanently remove all archived conversations from the contact book? This cannot be undone.",
+    "clear_all_done": "archive emptied",
+    "clear_all_failed": "empty archive failed: {{error}}"
   },
   "input_bar": {
     "attach_title": "Attach a file to send to {{label}} (max 5 MiB)",
@@ -317,5 +468,38 @@
     "loading": "loading qr…",
     "copy": "copy address",
     "copied": "copied!"
+  },
+  "mention": {
+    "header": "mention member",
+    "empty": "(no matching members)",
+    "aria_label": "Mention a group member",
+    "notify_title": "Mentioned by {{label}}"
+  "messages": {
+    "reply": {
+      "toolbar_button": "Reply",
+      "toolbar_title": "Quote this message in your reply",
+      "quote_jump_title": "Jump to the original message",
+      "cancel_aria": "Cancel reply",
+      "cancel_title": "Cancel reply"
+    },
+    "reactions": {
+      "toolbar_button": "React",
+      "toolbar_title": "Add an emoji reaction",
+      "pill_title": "Reactions from {{senders}}"
+    },
+    "disappearing": {
+      "label": "auto-disappear",
+      "preset_off": "Off",
+      "preset_min5": "5 min",
+      "preset_hour1": "1 hour",
+      "preset_hour24": "24 hours",
+      "preset_day7": "7 days",
+      "active_title": "Disappearing messages: rows expire {{secs}}s after sending",
+      "inactive_title": "Disappearing messages: off",
+      "row_label": "in {{remaining}}",
+      "row_title": "This message will auto-purge once the timer reaches zero",
+      "system_enabled": "Disappearing messages enabled ({{secs}}s) for {{label}}",
+      "system_disabled": "Disappearing messages disabled for {{label}}"
+    }
   }
 }

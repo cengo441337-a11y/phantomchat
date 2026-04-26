@@ -16,6 +16,7 @@ interface Props {
 const TOTAL_STEPS = 6;
 
 type StepIdx = 1 | 2 | 3 | 4 | 5 | 6;
+const TOTAL_STEPS = 6;
 
 const DEFAULT_RELAY_OPTIONS = [
   "wss://relay.damus.io",
@@ -28,15 +29,18 @@ const DEFAULT_RELAY_OPTIONS = [
 /// Steps:
 ///   1. Welcome           — splash + Continue
 ///   2. Identity          — Generate OR Restore (paste keys.json)
-///   3. Relays            — checkboxes + custom URL → set_relays
-///   4. Share address     — show user's address with Copy
-///   5. Done              — Start (mark_onboarded)
+///   3. Join LAN org?     — optional zero-touch mDNS discovery (skip / join / create)
+///   4. Relays            — checkboxes + custom URL → set_relays
+///   5. Share address     — show user's address with Copy
+///   6. Done              — Start (mark_onboarded)
 ///
 /// State is local; the only side-effects that persist are
-/// generate_identity / import_keyfile / set_relays / mark_onboarded.
+/// generate_identity / import_keyfile / lan_org_create / lan_org_join /
+/// set_relays / mark_onboarded.
 export default function OnboardingWizard({ onDone }: Props) {
   const { t } = useTranslation();
   const [step, setStep] = useState<StepIdx>(1);
+  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1);
 
   // ── Step 2 ──────────────────────────────────────────────────────────────
   const [identityMode, setIdentityMode] = useState<"none" | "generate" | "restore">(
@@ -47,7 +51,22 @@ export default function OnboardingWizard({ onDone }: Props) {
   const [identityErr, setIdentityErr] = useState<string | null>(null);
   const [identityDone, setIdentityDone] = useState(false);
 
-  // ── Step 3 ──────────────────────────────────────────────────────────────
+  // ── Step 3 (LAN org) ────────────────────────────────────────────────────
+  // Three exclusive choices on this step:
+  //   - "skip"    : user clicks "Skip" → step is satisfied without a daemon
+  //   - "join"    : user pastes a 6-char code, lan_org_join succeeds
+  //   - "create"  : user clicks "Create new LAN org" → lan_org_create returns
+  //                 a code we render with a Copy button.
+  // The user can change their mind: clicking Join after Create resets state.
+  const [lanMode, setLanMode] = useState<"none" | "join" | "create">("none");
+  const [lanCodeInput, setLanCodeInput] = useState("");
+  const [lanBusy, setLanBusy] = useState(false);
+  const [lanErr, setLanErr] = useState<string | null>(null);
+  const [lanDone, setLanDone] = useState(false);
+  const [lanCodeFromCreate, setLanCodeFromCreate] = useState<string | null>(null);
+  const [lanCopied, setLanCopied] = useState(false);
+
+  // ── Step 4 (Relays) ─────────────────────────────────────────────────────
   const [selectedDefaults, setSelectedDefaults] = useState<Set<string>>(
     new Set(DEFAULT_RELAY_OPTIONS),
   );
@@ -56,11 +75,12 @@ export default function OnboardingWizard({ onDone }: Props) {
   const [relaysErr, setRelaysErr] = useState<string | null>(null);
   const [relaysDone, setRelaysDone] = useState(false);
 
-  // ── Step 4 ──────────────────────────────────────────────────────────────
+  // ── Step 5 ──────────────────────────────────────────────────────────────
   const [address, setAddress] = useState<string | null>(null);
   const [qrSvg, setQrSvg] = useState<string | null>(null);
 
   // ── Step 6 (final) ──────────────────────────────────────────────────────
+  // ── Step 6 ──────────────────────────────────────────────────────────────
   const [finishing, setFinishing] = useState(false);
   const [finishErr, setFinishErr] = useState<string | null>(null);
 
@@ -109,6 +129,61 @@ export default function OnboardingWizard({ onDone }: Props) {
       setIdentityErr(String(e));
     } finally {
       setIdentityBusy(false);
+    }
+  }
+
+  /// Auto-uppercase + auto-hyphen for the LAN-org code field. Strips
+  /// any user-typed hyphens, uppercases, then re-inserts a hyphen after
+  /// the third char so the input always renders as `XXX-XXX`. Caps at
+  /// 7 characters (6 alphanumerics + 1 hyphen).
+  function formatLanCode(raw: string): string {
+    const cleaned = raw.replace(/[^0-9A-Za-z]/g, "").toUpperCase().slice(0, 6);
+    if (cleaned.length <= 3) return cleaned;
+    return `${cleaned.slice(0, 3)}-${cleaned.slice(3)}`;
+  }
+
+  async function doLanJoin() {
+    setLanBusy(true);
+    setLanErr(null);
+    try {
+      await invoke("lan_org_join", { code: lanCodeInput });
+      setLanDone(true);
+    } catch (e) {
+      setLanErr(String(e));
+    } finally {
+      setLanBusy(false);
+    }
+  }
+
+  async function doLanCreate() {
+    setLanBusy(true);
+    setLanErr(null);
+    try {
+      const code = await invoke<string>("lan_org_create");
+      setLanCodeFromCreate(code);
+      setLanDone(true);
+    } catch (e) {
+      setLanErr(String(e));
+    } finally {
+      setLanBusy(false);
+    }
+  }
+
+  function lanSkip() {
+    // Skip path: no daemon spawned, just mark this step satisfied.
+    setLanMode("none");
+    setLanDone(true);
+    setLanErr(null);
+  }
+
+  async function copyLanCode() {
+    if (!lanCodeFromCreate) return;
+    try {
+      await navigator.clipboard.writeText(lanCodeFromCreate);
+      setLanCopied(true);
+      window.setTimeout(() => setLanCopied(false), 1200);
+    } catch {
+      /* clipboard refused — silent */
     }
   }
 
@@ -161,13 +236,16 @@ export default function OnboardingWizard({ onDone }: Props) {
       case 2:
         return identityDone;
       case 3:
-        return relaysDone;
+        return lanDone;
       case 4:
-        return true;
+        return relaysDone;
       case 5:
         return true; // theme step — any default is valid, picker is live.
       case 6:
         return false; // final step uses the dedicated "Start" button.
+        return true;
+      case 6:
+        return false; // step 6 uses the dedicated "Start" button.
     }
   }
 
@@ -177,6 +255,11 @@ export default function OnboardingWizard({ onDone }: Props) {
   function next() {
     if (step < TOTAL_STEPS && canAdvance()) {
       setStep((s) => (s + 1) as StepIdx);
+    if (step > 1) setStep((s) => (s - 1) as 1 | 2 | 3 | 4 | 5 | 6);
+  }
+  function next() {
+    if (step < 6 && canAdvance()) {
+      setStep((s) => (s + 1) as 1 | 2 | 3 | 4 | 5 | 6);
     }
   }
 
@@ -303,6 +386,132 @@ export default function OnboardingWizard({ onDone }: Props) {
         {step === 3 && (
           <div className="space-y-4">
             <div className="text-center text-xs text-soft-grey uppercase tracking-widest">
+              {t("onboarding.lan.header")}
+            </div>
+            <p className="text-xs text-soft-grey leading-relaxed">
+              {t("onboarding.lan.description")}
+            </p>
+
+            {/* Mode-selector buttons — three exclusive choices. */}
+            {!lanDone && (
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={lanSkip}
+                  disabled={lanBusy}
+                  className="neon-button w-full text-xs disabled:opacity-40"
+                >
+                  {t("onboarding.lan.skip_button")}
+                </button>
+                <button
+                  onClick={() => {
+                    setLanMode("join");
+                    setLanCodeFromCreate(null);
+                    setLanErr(null);
+                  }}
+                  disabled={lanBusy}
+                  className={
+                    "neon-button w-full text-xs disabled:opacity-40 " +
+                    (lanMode === "join" ? "shadow-neon-green" : "")
+                  }
+                >
+                  {t("onboarding.lan.join_button")}
+                </button>
+                <button
+                  onClick={() => {
+                    setLanMode("create");
+                    setLanCodeInput("");
+                    setLanErr(null);
+                    void doLanCreate();
+                  }}
+                  disabled={lanBusy}
+                  className={
+                    "neon-button w-full text-xs disabled:opacity-40 " +
+                    (lanMode === "create" ? "shadow-neon-green" : "")
+                  }
+                >
+                  {lanBusy && lanMode === "create"
+                    ? t("onboarding.lan.creating")
+                    : t("onboarding.lan.create_button")}
+                </button>
+              </div>
+            )}
+
+            {/* Join-with-code input. Visible once the user picks "join". */}
+            {!lanDone && lanMode === "join" && (
+              <div className="space-y-2 pt-1">
+                <input
+                  type="text"
+                  value={lanCodeInput}
+                  onChange={e => setLanCodeInput(formatLanCode(e.target.value))}
+                  placeholder={t("onboarding.lan.code_placeholder")}
+                  className="neon-input w-full text-xs font-mono tracking-widest"
+                  maxLength={7}
+                />
+                <button
+                  onClick={() => void doLanJoin()}
+                  disabled={lanBusy || lanCodeInput.replace("-", "").length !== 6}
+                  className="neon-button w-full text-xs disabled:opacity-40"
+                >
+                  {lanBusy
+                    ? t("onboarding.lan.joining")
+                    : t("onboarding.lan.confirm_join_button")}
+                </button>
+              </div>
+            )}
+
+            {/* Create-side: show the assigned code + Copy button. */}
+            {lanDone && lanCodeFromCreate && (
+              <div className="space-y-2 pt-1 text-center">
+                <div className="text-[10px] text-soft-grey uppercase tracking-widest">
+                  {t("onboarding.lan.your_code_label")}
+                </div>
+                <div className="text-3xl font-mono font-bold text-neon-green tracking-widest select-all">
+                  {lanCodeFromCreate}
+                </div>
+                <button
+                  onClick={() => void copyLanCode()}
+                  className="neon-button text-xs"
+                >
+                  {lanCopied
+                    ? t("onboarding.lan.copied_button")
+                    : t("onboarding.lan.copy_button")}
+                </button>
+                <p className="text-xs text-soft-grey">
+                  {t("onboarding.lan.share_with_colleagues")}
+                </p>
+              </div>
+            )}
+
+            {/* Discovery-in-background hint (after a successful join). */}
+            {lanDone && !lanCodeFromCreate && lanMode === "join" && (
+              <div className="text-xs text-cyber-cyan text-center">
+                {t("onboarding.lan.discovering_in_background")}
+              </div>
+            )}
+
+            {/* Skip-confirmation banner so the user knows they advanced. */}
+            {lanDone && lanMode === "none" && (
+              <div className="text-xs text-soft-grey text-center italic">
+                {t("onboarding.lan.skipped_message")}
+              </div>
+            )}
+
+            {lanErr && (
+              <div className="text-xs text-neon-magenta border border-neon-magenta/50 rounded-md p-2 break-words">
+                {lanErr}
+              </div>
+            )}
+
+            {/* Privacy / threat-model warning — magenta-bordered. */}
+            <div className="text-[10px] text-neon-magenta border border-neon-magenta/60 rounded-md p-2 leading-relaxed">
+              {t("onboarding.lan.warning")}
+            </div>
+          </div>
+        )}
+
+        {step === 4 && (
+          <div className="space-y-4">
+            <div className="text-center text-xs text-soft-grey uppercase tracking-widest">
               {t("onboarding.step3.header")}
             </div>
             <p className="text-xs text-soft-grey">
@@ -355,7 +564,7 @@ export default function OnboardingWizard({ onDone }: Props) {
           </div>
         )}
 
-        {step === 4 && (
+        {step === 5 && (
           <div className="space-y-4">
             <div className="text-center text-xs text-soft-grey uppercase tracking-widest">
               {t("onboarding.step4.header")}
@@ -370,6 +579,9 @@ export default function OnboardingWizard({ onDone }: Props) {
         {step === 5 && (
           <div className="space-y-4">
             <div className="text-center text-xs text-soft-grey uppercase tracking-widest">
+        {step === 6 && (
+          <div className="text-center space-y-5">
+            <div className="text-2xl tracking-widest font-bold text-neon-green">
               {t("onboarding.step5.header")}
             </div>
             <p className="text-xs text-soft-grey">
@@ -410,6 +622,8 @@ export default function OnboardingWizard({ onDone }: Props) {
         {/* Back / Next bar (hidden on the final step — that step has its own
             "Start" button). */}
         {step !== TOTAL_STEPS && (
+        {/* Back / Next bar (hidden on step 6 — that step has its own button) */}
+        {step !== 6 && (
           <div className="flex justify-between pt-3 border-t border-dim-green/30">
             <button
               onClick={back}

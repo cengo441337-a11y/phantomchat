@@ -1,6 +1,8 @@
-import { KeyboardEvent, useRef, useState } from "react";
+import { KeyboardEvent, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
+import type { MlsMemberRef } from "../types";
+import MentionPopover from "./MentionPopover";
 
 interface Props {
   activeLabel: string | null;
@@ -16,6 +18,27 @@ interface Props {
   /// Label to render in the "<label> is typing…" pill above the input,
   /// or `null` when no peer is currently typing to the active contact.
   typingFromLabel?: string | null;
+  /// MLS group directory used to populate the @-mention auto-complete
+  /// popover. `undefined` (or empty) suppresses the popover entirely —
+  /// passed as `undefined` for 1:1 chats since mentions are meaningless
+  /// outside of a multi-party group.
+  mlsDirectory?: MlsMemberRef[];
+  /// When set, the input is in "reply mode" — sending routes through the
+  /// REPL-1: envelope path (via `onSendReply` rather than `onSend`) and a
+  /// magenta-tinted quote block sits above the input bar showing what the
+  /// user is replying to. `null` = normal compose mode.
+  replyingTo?: { msg_id: string; preview: string } | null;
+  /// Cancel-reply handler — called when the user clicks the X on the
+  /// quote block to drop back into normal compose mode.
+  onCancelReply?: () => void;
+  /// Reply-send handler invoked instead of `onSend` whenever
+  /// `replyingTo` is set. Receives the quoted msg_id + preview so the
+  /// parent can route to the backend `send_reply` command.
+  onSendReply?: (
+    body: string,
+    inReplyToMsgId: string,
+    quotedPreview: string,
+  ) => Promise<void> | void;
 }
 
 /// Leading-edge cooldown in ms — matches backend `TYPING_TTL_SECS = 5`
@@ -29,6 +52,10 @@ export default function InputBar({
   onSendFile,
   onTypingPing,
   typingFromLabel,
+  mlsDirectory,
+  replyingTo,
+  onCancelReply,
+  onSendReply,
 }: Props) {
   const { t } = useTranslation();
   const [text, setText] = useState("");
@@ -43,6 +70,91 @@ export default function InputBar({
   /// check inside `maybeFireTypingPing`.
   const lastPingMsRef = useRef<number>(0);
   const lastPingLabelRef = useRef<string | null>(null);
+
+  /// Mention auto-complete state. `mentionStart` is the index of the `@`
+  /// in `text` that opened the popover — `null` when no popover is open.
+  /// `mentionPrefix` is the substring after the `@` up to the caret;
+  /// the candidate filter narrows by case-insensitive prefix match.
+  /// `mentionActiveIdx` tracks the keyboard-highlighted row.
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [mentionStart, setMentionStart] = useState<number | null>(null);
+  const [mentionPrefix, setMentionPrefix] = useState("");
+  const [mentionActiveIdx, setMentionActiveIdx] = useState(0);
+
+  const mentionCandidates = useMemo(() => {
+    if (mentionStart === null || !mlsDirectory) return [];
+    const prefix = mentionPrefix.toLowerCase();
+    return mlsDirectory
+      .filter(m => m.label.toLowerCase().startsWith(prefix))
+      .slice(0, 8);
+  }, [mentionStart, mentionPrefix, mlsDirectory]);
+
+  /// Re-derive the mention popover state from the current input value +
+  /// caret position. Called from `onChange` and arrow-key handlers so
+  /// editing the prefix narrows / dismisses the popover live.
+  function recomputeMentionState(value: string, caret: number) {
+    if (!mlsDirectory || mlsDirectory.length === 0) {
+      setMentionStart(null);
+      return;
+    }
+    // Walk backwards from the caret looking for the most recent `@` at a
+    // word boundary. Stop at whitespace — once we cross one, there's no
+    // active mention to complete.
+    let i = caret - 1;
+    while (i >= 0) {
+      const ch = value[i];
+      if (ch === "@") {
+        const prev = i > 0 ? value[i - 1] : "";
+        const atWordBoundary = i === 0 || /\s/.test(prev);
+        if (!atWordBoundary) {
+          setMentionStart(null);
+          return;
+        }
+        const prefix = value.slice(i + 1, caret);
+        // Reject if the prefix already contains anything non-label-y.
+        if (/[^A-Za-z0-9_.-]/.test(prefix)) {
+          setMentionStart(null);
+          return;
+        }
+        setMentionStart(i);
+        setMentionPrefix(prefix);
+        setMentionActiveIdx(0);
+        return;
+      }
+      if (/\s/.test(ch)) {
+        setMentionStart(null);
+        return;
+      }
+      i -= 1;
+    }
+    setMentionStart(null);
+  }
+
+  /// Insert the picked label at `mentionStart`, replacing the partial
+  /// `@<prefix>`. Trailing space is convenience — the user almost always
+  /// wants to type more after a mention.
+  function selectMention(label: string) {
+    if (mentionStart === null) return;
+    const before = text.slice(0, mentionStart);
+    const after = text.slice(mentionStart + 1 + mentionPrefix.length);
+    const replacement = `@${label} `;
+    const next = before + replacement + after;
+    setText(next);
+    setMentionStart(null);
+    setMentionPrefix("");
+    // Restore the caret right after the inserted mention.
+    const caret = before.length + replacement.length;
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      try {
+        el.setSelectionRange(caret, caret);
+      } catch {
+        /* setSelectionRange throws on certain input types — ignore. */
+      }
+    });
+  }
 
   function maybeFireTypingPing() {
     if (!onTypingPing || !activeLabel) return;
@@ -64,7 +176,14 @@ export default function InputBar({
     if (!body || sending) return;
     setSending(true);
     try {
-      await onSend(body);
+      // When reply mode is active, route through the REPL-1: handler so
+      // the peer's incoming row carries the quote inline. Falls back to
+      // normal `onSend` if the parent didn't wire `onSendReply` yet.
+      if (replyingTo && onSendReply) {
+        await onSendReply(body, replyingTo.msg_id, replyingTo.preview);
+      } else {
+        await onSend(body);
+      }
       setText("");
     } finally {
       setSending(false);
@@ -72,6 +191,33 @@ export default function InputBar({
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    // Mention popover claims arrow / Enter / Tab / Escape when open with
+    // at least one candidate. Falls through to send-on-enter otherwise.
+    if (mentionStart !== null && mentionCandidates.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMentionActiveIdx(i => (i + 1) % mentionCandidates.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMentionActiveIdx(i =>
+          (i - 1 + mentionCandidates.length) % mentionCandidates.length,
+        );
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        const pick = mentionCandidates[mentionActiveIdx];
+        if (pick) selectMention(pick.label);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMentionStart(null);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void fire();
@@ -113,6 +259,25 @@ export default function InputBar({
 
   return (
     <div className="border-t border-dim-green/40 bg-bg-panel/85 backdrop-blur-sm pc-pane">
+      {/* Reply quote block — sits above the typing pill so the user
+          sees what they're quoting before they hit send. X button drops
+          back to normal compose mode. */}
+      {replyingTo && (
+        <div className="mx-4 mt-2 flex items-start gap-2 text-xs px-2 py-1 rounded bg-neon-magenta/10 border-l-2 border-neon-magenta">
+          <span className="text-neon-magenta font-bold">{"↪"}</span>
+          <span className="flex-1 text-soft-grey italic truncate">
+            {replyingTo.preview}
+          </span>
+          <button
+            onClick={() => onCancelReply?.()}
+            className="text-soft-grey hover:text-neon-magenta transition-colors px-1"
+            aria-label={t("messages.reply.cancel_aria")}
+            title={t("messages.reply.cancel_title")}
+          >
+            {"✕"}
+          </button>
+        </div>
+      )}
       {/* Typing pill — sits above the input. Empty span keeps layout
           stable so the input doesn't jump up/down as the pill flickers. */}
       <div className="px-4 pt-1.5 h-5 text-xs leading-tight">
@@ -148,16 +313,37 @@ export default function InputBar({
           overlay is purely decorative — it sits behind the real input. */}
       <div className="relative flex-1 flex items-center">
         <input
+          ref={inputRef}
           type="text"
           value={text}
           onChange={e => {
-            setText(e.target.value);
+            const value = e.target.value;
+            setText(value);
+            const caret = e.target.selectionStart ?? value.length;
+            recomputeMentionState(value, caret);
             // Leading-edge throttled typing-ping. Only fires when text
             // actually grew (so blank → typing transitions ping
             // immediately) and the cooldown has elapsed.
-            if (e.target.value.length > 0) {
+            if (value.length > 0) {
               maybeFireTypingPing();
             }
+          }}
+          onKeyUp={e => {
+            // Re-check after caret movement (arrow keys) so the popover
+            // dismisses if the user navigates away from the @ token.
+            if (
+              e.key === "ArrowLeft" ||
+              e.key === "ArrowRight" ||
+              e.key === "Home" ||
+              e.key === "End"
+            ) {
+              const target = e.currentTarget;
+              recomputeMentionState(target.value, target.selectionStart ?? 0);
+            }
+          }}
+          onClick={e => {
+            const target = e.currentTarget;
+            recomputeMentionState(target.value, target.selectionStart ?? 0);
           }}
           onKeyDown={onKeyDown}
           onFocus={() => setFocused(true)}
@@ -167,6 +353,14 @@ export default function InputBar({
           className="neon-input w-full disabled:opacity-50"
           autoFocus
         />
+        {mentionStart !== null && mlsDirectory && (
+          <MentionPopover
+            candidates={mentionCandidates}
+            activeIdx={mentionActiveIdx}
+            onSelect={label => selectMention(label)}
+            onDismiss={() => setMentionStart(null)}
+          />
+        )}
         {/* Decorative blinking cursor — shown only when there's no typed
             text so it doesn't compete with the OS caret mid-typing. */}
         {!text && (

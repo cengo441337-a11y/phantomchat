@@ -47,6 +47,39 @@ export interface IncomingMessage {
   ///   "read"      -> double cyber-cyan check
   /// Only meaningful on outgoing rows; incoming rows leave it undefined.
   delivery_state?: "sent" | "delivered" | "read";
+  /// Per-message "pinned" flag. Persisted on the row itself so a reload
+  /// preserves user intent. Default `false` is omitted from the on-disk
+  /// JSON for backwards-compat with pre-feature persisted rows.
+  pinned?: boolean;
+  /// Per-message "starred" / favourite flag. Same persistence + back-
+  /// compat strategy as `pinned`.
+  starred?: boolean;
+  /// Reply-thread metadata, populated when this row was sent via the
+  /// REPL-1: envelope. The MessageStream renders an inline magenta
+  /// "↪ <quoted_preview>" header that scrolls to the quoted row on click.
+  reply_to?: ReplyMeta;
+  /// Accumulated reactions for this row. Mutated in-place by the
+  /// `reaction_updated` event so the UI can group + count emoji pills.
+  reactions?: ReactionEntry[];
+  /// Unix-epoch second after which this row should be hidden + dropped
+  /// from on-disk history by the auto-purge sweep. Both endpoints stamp
+  /// independently from their local TTL setting at send/receive time.
+  expires_at?: number;
+}
+
+/// Per-message reply metadata mirrored from the Rust `ReplyMeta` struct.
+/// `quoted_preview` is the first ~80 chars of the quoted message body so
+/// the recipient can render the quote block without a history lookup.
+export interface ReplyMeta {
+  in_reply_to_msg_id: string;
+  quoted_preview: string;
+}
+
+/// One emoji-reaction entry on a message row. Aggregated client-side
+/// from the `RACT-1:` event stream.
+export interface ReactionEntry {
+  sender_label: string;
+  emoji: string;
 }
 
 export type MsgKind = "incoming" | "outgoing" | "system";
@@ -80,6 +113,23 @@ export interface MsgLine {
   /// this monotonically as `receipt` events arrive (sent → delivered →
   /// read). Undefined / absent on incoming + system rows.
   delivery_state?: "sent" | "delivered" | "read";
+  /// Pin / star flags — mirror the backend `IncomingMessage` fields.
+  /// Toggled via the hover-toolbar's [Pin] / [Star] buttons, which fire
+  /// the matching `pin_message` / `star_message` Tauri commands and
+  /// listen for `message_state_changed` events.
+  pinned?: boolean;
+  starred?: boolean;
+  /// Reply-thread metadata. Populated for rows that quote an earlier
+  /// message; the stream renders the quote block above the body and
+  /// scrolls-to-quoted on click.
+  reply_to?: ReplyMeta;
+  /// Per-row aggregated emoji reactions. Mutated by the
+  /// `reaction_updated` event listener.
+  reactions?: ReactionEntry[];
+  /// Unix-epoch-second deadline for disappearing-messages auto-purge.
+  /// Rows past this deadline are hidden in the UI and removed by the
+  /// 60s backend purge sweep.
+  expires_at?: number;
 }
 
 /// Per-file metadata. Mirrors the Rust `FileMeta` struct.
@@ -94,6 +144,10 @@ export interface FileMeta {
   /// `true` if the receiver re-hashed the bytes and matched. `false` for
   /// a tampered transfer. `undefined` for outgoing rows (no verify needed).
   sha256_ok?: boolean;
+  /// MIME guess from the wire manifest (e.g. `image/png`). Drives the
+  /// inline-image-vs-📎-link branch in `MessageStream.tsx`. Optional —
+  /// legacy persisted rows pre-feature don't carry it.
+  mime?: string;
 }
 
 /// Backend `file_received` event payload. Mirrors the Rust struct of the
@@ -107,6 +161,10 @@ export interface FileReceivedEvent {
   sha256_hex: string;
   ts: string;
   sender_pub_hex?: string | null;
+  /// MIME hint copied from the wire manifest. Lets MessageStream branch
+  /// to inline image-rendering for `image/*` payloads without inspecting
+  /// the filename extension on the JS side.
+  mime?: string;
 }
 
 /// Result returned by the `send_file` Tauri command. Used by the frontend
@@ -115,6 +173,7 @@ export interface FileSendResult {
   filename: string;
   size: number;
   sha256_hex: string;
+  mime?: string;
 }
 
 /// Relay/listener connection state for the StatusFooter pill. Emitted by the
@@ -267,6 +326,48 @@ export interface AuditEntry {
   details: Record<string, unknown>;
 }
 
+// ── Crash reporting (Diagnostics) ────────────────────────────────────────────
+//
+// Mirrors the Rust `CrashReport` struct. Each row is one captured panic:
+// timestamp, app version, OS, the panic's first-line message + source
+// location, and the captured backtrace. `user_dispatched` flips to `true`
+// after a successful POST via `dispatch_crash_report` so the UI can render
+// "already sent" instead of offering a re-send.
+export interface CrashReport {
+  ts: string;
+  version: string;
+  os: string;
+  panic_msg: string;
+  location: string;
+  backtrace: string;
+  user_dispatched?: boolean;
+// ── LAN org (mDNS zero-touch discovery) ─────────────────────────────────────
+//
+// Mirrors the Rust `LanOrgStatus` + `DiscoveredPeer` structs. The shared-
+// secret "org code" is the only authentication for mDNS-discovered peers;
+// they're auto-added as 1:1 contacts but NOT as MLS group members.
+
+/// Returned by `lan_org_status`. `active` is true iff a `ServiceDaemon` is
+/// running; `code` is the user-shareable 6-char `XXX-XXX` string;
+/// `peer_count` is the deduplicated discovered-peer count;
+/// `last_discovery_ts` is the unix-epoch-seconds string of the most-recent
+/// resolve (or null if we've broadcast but never seen a peer).
+export interface LanOrgStatus {
+  active: boolean;
+  code?: string | null;
+  peer_count: number;
+  last_discovery_ts?: string | null;
+}
+
+/// Pushed by the `lan_peer_discovered` event whenever the browse task
+/// resolves a never-before-seen peer with a matching org code.
+export interface DiscoveredPeer {
+  label: string;
+  address: string;
+  signing_pub_hex: string;
+  last_seen: number;
+}
+
 // ── Auto-updater wire types ──────────────────────────────────────────────────
 //
 // Mirrors the Rust `UpdateInfo` struct from the `check_for_updates` /
@@ -275,4 +376,88 @@ export interface UpdateInfo {
   available: boolean;
   version?: string | null;
   release_notes?: string | null;
+}
+
+// ── Wave 8G: Pin / Star (per-message) + Archive (per-conversation) ──────────
+//
+// Mirrors the Rust `ConversationState` struct in
+// `desktop/src-tauri/src/lib.rs`. Persisted under `conversation_state.json`
+// keyed by contact label.
+
+export interface ConversationState {
+  archived?: boolean;
+  pinned?: boolean;
+  muted?: boolean;
+}
+
+/// Emitted by `pin_message` / `unpin_message` / `star_message` /
+/// `unstar_message` so the React reducer can patch the in-memory
+/// `messages` array without reloading history.
+export interface MessageStateChangedEvent {
+  msg_id: string;
+  pinned: boolean;
+  starred: boolean;
+}
+
+/// Emitted by the conversation-level mutations
+/// (`archive_conversation` / `unarchive_conversation` /
+/// `pin_conversation` / `unpin_conversation`). The frontend hydrates
+/// the contact-state map from `get_conversation_state` on cold start
+/// and patches in-place from this event.
+export interface ConversationStateChangedEvent {
+  contact_label: string;
+  state: ConversationState;
+// ── Reply / reactions / disappearing-messages event payloads ────────────────
+//
+// All three are emitted by the Rust listener path that decodes the matching
+// `REPL-1:` / `RACT-1:` / `DISA-1:` envelope. The reply event reuses the
+// existing `message` channel (with `reply_to` populated) so React's reducer
+// stays the same. The other two get dedicated channels.
+
+/// Emitted on `reaction_updated` after the backend mutates a target row's
+/// reactions array. `reactions` is the FULL post-update list so the React
+/// reducer can patch in place without merging.
+export interface ReactionUpdatedEvent {
+  target_msg_id: string;
+  reactions: ReactionEntry[];
+}
+
+/// Emitted on `messages_purged` by the 60s auto-purge sweep. `msg_ids`
+/// is the list of rows the sweep removed from `messages.json` so the
+/// React state can drop them in lockstep.
+export interface MessagesPurgedEvent {
+  msg_ids: string[];
+}
+
+/// Emitted on `disappearing_ttl_changed` whenever a peer's `DISA-1:`
+/// envelope decodes (or our own `set_disappearing_ttl` succeeds locally).
+/// `ttl_secs == null` disables auto-purge for the conversation.
+export interface DisappearingTtlChangedEvent {
+  contact_label: string;
+  ttl_secs: number | null;
+// ── Encrypted backup / restore (Wave 8c, compliance Aufbewahrungspflicht) ────
+//
+// Mirror the three Rust DTOs returned by `export_backup` / `verify_backup`
+// / `import_backup`. Used by the Backup section of SettingsPanel to render
+// the success toast (sha256 + path), the pre-restore provenance preview,
+// and the post-restore item count.
+
+export interface BackupResult {
+  path: string;
+  size_bytes: number;
+  sha256_hex: string;
+  item_count: number;
+}
+
+export interface BackupMeta {
+  version: number;
+  created_at: string;
+  item_count: number;
+  host_label: string;
+}
+
+export interface RestoreResult {
+  items_restored: number;
+  identity_replaced: boolean;
+  requires_restart: boolean;
 }

@@ -7,21 +7,31 @@ import type {
   ConnectionEvent,
   ConnectionStatus,
   Contact,
+  ConversationState,
+  ConversationStateChangedEvent,
   FileReceivedEvent,
   FileSendResult,
   IncomingMessage,
+  MessageStateChangedEvent,
+  DisappearingTtlChangedEvent,
+  FileReceivedEvent,
+  FileSendResult,
+  IncomingMessage,
+  MessagesPurgedEvent,
   MlsEpochEvent,
   MlsGroupMessage,
   MlsJoinedEvent,
   MlsLogLine,
   MlsStatus,
   MsgLine,
+  ReactionUpdatedEvent,
   ReceiptEvent,
   TypingEvent,
   UpdateInfo,
 } from "./types";
 import ContactsPane from "./components/ContactsPane";
 import ChannelsPane from "./components/ChannelsPane";
+import ConversationHeader from "./components/ConversationHeader";
 import MessageStream from "./components/MessageStream";
 import InputBar from "./components/InputBar";
 import StatusFooter from "./components/StatusFooter";
@@ -31,6 +41,7 @@ import IdentityGate from "./components/IdentityGate";
 import SettingsPanel from "./components/SettingsPanel";
 import OnboardingWizard from "./components/OnboardingWizard";
 import SearchPanel from "./components/SearchPanel";
+import { plaintextMentions } from "./lib/mentions";
 
 type LeftPaneTab = "contacts" | "channels";
 
@@ -60,6 +71,13 @@ function msgLineToWire(m: MsgLine): IncomingMessage {
     direction,
     kind: m.row_kind ?? "text",
     file_meta: m.file_meta,
+    msg_id: m.msg_id,
+    delivery_state: m.delivery_state,
+    pinned: m.pinned ?? false,
+    starred: m.starred ?? false,
+    reply_to: m.reply_to,
+    reactions: m.reactions,
+    expires_at: m.expires_at,
   };
 }
 
@@ -79,6 +97,13 @@ function wireToMsgLine(m: IncomingMessage): MsgLine {
     sender_pub_hex: m.sender_pub_hex ?? null,
     row_kind: m.kind ?? "text",
     file_meta: m.file_meta,
+    msg_id: m.msg_id,
+    delivery_state: m.delivery_state,
+    pinned: m.pinned ?? false,
+    starred: m.starred ?? false,
+    reply_to: m.reply_to,
+    reactions: m.reactions,
+    expires_at: m.expires_at,
   };
 }
 
@@ -99,6 +124,10 @@ export default function App() {
   // ── Identity / boot state ──────────────────────────────────────────────
   const [address, setAddress] = useState<string | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
+  /// Local user's `me.json` label, used as the canonical "self" name
+  /// for the mention auto-complete + the loud `notify_mention` trigger.
+  /// Empty string until the boot probe resolves.
+  const [myLabel, setMyLabel] = useState<string>("");
 
   // ── Auto-updater banner ───────────────────────────────────────────────
   // Set on the cold-start `check_for_updates` round-trip if the endpoint
@@ -132,6 +161,13 @@ export default function App() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [activeLabel, setActiveLabel] = useState<string | null>(null);
   const [messages, setMessages] = useState<MsgLine[]>([]);
+  /// Wave 8G — `conversation_state.json` map, keyed by contact label.
+  /// Hydrated on cold start via `get_conversation_state`, then patched
+  /// in-place from `conversation_state_changed` events. Drives the
+  /// archive/pin layout in ContactsPane + the SettingsPanel archive view.
+  const [conversationState, setConversationState] = useState<
+    Record<string, ConversationState>
+  >({});
   const [showAddContact, setShowAddContact] = useState(false);
   const [showBindModal, setShowBindModal] = useState(false);
   /// Hex pubkey of the most-recent unbound sealed-sender, mirroring
@@ -145,6 +181,16 @@ export default function App() {
   const [scanned, setScanned] = useState(0);
   const [decrypted, setDecrypted] = useState(0);
   const [connection, setConnection] = useState<ConnectionStatus>("connecting");
+
+  // ── Reply-to compose state ─────────────────────────────────────────────
+  // Set when the user clicks Reply on a row in MessageStream. InputBar
+  // reads it to render the quote block above the input + route sends
+  // through `send_reply` instead of `send_message`. Cleared after the
+  // send resolves (or on cancel).
+  const [replyingTo, setReplyingTo] = useState<{
+    msg_id: string;
+    preview: string;
+  } | null>(null);
 
   // ── Typing indicators ──────────────────────────────────────────────────
   // Map<contact_label, expiry_ms>. Set on every `typing` event from the
@@ -211,10 +257,24 @@ export default function App() {
         // IntersectionObserver in MessageStream can pass it back through
         // `mark_read` to ack the read state.
         msg_id: payload.msg_id,
+        // REPL-1: rows carry the inline quote metadata; reactions hydrate
+        // from the listener's RACT-1: stream and disappear-rows carry
+        // their pre-computed `expires_at`.
+        reply_to: payload.reply_to,
+        reactions: payload.reactions,
+        expires_at: payload.expires_at,
       },
     ]);
   }
-  function pushOutgoing(label: string, body: string, msgId?: string) {
+  function pushOutgoing(
+    label: string,
+    body: string,
+    msgId?: string,
+    opts?: {
+      reply_to?: { in_reply_to_msg_id: string; quoted_preview: string };
+      expires_at?: number;
+    },
+  ) {
     setMessages(m => [
       ...m,
       {
@@ -228,6 +288,8 @@ export default function App() {
         // this row. Initial state is "sent" — escalates on `receipt`.
         msg_id: msgId,
         delivery_state: msgId ? "sent" : undefined,
+        reply_to: opts?.reply_to,
+        expires_at: opts?.expires_at,
       },
     ]);
   }
@@ -252,6 +314,7 @@ export default function App() {
           saved_path: payload.saved_path,
           sha256_hex: payload.sha256_hex,
           sha256_ok: payload.sha256_ok,
+          mime: payload.mime,
         },
       },
     ]);
@@ -275,6 +338,7 @@ export default function App() {
           // unset; the row's "open folder" affordance is hidden when path
           // is missing.
           saved_path: null,
+          mime: result.mime,
         },
       },
     ]);
@@ -360,12 +424,34 @@ export default function App() {
         setAddress(null);
         return;
       }
+      // Pull the persisted self-label so the mention pipeline can render
+      // an extra-prominent pill (and trigger `notify_mention`) when a
+      // peer addresses us by name. Empty string is fine — it short-
+      // circuits the local-mention check inside `plaintextMentions`.
+      try {
+        const lbl = await invoke<string>("get_my_label");
+        setMyLabel(lbl ?? "");
+      } catch {
+        /* not fatal */
+      }
       try {
         const cs = await invoke<Contact[]>("list_contacts");
         setContacts(cs);
         if (cs.length > 0) setActiveLabel(cs[0].label);
       } catch (e) {
         pushSystem(t("app.system.load_contacts_failed", { error: String(e) }));
+      }
+
+      // Wave 8G — hydrate per-conversation pin/archive map. Errors are
+      // silent + fall back to an empty map so a missing/malformed
+      // `conversation_state.json` doesn't block the chat UI.
+      try {
+        const cs = await invoke<Record<string, ConversationState>>(
+          "get_conversation_state",
+        );
+        setConversationState(cs ?? {});
+      } catch (e) {
+        console.warn("get_conversation_state failed:", e);
       }
 
       // Pick up any cached connection status the backend already knows.
@@ -448,6 +534,19 @@ export default function App() {
     listen<MlsGroupMessage>("mls_message", e => {
       const { from_label, plaintext } = e.payload;
       pushMlsLog("incoming", `${from_label}: ${plaintext}`);
+      // Mention check: if the message names US (by `me.label`), fire the
+      // loud `notify_mention` so the user sees the system-shelf entry
+      // even if the window is focused. We use the latest `myLabel` via
+      // closure — it's set at boot and only changes via Settings.
+      if (myLabel && from_label !== myLabel) {
+        const hits = plaintextMentions(plaintext, [myLabel]);
+        if (hits.length > 0) {
+          void invoke("notify_mention", {
+            fromLabel: from_label,
+            body: plaintext,
+          }).catch(err => console.warn("notify_mention failed:", err));
+        }
+      }
     }).then(u => unlisteners.push(u));
 
     listen<MlsEpochEvent>("mls_epoch", e => {
@@ -520,10 +619,80 @@ export default function App() {
       }, ttl_secs * 1000 + 50);
     }).then(u => unlisteners.push(u));
 
+    // ── Wave 8G: per-message pin/star state-change events ───────────────
+    // Backend emits this whenever pin_message/unpin_message/star_message/
+    // unstar_message succeeds. We patch the matching row in `messages`
+    // by msg_id so the visual badge + tint flips without a reload.
+    listen<MessageStateChangedEvent>("message_state_changed", e => {
+      const { msg_id, pinned, starred } = e.payload;
+      setMessages(prev =>
+        prev.map(m =>
+          m.msg_id === msg_id ? { ...m, pinned, starred } : m,
+    // ── Reaction events ────────────────────────────────────────────────
+    // Backend has already merged the `add`/`remove` action into the on-disk
+    // history row's `reactions` array; we just patch in-memory state with
+    // the post-merge list so the UI re-renders without a full reload.
+    listen<ReactionUpdatedEvent>("reaction_updated", e => {
+      const { target_msg_id, reactions } = e.payload;
+      setMessages(prev =>
+        prev.map(m =>
+          m.msg_id === target_msg_id ? { ...m, reactions } : m,
+        ),
+      );
+    }).then(u => unlisteners.push(u));
+
+    // ── Wave 8G: per-conversation archive/pin/mute state-change events ──
+    listen<ConversationStateChangedEvent>(
+      "conversation_state_changed",
+      e => {
+        const { contact_label, state } = e.payload;
+        setConversationState(prev => ({
+          ...prev,
+          [contact_label]: state,
+        }));
+        // If the user just archived the active conversation, drop the
+        // selection so MessageStream doesn't keep showing rows from a
+        // contact that is no longer in the live list.
+        if (state.archived) {
+          setActiveLabel(prev => (prev === contact_label ? null : prev));
+        }
+      },
+    ).then(u => unlisteners.push(u));
+    // ── Auto-purge: drop any row the backend just removed ──────────────
+    // The 60s sweep on the Rust side mutates messages.json and emits this
+    // with the dropped msg_ids. We mirror the change in React so the
+    // disappearing rows vanish from the UI without waiting for a reload.
+    listen<MessagesPurgedEvent>("messages_purged", e => {
+      const dropped = new Set(e.payload.msg_ids);
+      if (dropped.size === 0) return;
+      setMessages(prev => prev.filter(m => !m.msg_id || !dropped.has(m.msg_id)));
+    }).then(u => unlisteners.push(u));
+
+    // ── Disappearing-TTL change → system message ───────────────────────
+    // Fired both when WE change the TTL locally (via set_disappearing_ttl)
+    // and when the PEER pushes a new TTL via DISA-1:. The system row
+    // surfaces the change so both sides see a transcript trail.
+    listen<DisappearingTtlChangedEvent>("disappearing_ttl_changed", e => {
+      const { contact_label, ttl_secs } = e.payload;
+      if (ttl_secs === null) {
+        pushSystem(
+          t("messages.disappearing.system_disabled", { label: contact_label }),
+        );
+      } else {
+        pushSystem(
+          t("messages.disappearing.system_enabled", {
+            label: contact_label,
+            secs: ttl_secs,
+          }),
+        );
+      }
+    }).then(u => unlisteners.push(u));
+
     return () => {
       unlisteners.forEach(u => u());
     };
-  }, [pushMlsLog, refreshMlsStatus]);
+  }, [pushMlsLog, refreshMlsStatus, myLabel]);
+  }, [pushMlsLog, refreshMlsStatus, t]);
 
   // ── Send action ────────────────────────────────────────────────────────
   async function handleSend(body: string) {
@@ -532,6 +701,15 @@ export default function App() {
       return;
     }
     try {
+      // Look up any active disappearing-messages TTL for the active
+      // contact so the optimistic outgoing row gets stamped with the
+      // same `expires_at` deadline the peer will derive at receive time.
+      // Single conditional, additive — falls back to undefined for
+      // conversations with no TTL configured.
+      const expiresAt =
+        (await invoke<number | null>("outgoing_expires_at", {
+          contactLabel: activeLabel,
+        }).catch(() => null)) ?? undefined;
       const msgId = await invoke<string>("send_message", {
         contactLabel: activeLabel,
         body,
@@ -540,11 +718,98 @@ export default function App() {
       // proper conversation transcript when you re-open the app. The
       // returned msg_id stamps the row so subsequent `receipt` events
       // can escalate its delivery_state.
-      pushOutgoing("you", body, msgId);
+      pushOutgoing("you", body, msgId, { expires_at: expiresAt });
     } catch (e) {
       pushSystem(t("app.system.send_failed", { error: String(e) }));
     }
   }
+
+  /// Reply-mode send wrapper. Routes through the backend `send_reply`
+  /// command so the peer's incoming row carries the quote inline. The
+  /// optimistic outgoing row is stamped with the same `reply_to` meta
+  /// so it renders identically on both sides.
+  async function handleSendReply(
+    body: string,
+    inReplyToMsgId: string,
+    quotedPreview: string,
+  ) {
+    if (!activeLabel) {
+      pushSystem(t("app.system.select_contact_first"));
+      return;
+    }
+    try {
+      const expiresAt =
+        (await invoke<number | null>("outgoing_expires_at", {
+          contactLabel: activeLabel,
+        }).catch(() => null)) ?? undefined;
+      const msgId = await invoke<string>("send_reply", {
+        contactLabel: activeLabel,
+        body,
+        inReplyToMsgId,
+        quotedPreview,
+      });
+      pushOutgoing("you", body, msgId, {
+        reply_to: {
+          in_reply_to_msg_id: inReplyToMsgId,
+          quoted_preview: quotedPreview,
+        },
+        expires_at: expiresAt,
+      });
+      setReplyingTo(null);
+    } catch (e) {
+      pushSystem(t("app.system.send_failed", { error: String(e) }));
+    }
+  }
+
+  /// React handler for the MessageStream toolbar / picker. Optimistically
+  /// patches the local row's reactions array AND fires the backend
+  /// `send_reaction` command so the peer's listener can mirror the
+  /// change. The peer's `reaction_updated` event will then arrive and
+  /// idempotently re-apply (the backend de-dupes identical adds).
+  const handleReact = useCallback(
+    async (
+      msgId: string,
+      emoji: string,
+      action: "add" | "remove",
+    ) => {
+      if (!activeLabel) {
+        pushSystem(t("app.system.select_contact_first"));
+        return;
+      }
+      // Optimistic local mutation so the pill flips immediately. The
+      // remote peer's mirroring add/remove will round-trip back via
+      // `reaction_updated` and idempotently match this state.
+      setMessages(prev =>
+        prev.map(m => {
+          if (m.msg_id !== msgId) return m;
+          const cur = m.reactions ?? [];
+          const exists = cur.some(
+            r => r.sender_label === "you" && r.emoji === emoji,
+          );
+          let next = cur;
+          if (action === "add" && !exists) {
+            next = [...cur, { sender_label: "you", emoji }];
+          } else if (action === "remove" && exists) {
+            next = cur.filter(
+              r => !(r.sender_label === "you" && r.emoji === emoji),
+            );
+          }
+          return { ...m, reactions: next };
+        }),
+      );
+      try {
+        await invoke("send_reaction", {
+          contactLabel: activeLabel,
+          targetMsgId: msgId,
+          emoji,
+          action,
+        });
+      } catch (e) {
+        pushSystem(t("app.system.send_failed", { error: String(e) }));
+      }
+    },
+    [activeLabel, t],
+  );
 
   /// File-send wrapper for both the paperclip button and the drag-drop
   /// overlay. Re-uses `pushSystem` for error surfacing so the failure
@@ -808,6 +1073,7 @@ export default function App() {
               onAddClick={() => setShowAddContact(true)}
               hasUnboundSender={pendingUnboundPub !== null}
               onBindClick={() => setShowBindModal(true)}
+              conversationState={conversationState}
             />
           </div>
         ) : (
@@ -835,6 +1101,14 @@ export default function App() {
               }}
             />
           )}
+          <ConversationHeader
+            activeLabel={activeLabel}
+            onTtlChanged={() => {
+              /* The backend's `set_disappearing_ttl` already emits the
+                 `disappearing_ttl_changed` event, which our listener
+                 turns into a system message — no extra work here. */
+            }}
+          />
           <MessageStream
             messages={messages}
             activeLabel={activeLabel}
@@ -842,6 +1116,25 @@ export default function App() {
             onOpenFolder={handleOpenDownloadsFolder}
             highlightedIdx={searchHighlightIdx}
             onMarkRead={handleMarkRead}
+            onSwitchConversation={setActiveLabel}
+            knownMentionLabels={[
+              myLabel,
+              ...(mlsStatus?.members.map(m => m.label) ?? []),
+              ...contacts.map(c => c.label),
+            ].filter(Boolean)}
+            onReplyTo={(msgId, preview) => {
+              setReplyingTo({
+                msg_id: msgId,
+                // Preview is capped at the same ~80 chars the backend
+                // uses for the wire metadata so the on-screen quote
+                // matches the eventual envelope contents.
+                preview:
+                  preview.length > 80
+                    ? preview.slice(0, 80) + "\u{2026}"
+                    : preview,
+              });
+            }}
+            onReact={handleReact}
           />
           <InputBar
             activeLabel={activeLabel}
@@ -854,6 +1147,19 @@ export default function App() {
               if (exp === undefined) return null;
               return exp > Date.now() ? activeLabel : null;
             })()}
+            // Mention auto-complete is only meaningful inside an MLS
+            // group (1:1 chats have a single peer — no need to disambig-
+            // uate). Pass the directory only when we're on the channels
+            // tab AND a group is active; otherwise the popover stays
+            // suppressed inside InputBar.
+            mlsDirectory={
+              leftTab === "channels" && mlsStatus?.in_group
+                ? mlsStatus.members
+                : undefined
+            }
+            replyingTo={replyingTo}
+            onCancelReply={() => setReplyingTo(null)}
+            onSendReply={handleSendReply}
           />
           {/* Drag-drop overlay — sits absolute over the chat pane so the
               dimmed message stream shows through. Pointer-events-none so

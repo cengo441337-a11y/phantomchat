@@ -31,6 +31,11 @@ base64 = "0.22"
 ed25519-dalek = { version = "2.1", features = ["rand_core", "serde"] }
 subtle = "2.5"
 curve25519-dalek = { version = "4.1", features = ["rand_core", "digest"] }
+# Defence-in-depth: scrub plaintext key material from RAM as soon as it goes
+# out of scope. `zeroize_derive` lets the key types in `keys.rs` opt in via a
+# single attribute; the underlying `Zeroize` impls already exist on every leaf
+# byte array / x25519 secret we care about.
+zeroize = { version = "1.7", features = ["zeroize_derive"] }
 
 # ── Optional WASM browser bindings ───────────────────────────────────────────
 wasm-bindgen = { version = "0.2", optional = true }
@@ -100,3 +105,20 @@ required-features = ["net"]
 # feature the wasm32 build errors at compile time.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
+
+# ── OS-level secure key storage (per-platform keyring backend) ───────────────
+# `secure_storage.rs` wraps Windows DPAPI / macOS Keychain / Linux libsecret
+# behind a single `SecureStorage` trait. Each host gets exactly the backend
+# it needs — keeps the dep tree minimal: no dbus on macOS, no security-
+# framework on Linux, etc. Wasm + Android skip the crate entirely and fall
+# back to the in-process plaintext store.
+#
+# v3.6 is the last 1.75-MSRV branch; v4 is still pre-release.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
