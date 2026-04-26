@@ -68,6 +68,7 @@ function msgLineToWire(m: MsgLine): IncomingMessage {
     direction,
     kind: m.row_kind ?? "text",
     file_meta: m.file_meta,
+    voice_meta: m.voice_meta,
     msg_id: m.msg_id,
     delivery_state: m.delivery_state,
     pinned: m.pinned ?? false,
@@ -94,6 +95,7 @@ function wireToMsgLine(m: IncomingMessage): MsgLine {
     sender_pub_hex: m.sender_pub_hex ?? null,
     row_kind: m.kind ?? "text",
     file_meta: m.file_meta,
+    voice_meta: m.voice_meta,
     msg_id: m.msg_id,
     delivery_state: m.delivery_state,
     pinned: m.pinned ?? false,
@@ -241,6 +243,13 @@ export default function App() {
     ]);
   }
   function pushIncoming(payload: IncomingMessage) {
+    // Wave 11B: voice rows carry `kind === "voice"` from the backend's
+    // VOICE-1: handler. We pin `row_kind` accordingly so the MessageStream
+    // routes the row to the `<VoiceMessageBubble>` renderer instead of
+    // the default text body. All other backend `kind` values fall through
+    // to "text" so legacy rows + future kinds keep rendering as text.
+    const rowKind: MsgLine["row_kind"] =
+      payload.kind === "voice" ? "voice" : "text";
     setMessages(m => [
       ...m,
       {
@@ -250,6 +259,8 @@ export default function App() {
         body: payload.plaintext,
         sig_ok: payload.sig_ok,
         sender_pub_hex: payload.sender_pub_hex ?? null,
+        row_kind: rowKind,
+        voice_meta: payload.voice_meta,
         // Stash the msg_id the backend computed at decode time so the
         // IntersectionObserver in MessageStream can pass it back through
         // `mark_read` to ack the read state.

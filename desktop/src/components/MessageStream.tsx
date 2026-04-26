@@ -7,6 +7,7 @@ import { renderMarkdown } from "../lib/markdown";
 import { autoLinkify } from "../lib/linkify";
 import { detectMentions } from "../lib/mentions";
 import EmojiPicker from "./EmojiPicker";
+import VoiceMessageBubble from "./VoiceMessageBubble";
 
 interface Props {
   messages: MsgLine[];
@@ -391,6 +392,7 @@ export default function MessageStream({
             const isUnbound =
               m.kind === "incoming" && m.label.startsWith("?");
             const isFile = m.row_kind === "file" && m.file_meta;
+            const isVoice = m.row_kind === "voice" && m.voice_meta;
             const fileHashBad =
               isFile && m.file_meta?.sha256_ok === false;
             // Wave 8G — image branch test. We render the inline thumbnail
@@ -548,7 +550,20 @@ export default function MessageStream({
                   {truncateLabel(m.label)}
                 </span>
 
-                {isImageRow && m.file_meta ? (
+                {isVoice && m.voice_meta ? (
+                  /* Wave 11B — voice-message bubble. The HTML5 <audio>
+                     element decodes both opus (.ogg) and aac (.m4a)
+                     natively, so no Rust audio dep is required. The
+                     on-disk path comes from `<app_data>/voice/<msg_id>.<ext>`
+                     and is fed through `convertFileSrc` inside the bubble
+                     to produce the `tauri://` URL. The standard reply /
+                     react / pin / star toolbar still applies — this is
+                     just the body renderer. */
+                  <VoiceMessageBubble
+                    meta={m.voice_meta}
+                    outgoing={m.kind === "outgoing"}
+                  />
+                ) : isImageRow && m.file_meta ? (
                   /* Wave 8G inline image branch. We render:
                      - sender-side echo (no saved_path): generic 📎 caption fallback,
                        since the bytes aren't on disk locally to convertFileSrc.

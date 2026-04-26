@@ -486,7 +486,15 @@
     "send_button": "send",
     "sealing_button": "sealing…",
     "file_picker_title": "Send file to {{label}}",
-    "typing_pill": "{{label}} is typing…"
+    "typing_pill": "{{label}} is typing…",
+    "mic_coming_soon": "Voice recording on desktop — coming soon. (Currently only the mobile app records; the desktop plays back.)",
+    "mic_aria": "Record voice message (coming soon)"
+  },
+  "voice": {
+    "voice_message": "Voice message",
+    "play": "Play",
+    "pause": "Pause",
+    "load_error": "Couldn't load audio"
   },
   "status_footer": {
     "connected": "connected",

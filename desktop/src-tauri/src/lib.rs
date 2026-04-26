@@ -157,6 +157,25 @@ const RACT_PREFIX_V1: &[u8; 7] = b"RACT-1:";
 /// must agree (one sets, the other receives + applies to their own copy).
 const DISA_PREFIX_V1: &[u8; 7] = b"DISA-1:";
 
+/// 8-byte ASCII tag prefixed to Wave 11B voice-message envelopes. Wire:
+///
+///   VOICE-1: || u8(codec_id) || u32_le(duration_ms) || u32_le(audio_byte_len) || audio_bytes
+///
+/// `codec_id` values:
+///   0x00 = Opus in OGG container (`.ogg`)
+///   0x01 = AAC in M4A container (`.m4a`)
+///
+/// The mobile (Flutter) side records into one of these two containers so
+/// the desktop's HTML5 `<audio>` element can decode them natively without
+/// pulling in a Rust audio dep. The desktop saves the audio bytes verbatim
+/// under `<app_data>/voice/<msg_id>.<ext>` and emits an `IncomingMessage`
+/// with `kind = "voice"` + a populated `voice_meta`.
+const VOICE_PREFIX_V1: &[u8; 8] = b"VOICE-1:";
+/// Hard cap on a single voice message's audio payload. Mirrors
+/// `MAX_FILE_BYTES` so a malicious sender can't burn our disk via the
+/// VOICE channel any more than the FILE channel.
+const MAX_VOICE_BYTES: u64 = 5 * 1024 * 1024;
+
 /// Per-contact disappearing-messages settings file. Lives next to
 /// `contacts.json`. Map of `contact_label -> ttl_secs`. A missing entry
 /// means "no auto-disappear for this conversation".
@@ -233,6 +252,12 @@ pub struct IncomingMessage {
     /// `kind == "file"`. Optional so text rows stay shape-compatible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_meta: Option<FileMeta>,
+    /// Voice-message metadata. Present iff `kind == "voice"`. Carries the
+    /// codec hint (`"opus"` / `"aac"`), the duration in ms (so the bubble
+    /// can render `0:12` before the `<audio>` element loads), and the
+    /// absolute on-disk path the desktop saved the audio bytes to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_meta: Option<VoiceMeta>,
     /// Stable per-message identifier. Computed via the same SHA256-based
     /// recipe on both sender and receiver so receipts can match outgoing
     /// rows back to their delivery state. Present on outgoing rows (stamped
@@ -330,6 +355,29 @@ pub struct FileMeta {
     /// cleanly without a migration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mime: Option<String>,
+}
+
+/// Per-voice-message metadata. Mirrors the Rust receive path's parse of a
+/// `VOICE-1:` envelope. Carried inline on the row so the bubble can
+/// render duration without re-decoding the audio file, and so an
+/// `<audio>` element can hit the saved path via Tauri's `convertFileSrc`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VoiceMeta {
+    /// Container hint copied from the wire `codec_id`. One of `"opus"`
+    /// (codec_id 0x00, `.ogg`) or `"aac"` (codec_id 0x01, `.m4a`). Both
+    /// are decodable by the HTML5 `<audio>` element on every Tauri-
+    /// supported platform without an extra Rust dep.
+    pub codec: String,
+    /// Total duration of the recording, milliseconds. The sender stamps
+    /// this so the receiver can show `0:12` immediately rather than
+    /// having to wait on the `<audio>` element's `loadedmetadata` event.
+    pub duration_ms: u32,
+    /// Absolute filesystem path where the desktop saved the audio bytes.
+    /// `<app_data>/voice/<msg_id>.<ext>`. The frontend converts this via
+    /// `@tauri-apps/api/core::convertFileSrc` into a `tauri://` URL the
+    /// `<audio>` element fetches. The asset-protocol scope in
+    /// `tauri.conf.json` must allow this path.
+    pub path: String,
 }
 
 // ── MLS wire types ───────────────────────────────────────────────────────────
@@ -1931,6 +1979,25 @@ async fn spawn_listener_task(
                             );
                             return;
                         }
+                        if prefix == &VOICE_PREFIX_V1[..] {
+                            // Wave 11B: voice-message envelopes ride the
+                            // existing 1:1 sealed-sender pipe. The handler
+                            // saves the audio bytes under
+                            // `<app_data>/voice/<msg_id>.<ext>` and emits an
+                            // `IncomingMessage` with `kind = "voice"` so the
+                            // React `MessageStream` can route to the
+                            // `VoiceMessageBubble` renderer instead of the
+                            // default text body.
+                            handle_incoming_voice_v1(
+                                &app,
+                                &msg.plaintext[VOICE_PREFIX_V1.len()..],
+                                &msg.plaintext,
+                                sender_pub,
+                                sig_ok,
+                                &contacts_path,
+                            );
+                            return;
+                        }
                     }
                     // Receipts + typing are 7-byte prefixes. Place them
                     // alongside the existing 8-byte branches above without
@@ -2063,6 +2130,7 @@ async fn spawn_listener_task(
                         direction: "incoming".to_string(),
                         kind: None,
                         file_meta: None,
+                        voice_meta: None,
                         msg_id: Some(msg_id.clone()),
                         delivery_state: None,
                         pinned: false,
@@ -5187,6 +5255,22 @@ async fn ai_bridge_test(app: AppHandle, prompt: String) -> Result<String, String
 /// via the existing send pipeline. Returns immediately so the listener loop
 /// stays unblocked.
 fn ai_bridge_maybe_handle(app: &AppHandle, sender_label: &str, plaintext: &str) {
+    // Wave 11B: voice messages are NOT auto-replied to by the LLM. The
+    // wire-prefix peek here doubles as a content-type guard — `should_respond`
+    // only inspects `sender_label`, so without this short-circuit the bridge
+    // would otherwise feed the literal label string ("🎙️ Voice message · 0:12")
+    // back to the LLM. We use `starts_with` on the bytes for the live emit
+    // path AND on the prefix-shaped plaintext label as a belt-and-braces
+    // check (the listener loop only ever calls this with the raw plaintext
+    // bytes wrapped in a `String::from_utf8_lossy`, which preserves the
+    // ASCII `VOICE-1:` head intact).
+    // TODO(Wave 11D): wire in STT here so voice messages CAN be auto-
+    // replied to by the bridge — the desktop will transcribe via a local
+    // whisper.cpp / API provider, then feed the transcript through
+    // `ai_bridge::complete` like a text turn.
+    if plaintext.starts_with("VOICE-1:") {
+        return;
+    }
     let app_data_dir = match app_data(app) {
         Ok(d) => d,
         Err(_) => return,
@@ -5962,6 +6046,229 @@ fn handle_incoming_file_v1(
     let _ = app.emit("file_received", event);
 }
 
+/// Format `duration_ms` as a `M:SS` (or `H:MM:SS` if ≥ 1h) label for the
+/// inline plaintext fallback that older renderers (or the on-disk JSON)
+/// can show without parsing `voice_meta`.
+fn format_voice_duration(duration_ms: u32) -> String {
+    let total_secs = (duration_ms / 1000) as u64;
+    let hours = total_secs / 3600;
+    let mins = (total_secs % 3600) / 60;
+    let secs = total_secs % 60;
+    if hours > 0 {
+        format!("{}:{:02}:{:02}", hours, mins, secs)
+    } else {
+        format!("{}:{:02}", mins, secs)
+    }
+}
+
+/// Wave 11B receive path. Decodes a `VOICE-1:` envelope's body into:
+///   `body[0]`        = codec_id (0x00 = opus/ogg, 0x01 = aac/m4a)
+///   `body[1..5]`     = duration_ms, little-endian u32
+///   `body[5..9]`     = audio_byte_len, little-endian u32
+///   `body[9..]`      = the raw audio bytes (length must equal audio_byte_len)
+///
+/// Saves the bytes under `<app_data>/voice/<msg_id>.<ext>` (creating the
+/// directory on first use), resolves sender attribution against the
+/// contact list, and emits an `IncomingMessage` with `kind = "voice"`
+/// so the React side routes the row to the `<VoiceMessageBubble>`
+/// renderer. `full_plaintext` is the WHOLE wire plaintext (prefix
+/// included) so we can compute the same `msg_id` the rest of the listener
+/// loop would have computed for a text payload.
+fn handle_incoming_voice_v1(
+    app: &AppHandle,
+    body: &[u8],
+    full_plaintext: &[u8],
+    sender_pub: Option<[u8; 32]>,
+    sig_ok: bool,
+    contacts_path: &std::path::Path,
+) {
+    // 1. Parse the fixed-size header (1 + 4 + 4 = 9 bytes).
+    if body.len() < 9 {
+        let _ = app.emit(
+            "error",
+            format!("VOICE-1: header truncated ({} bytes < 9)", body.len()),
+        );
+        return;
+    }
+    let codec_id = body[0];
+    let duration_ms = u32::from_le_bytes([body[1], body[2], body[3], body[4]]);
+    let audio_byte_len = u32::from_le_bytes([body[5], body[6], body[7], body[8]]);
+    let audio_bytes = &body[9..];
+
+    // 2. Length sanity. The trailing audio_bytes MUST equal audio_byte_len
+    // (sender-side declared) — anything else means a truncated / padded
+    // wire frame and we refuse it rather than save half a recording.
+    if audio_bytes.len() as u64 != audio_byte_len as u64 {
+        let _ = app.emit(
+            "error",
+            format!(
+                "VOICE-1: declared audio_byte_len {} != actual {}",
+                audio_byte_len,
+                audio_bytes.len()
+            ),
+        );
+        return;
+    }
+    if audio_byte_len as u64 > MAX_VOICE_BYTES {
+        let _ = app.emit(
+            "error",
+            format!(
+                "VOICE-1: oversized payload ({} bytes > {} cap)",
+                audio_byte_len, MAX_VOICE_BYTES
+            ),
+        );
+        return;
+    }
+
+    // 3. Resolve codec → (label, file extension). Reject unknown ids so a
+    // malformed sender can't smuggle arbitrary attacker-controlled bytes
+    // into a path under app_data.
+    let (codec_label, ext) = match codec_id {
+        0x00 => ("opus", "ogg"),
+        0x01 => ("aac", "m4a"),
+        other => {
+            let _ = app.emit("error", format!("VOICE-1: unknown codec_id 0x{:02x}", other));
+            return;
+        }
+    };
+
+    // 4. Resolve sender attribution against the contact book — same vocab
+    // as the 1:1 text + file paths.
+    let (sender_label, sender_pub_hex) = match sender_pub {
+        None => ("INBOX".to_string(), None),
+        Some(_) if !sig_ok => ("INBOX!".to_string(), None),
+        Some(pub_bytes) => {
+            let pub_hex = hex::encode(pub_bytes);
+            let book = load_contacts(contacts_path);
+            let matched = book
+                .contacts
+                .iter()
+                .find(|c| {
+                    c.signing_pub
+                        .as_deref()
+                        .map(|h| h.eq_ignore_ascii_case(&pub_hex))
+                        .unwrap_or(false)
+                })
+                .map(|c| c.label.clone());
+            match matched {
+                Some(lbl) => (lbl, Some(pub_hex)),
+                None => {
+                    if let Some(state) = app.try_state::<AppState>() {
+                        if let Ok(mut slot) = state.last_unbound_sender.lock() {
+                            *slot = Some(pub_bytes);
+                        }
+                    }
+                    let label = format!("?{}", &pub_hex[..8]);
+                    (label, Some(pub_hex))
+                }
+            }
+        }
+    };
+
+    // 5. Compute the stable msg_id over the FULL wire plaintext (prefix
+    // included) so it matches what an unaware downstream consumer of
+    // `compute_msg_id` would derive.
+    let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+    let msg_id = compute_msg_id(&ts, full_plaintext);
+
+    // 6. Save the audio bytes to <app_data>/voice/<msg_id>.<ext>. We use
+    // the msg_id rather than a sender-supplied filename so an attacker
+    // can't influence the on-disk path at all (defense in depth — the
+    // app_data dir is sandboxed already, but msg_id is hex so the path
+    // is provably-safe regardless).
+    let app_data_dir = match app_data(app) {
+        Ok(d) => d,
+        Err(e) => {
+            let _ = app.emit("error", format!("VOICE-1: app_data: {e}"));
+            return;
+        }
+    };
+    let voice_dir = app_data_dir.join("voice");
+    if let Err(e) = fs::create_dir_all(&voice_dir) {
+        let _ = app.emit(
+            "error",
+            format!("VOICE-1: mkdir -p {}: {}", voice_dir.display(), e),
+        );
+        return;
+    }
+    let out_path = voice_dir.join(format!("{}.{}", msg_id, ext));
+    if let Err(e) = fs::write(&out_path, audio_bytes) {
+        let _ = app.emit(
+            "error",
+            format!("VOICE-1: write {}: {}", out_path.display(), e),
+        );
+        return;
+    }
+
+    // 7. Per-contact disappearing TTL — voice messages disappear on the
+    // same clock as text rows.
+    let expires_at = match sender_label.as_str() {
+        "INBOX" | "INBOX!" => None,
+        l if l.starts_with('?') => None,
+        l => {
+            let disk = load_disappearing(app);
+            disk.entries.get(l).map(|secs| now_unix_secs() + (*secs as u64))
+        }
+    };
+
+    let saved_path_str = out_path.to_string_lossy().to_string();
+    let duration_label = format_voice_duration(duration_ms);
+    // Plaintext label: "🎙️ Voice message · 0:12". Older renderers that
+    // ignore `kind`/`voice_meta` will still surface SOMETHING meaningful.
+    let plaintext_label = format!("\u{1F399}\u{FE0F} Voice message \u{00B7} {}", duration_label);
+
+    let payload = IncomingMessage {
+        plaintext: plaintext_label.clone(),
+        timestamp: ts.clone(),
+        sender_label: sender_label.clone(),
+        sig_ok,
+        sender_pub_hex,
+        direction: "incoming".to_string(),
+        kind: Some("voice".to_string()),
+        file_meta: None,
+        voice_meta: Some(VoiceMeta {
+            codec: codec_label.to_string(),
+            duration_ms,
+            path: saved_path_str.clone(),
+        }),
+        msg_id: Some(msg_id.clone()),
+        delivery_state: None,
+        pinned: false,
+        starred: false,
+        reply_to: None,
+        reactions: Vec::new(),
+        expires_at,
+    };
+
+    maybe_notify(
+        app,
+        &format!("\u{1F399} Voice from {}", sender_label),
+        &duration_label,
+    );
+    let _ = app.emit("message", payload);
+
+    // Auto-emit a `delivered` receipt — voice rows are receipt-eligible
+    // just like text rows. Skip for unattributed / unbound senders.
+    if !sender_label.starts_with('?')
+        && sender_label != "INBOX"
+        && sender_label != "INBOX!"
+    {
+        let app_for_rcpt = app.clone();
+        let label_for_rcpt = sender_label.clone();
+        let id_for_rcpt = msg_id.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                send_receipt(&app_for_rcpt, &label_for_rcpt, &id_for_rcpt, "delivered").await
+            {
+                let _ = app_for_rcpt.emit(
+                    "error",
+                    format!("VOICE-1 send delivered receipt: {e}"),
+                );
+            }
+        });
+    }
+}
+
 #[tauri::command]
 async fn send_file(
     app: AppHandle,
@@ -6693,6 +7000,7 @@ fn handle_incoming_reply_v1(
         direction: "incoming".to_string(),
         kind: None,
         file_meta: None,
+        voice_meta: None,
         msg_id: Some(msg_id.clone()),
         delivery_state: None,
         pinned: false,

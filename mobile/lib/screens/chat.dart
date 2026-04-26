@@ -1,16 +1,22 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:record/record.dart';
 import 'package:uuid/uuid.dart';
 import '../models/contact.dart';
 import '../models/identity.dart';
 import '../models/message.dart';
 import '../services/contact_directory.dart';
 import '../services/crypto_service.dart';
+import '../services/i18n.dart';
 import '../services/relay_service.dart';
 import '../services/storage_service.dart';
+import '../services/voice_message.dart' as voice;
 import '../src/rust/api.dart' as rust;
 import '../theme.dart';
 import '../widgets/cyber_card.dart';
@@ -37,6 +43,46 @@ class _ChatScreenState extends State<ChatScreen> {
   /// contact UI. Set by the listener whenever a `?<8hex>` message lands.
   String? _lastUnboundSenderLabel;
 
+  // ── Wave 11B — voice-recording state ────────────────────────────────
+  /// `record` audio recorder. One instance per chat screen; the package
+  /// is stateful (locks the mic device) so we explicitly dispose it.
+  final AudioRecorder _recorder = AudioRecorder();
+
+  /// True between `start` and `stop`. Drives the mic-button colour and
+  /// the elapsed-time ticker. Not the same as `_recorder.isRecording()`
+  /// — we mirror it as plain Dart state so `setState` rebuilds work
+  /// without an `await` round-trip.
+  bool _recording = false;
+
+  /// True when a press has crossed the cancel-threshold (drag-left). On
+  /// release the recording is stopped + discarded instead of sent.
+  bool _cancelArmed = false;
+
+  /// Wallclock at which the current recording started. Drives the
+  /// `m:ss` counter on the recording overlay and the upper 60-second
+  /// hard cap.
+  DateTime? _recordingStart;
+
+  /// Periodic timer that calls `setState` every 200ms while recording
+  /// so the elapsed-time counter ticks. Cancelled in `dispose` and on
+  /// stop.
+  Timer? _recordingTicker;
+
+  /// Hard cap. The `record` package doesn't expose a max-duration
+  /// callback so we enforce it Dart-side: when the elapsed time crosses
+  /// 60s the ticker auto-fires `_finishRecording(send: true)`.
+  static const Duration _maxRecordingDuration = Duration(seconds: 60);
+
+  /// Path on disk the recorder writes to. Keep a handle so we can
+  /// `File(path).readAsBytes()` post-stop, regardless of which codec the
+  /// platform negotiated.
+  String? _recordingPath;
+
+  /// Wire-level codec id for the recording in flight. Decided at
+  /// `start` based on platform / encoder availability and stamped into
+  /// the wire envelope on send.
+  int _recordingCodecId = voice.kCodecOpusOgg;
+
   @override
   void initState() {
     super.initState();
@@ -50,6 +96,12 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       switch (ev.kind) {
         case 'message':
+          _handleIncoming(ev.payload);
+          break;
+        case 'voice':
+          // Voice carries a `voice://...` reference in the `plaintext`
+          // slot — same routing as a plain text message, but the bubble
+          // renderer special-cases the prefix to draw a player.
           _handleIncoming(ev.payload);
           break;
         case 'system':
@@ -67,6 +119,9 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _relaySub?.cancel();
+    _recordingTicker?.cancel();
+    // Fire-and-forget — we're tearing down anyway.
+    unawaited(_recorder.dispose());
     _msgCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
@@ -208,6 +263,225 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           duration: Duration(seconds: 4),
         ),
+      );
+    }
+  }
+
+  // ── Wave 11B — voice recording / sending ────────────────────────────
+
+  /// Begin a press-and-hold recording. Asks for `RECORD_AUDIO` if not
+  /// yet granted, picks the best codec the device supports (opus-ogg →
+  /// AAC-m4a fallback), and starts the recorder. Spawns a 200ms ticker
+  /// that both rebuilds the elapsed-time counter and enforces the
+  /// 60-second hard cap.
+  Future<void> _startRecording() async {
+    if (_recording) return;
+    // 1. Permission. `permission_handler` gives us a uniform API across
+    //    Android (RECORD_AUDIO) and iOS (NSMicrophoneUsageDescription).
+    final status = await Permission.microphone.request();
+    if (!status.isGranted) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('! ${I18n.t('voice.permissionDenied')}')),
+      );
+      return;
+    }
+    // 2. Pick codec. `record` exposes `isEncoderSupported`; we prefer
+    //    opus-ogg (small, voice-tuned) and fall back to AAC if the
+    //    device's MediaCodec stack lacks an opus encoder. iOS hits the
+    //    fallback by default (AVAudioRecorder doesn't write ogg).
+    AudioEncoder encoder = AudioEncoder.opus;
+    String ext = 'ogg';
+    int codecId = voice.kCodecOpusOgg;
+    try {
+      final opusOk = await _recorder.isEncoderSupported(AudioEncoder.opus);
+      if (!opusOk) {
+        encoder = AudioEncoder.aacLc;
+        ext = 'm4a';
+        codecId = voice.kCodecAacM4a;
+      }
+    } catch (_) {
+      encoder = AudioEncoder.aacLc;
+      ext = 'm4a';
+      codecId = voice.kCodecAacM4a;
+    }
+    // 3. Output path. `getApplicationCacheDirectory()` is the standard
+    //    Android `cacheDir`; OS may evict under storage pressure but
+    //    we send + persist immediately so that's not a real risk.
+    final cacheDir = await voice.voiceCacheDir();
+    final outPath =
+        '${cacheDir.path}/tx_${DateTime.now().microsecondsSinceEpoch}.$ext';
+    // 4. Configure: 24 kbps mono — matches the desktop side's bitrate
+    //    target. `record` interprets `sampleRate` for AAC and ignores
+    //    it for opus (opus is bandwidth-adaptive based on `bitRate`).
+    final cfg = RecordConfig(
+      encoder: encoder,
+      bitRate: 24000,
+      sampleRate: 16000,
+      numChannels: 1,
+    );
+    try {
+      await _recorder.start(cfg, path: outPath);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('! REC FAIL: $e')),
+      );
+      return;
+    }
+    setState(() {
+      _recording = true;
+      _cancelArmed = false;
+      _recordingStart = DateTime.now();
+      _recordingPath = outPath;
+      _recordingCodecId = codecId;
+    });
+    HapticFeedback.lightImpact();
+    _recordingTicker = Timer.periodic(const Duration(milliseconds: 200), (_) {
+      if (!mounted || !_recording) return;
+      final elapsed =
+          DateTime.now().difference(_recordingStart ?? DateTime.now());
+      if (elapsed >= _maxRecordingDuration) {
+        // Hard cap — auto-stop and send.
+        unawaited(_finishRecording(send: true));
+      } else {
+        setState(() {});
+      }
+    });
+  }
+
+  /// Stop the recorder. Either ships the audio (if `send: true` and the
+  /// clip is non-trivial) or discards it. Always resets the recording
+  /// state so the mic button comes back.
+  Future<void> _finishRecording({required bool send}) async {
+    if (!_recording) return;
+    final ticker = _recordingTicker;
+    _recordingTicker = null;
+    ticker?.cancel();
+
+    final start = _recordingStart;
+    String? path;
+    try {
+      path = await _recorder.stop();
+    } catch (_) {
+      path = _recordingPath;
+    }
+    final elapsedMs = start == null
+        ? 0
+        : DateTime.now().difference(start).inMilliseconds;
+    final codecId = _recordingCodecId;
+
+    setState(() {
+      _recording = false;
+      _cancelArmed = false;
+      _recordingStart = null;
+    });
+
+    if (!send || _cancelArmed) {
+      // Fire-and-forget delete.
+      if (path != null) {
+        unawaited(_safeDelete(path));
+      }
+      return;
+    }
+    // Drop micro-clips ( <300ms ) — almost certainly accidental taps.
+    if (elapsedMs < 300 || path == null) {
+      if (path != null) {
+        unawaited(_safeDelete(path));
+      }
+      return;
+    }
+    await _sendVoice(path: path, durationMs: elapsedMs, codecId: codecId);
+  }
+
+  /// Best-effort delete of a recording-tmp file. Errors are swallowed —
+  /// the OS will eventually evict the cache anyway.
+  Future<void> _safeDelete(String path) async {
+    try {
+      await File(path).delete();
+    } catch (_) {}
+  }
+
+  /// Encode + ship one recorded clip. Reads the on-disk file, wraps it
+  /// in the `VOICE-1:` wire envelope, and hands it to `sendSealedV3` —
+  /// same path text messages use, just with binary plaintext bytes.
+  Future<void> _sendVoice({
+    required String path,
+    required int durationMs,
+    required int codecId,
+  }) async {
+    setState(() => _sending = true);
+    bool relayDelivered = false;
+    String wireFingerprint = '';
+    try {
+      final audio = await File(path).readAsBytes();
+      final wireEnv = voice.encodeVoiceWire(
+        codecId: codecId,
+        durationMs: durationMs,
+        audio: audio,
+      );
+      // Persist a local copy under the canonical voice cache path so the
+      // outgoing-bubble player can re-read it later. We move (rename)
+      // the recorder's tmp file rather than re-writing the bytes.
+      final ext = voice.extensionForCodec(codecId);
+      final filename = 'tx_${DateTime.now().microsecondsSinceEpoch}.$ext';
+      final canonical = '${(await voice.voiceCacheDir()).path}/$filename';
+      try {
+        await File(path).rename(canonical);
+      } catch (_) {
+        // Cross-fs rename can fail — copy + delete fallback.
+        await File(canonical).writeAsBytes(audio);
+        try {
+          await File(path).delete();
+        } catch (_) {}
+      }
+      // Hand the wire envelope to the sealed-sender layer.
+      final wire = await rust.sendSealedV3(
+        recipientAddress:
+            'phantom:${widget.contact.publicViewKey}:${widget.contact.publicSpendKey}',
+        plaintext: wireEnv,
+      );
+      wireFingerprint = wire
+          .take(32)
+          .map((b) => b.toRadixString(16).padLeft(2, '0'))
+          .join();
+      relayDelivered = await RelayService.instance.publish(wire);
+
+      // Build the "voice ref" stored in the message row.
+      final ref = 'voice://$codecId/$durationMs/$filename';
+      final msg = PhantomMessage(
+        id: _uuid.v4(),
+        contactId: widget.contact.id,
+        outgoing: true,
+        plaintext: ref,
+        ciphertext: wireFingerprint,
+        ephemeralKey: '',
+        nonce: '',
+        timestamp: DateTime.now(),
+        status: MessageStatus.sent,
+      );
+      await StorageService.addMessage(msg);
+      widget.contact.lastMessage = '[${I18n.t('voice.label')}]';
+      widget.contact.lastMessageAt = DateTime.now();
+      if (!mounted) return;
+      setState(() {
+        _messages.add(msg);
+        _sending = false;
+      });
+      _scrollToBottom();
+      if (!relayDelivered) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('! VOICE NOT YET DELIVERED — NO RELAY ACK'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _sending = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('! VOICE SEND FAIL: $e')),
       );
     }
   }
@@ -407,6 +681,12 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Press-origin captured on `onPointerDown` so `onPointerMove` can
+  /// compute drag-left distance. Lives at the State level (not as a
+  /// closure variable in `_buildMicButton`) so the value survives the
+  /// rebuild that flips `_recording` true.
+  Offset? _pressStart;
+
   Widget _buildInput() {
     return Container(
       padding: EdgeInsets.only(
@@ -417,67 +697,186 @@ class _ChatScreenState extends State<ChatScreen> {
         color: kBgCard,
         border: Border(top: BorderSide(color: kCyan.withValues(alpha: 0.12))),
       ),
+      // Stack lets us swap the textfield/recording-overlay without
+      // rebuilding the mic-button Listener — the pointer event chain
+      // started on press must keep pointing at the same Listener
+      // instance for `onPointerUp` to fire as expected.
       child: Row(
         children: [
-          // Encrypt indicator
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            decoration: BoxDecoration(
-              border: Border.all(color: kGreen.withValues(alpha: 0.4)),
-              color: kGreen.withValues(alpha: 0.06),
-            ),
-            child: const Icon(Icons.lock_outline, color: kGreen, size: 14),
-          ),
-          const SizedBox(width: 10),
           Expanded(
-            child: TextField(
-              controller: _msgCtrl,
-              style: GoogleFonts.spaceGrotesk(color: kWhite, fontSize: 15),
-              decoration: InputDecoration(
-                hintText: '> TYPE MESSAGE...',
-                hintStyle: GoogleFonts.spaceMono(color: kGrayText, fontSize: 12),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(4),
-                  borderSide: BorderSide(color: kGray.withValues(alpha: 0.5)),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(4),
-                  borderSide: BorderSide(color: kGray.withValues(alpha: 0.4)),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(4),
-                  borderSide: const BorderSide(color: kCyan, width: 1.5),
-                ),
-                filled: true,
-                fillColor: kBgInput,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              ),
-              onSubmitted: (_) => _send(),
-              textInputAction: TextInputAction.send,
-              maxLines: null,
-            ),
+            child: _recording ? _buildRecordingBar() : _buildTextBar(),
           ),
           const SizedBox(width: 10),
-          GestureDetector(
-            onTap: _send,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              width: 44, height: 44,
-              decoration: BoxDecoration(
-                border: Border.all(color: _sending ? kGray : kCyan, width: 1.5),
-                color: _sending ? kBgCard : kCyanDim,
-                boxShadow: _sending ? null : neonGlow(kCyan, radius: 8),
-              ),
-              child: _sending
-                  ? const Padding(
-                      padding: EdgeInsets.all(12),
-                      child: CircularProgressIndicator(strokeWidth: 1.5, color: kCyan),
-                    )
-                  : const Icon(Icons.send_rounded, color: kCyan, size: 18),
-            ),
-          ),
+          if (!_recording &&
+              _msgCtrl.text.trim().isNotEmpty)
+            _buildSendButton()
+          else
+            _buildMicButton(),
         ],
       ),
+    );
+  }
+
+  /// Default chat-input row (text field + lock indicator). The
+  /// mic/send button is rendered separately by `_buildInput` so its
+  /// `Listener` survives the textbar↔recordingbar swap.
+  Widget _buildTextBar() {
+    return Row(
+      children: [
+        // Encrypt indicator
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          decoration: BoxDecoration(
+            border: Border.all(color: kGreen.withValues(alpha: 0.4)),
+            color: kGreen.withValues(alpha: 0.06),
+          ),
+          child: const Icon(Icons.lock_outline, color: kGreen, size: 14),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: TextField(
+            controller: _msgCtrl,
+            style: GoogleFonts.spaceGrotesk(color: kWhite, fontSize: 15),
+            // Trigger a rebuild on each keystroke so the mic↔send swap
+            // stays in sync with the field's emptiness state.
+            onChanged: (_) => setState(() {}),
+            decoration: InputDecoration(
+              hintText: '> TYPE MESSAGE...',
+              hintStyle: GoogleFonts.spaceMono(color: kGrayText, fontSize: 12),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(4),
+                borderSide: BorderSide(color: kGray.withValues(alpha: 0.5)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(4),
+                borderSide: BorderSide(color: kGray.withValues(alpha: 0.4)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(4),
+                borderSide: const BorderSide(color: kCyan, width: 1.5),
+              ),
+              filled: true,
+              fillColor: kBgInput,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            ),
+            onSubmitted: (_) => _send(),
+            textInputAction: TextInputAction.send,
+            maxLines: null,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSendButton() {
+    return GestureDetector(
+      onTap: _send,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        width: 44, height: 44,
+        decoration: BoxDecoration(
+          border: Border.all(color: _sending ? kGray : kCyan, width: 1.5),
+          color: _sending ? kBgCard : kCyanDim,
+          boxShadow: _sending ? null : neonGlow(kCyan, radius: 8),
+        ),
+        child: _sending
+            ? const Padding(
+                padding: EdgeInsets.all(12),
+                child: CircularProgressIndicator(strokeWidth: 1.5, color: kCyan),
+              )
+            : const Icon(Icons.send_rounded, color: kCyan, size: 18),
+      ),
+    );
+  }
+
+  /// Press-and-hold mic. `Listener` (not `GestureDetector`) gives us
+  /// `onPointerDown`/`onPointerUp`/`onPointerMove` raw events — robust
+  /// against scroll-like gestures that would steal focus from a long
+  /// press detector. We arm a "cancel" zone if the user drags more
+  /// than 60px to the left of the press origin (familiar
+  /// WhatsApp-style gesture). Stored on State so the value survives
+  /// the rebuild that flips `_recording` true.
+  Widget _buildMicButton() {
+    final activeColor = _recording
+        ? (_cancelArmed ? kMagenta : kRed)
+        : kMagenta;
+    return Listener(
+      onPointerDown: (e) {
+        _pressStart = e.position;
+        unawaited(_startRecording());
+      },
+      onPointerMove: (e) {
+        if (!_recording || _pressStart == null) return;
+        final dx = e.position.dx - _pressStart!.dx;
+        final shouldCancel = dx < -60;
+        if (shouldCancel != _cancelArmed) {
+          setState(() => _cancelArmed = shouldCancel);
+        }
+      },
+      onPointerUp: (_) {
+        _pressStart = null;
+        unawaited(_finishRecording(send: !_cancelArmed));
+      },
+      onPointerCancel: (_) {
+        _pressStart = null;
+        unawaited(_finishRecording(send: false));
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        width: 44, height: 44,
+        decoration: BoxDecoration(
+          border: Border.all(color: activeColor, width: 1.5),
+          color: activeColor.withValues(alpha: 0.12),
+          boxShadow: neonGlow(activeColor, radius: _recording ? 10 : 6),
+        ),
+        child: Tooltip(
+          message: I18n.t('voice.pressToRecord'),
+          child: Icon(
+            _recording ? Icons.fiber_manual_record : Icons.mic,
+            color: activeColor,
+            size: _recording ? 16 : 20,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Active-recording overlay shown in place of the text field. The
+  /// mic-button itself is rendered by `_buildInput`, outside this
+  /// widget, so pointer events stay attached to the same Listener
+  /// across the textbar↔recordingbar swap.
+  Widget _buildRecordingBar() {
+    final start = _recordingStart;
+    final elapsedMs =
+        start == null ? 0 : DateTime.now().difference(start).inMilliseconds;
+    final cancelHint = _cancelArmed
+        ? I18n.t('voice.slideToCancel')
+        : I18n.t('voice.releaseToSend');
+    return Row(
+      children: [
+        const _RecordingDot(),
+        const SizedBox(width: 10),
+        Text(
+          voice.formatDurationMs(elapsedMs),
+          style: GoogleFonts.spaceMono(
+            color: _cancelArmed ? kMagenta : kRed,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            cancelHint,
+            overflow: TextOverflow.ellipsis,
+            style: GoogleFonts.spaceMono(
+              color: kGrayText,
+              fontSize: 11,
+              letterSpacing: 1,
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -542,6 +941,11 @@ class _MsgBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isOut = message.outgoing;
+    // Detect a voice-message reference (`voice://<codec>/<ms>/<file>`)
+    // stored in the plaintext slot. On a hit, swap the text body for a
+    // play-button + duration. Long-press copies the wire ref so a
+    // future debug "play in external app" can hook in without UI work.
+    final voiceRef = voice.parseVoiceRef(message.plaintext);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Align(
@@ -563,14 +967,17 @@ class _MsgBubble extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.end,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      message.plaintext,
-                      style: GoogleFonts.spaceGrotesk(
-                        fontSize: 14,
-                        color: isOut ? kBg : kWhite,
-                        height: 1.4,
+                    if (voiceRef != null)
+                      _VoiceBubbleBody(ref: voiceRef, isOut: isOut)
+                    else
+                      Text(
+                        message.plaintext,
+                        style: GoogleFonts.spaceGrotesk(
+                          fontSize: 14,
+                          color: isOut ? kBg : kWhite,
+                          height: 1.4,
+                        ),
                       ),
-                    ),
                     const SizedBox(height: 4),
                     Row(
                       mainAxisSize: MainAxisSize.min,
@@ -600,6 +1007,200 @@ class _MsgBubble extends StatelessWidget {
 
   String _fmt(DateTime dt) =>
       '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+}
+
+/// Inline play-button + duration + progress bar for a voice message.
+/// Owns its own [AudioPlayer] so two clips can play independently
+/// (tap A, tap B → A pauses automatically because each player holds the
+/// same OS audio focus, but the UI state stays per-row).
+class _VoiceBubbleBody extends StatefulWidget {
+  final voice.VoiceRef ref;
+  final bool isOut;
+  const _VoiceBubbleBody({required this.ref, required this.isOut});
+
+  @override
+  State<_VoiceBubbleBody> createState() => _VoiceBubbleBodyState();
+}
+
+class _VoiceBubbleBodyState extends State<_VoiceBubbleBody> {
+  final AudioPlayer _player = AudioPlayer();
+  bool _playing = false;
+  Duration _position = Duration.zero;
+  StreamSubscription<Duration>? _posSub;
+  StreamSubscription<void>? _completeSub;
+  StreamSubscription<PlayerState>? _stateSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _posSub = _player.onPositionChanged.listen((p) {
+      if (!mounted) return;
+      setState(() => _position = p);
+    });
+    _completeSub = _player.onPlayerComplete.listen((_) {
+      if (!mounted) return;
+      setState(() {
+        _playing = false;
+        _position = Duration.zero;
+      });
+    });
+    _stateSub = _player.onPlayerStateChanged.listen((s) {
+      if (!mounted) return;
+      setState(() => _playing = s == PlayerState.playing);
+    });
+  }
+
+  @override
+  void dispose() {
+    _posSub?.cancel();
+    _completeSub?.cancel();
+    _stateSub?.cancel();
+    unawaited(_player.dispose());
+    super.dispose();
+  }
+
+  Future<void> _togglePlay() async {
+    if (_playing) {
+      await _player.pause();
+      return;
+    }
+    final path = await widget.ref.resolvePath();
+    final f = File(path);
+    if (!await f.exists()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('! ${I18n.t('voice.unavailable')}')),
+      );
+      return;
+    }
+    try {
+      await _player.play(DeviceFileSource(path));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('! PLAY FAIL: $e')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isOut = widget.isOut;
+    final fg = isOut ? kBg : kCyan;
+    final secondary = isOut ? kBg.withValues(alpha: 0.7) : kGrayText;
+    final totalMs = widget.ref.durationMs;
+    final progress = totalMs <= 0
+        ? 0.0
+        : (_position.inMilliseconds / totalMs).clamp(0.0, 1.0);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        GestureDetector(
+          onTap: _togglePlay,
+          child: Container(
+            width: 32, height: 32,
+            decoration: BoxDecoration(
+              border: Border.all(color: fg.withValues(alpha: 0.6), width: 1.2),
+              shape: BoxShape.circle,
+              color: fg.withValues(alpha: 0.12),
+            ),
+            child: Icon(
+              _playing ? Icons.pause : Icons.play_arrow,
+              size: 18,
+              color: fg,
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              I18n.t('voice.label'),
+              style: GoogleFonts.orbitron(
+                fontSize: 9,
+                color: fg,
+                letterSpacing: 1.2,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 4),
+            // Linear progress bar — fixed-width so it doesn't reflow
+            // the bubble as the position changes.
+            SizedBox(
+              width: 120,
+              child: LinearProgressIndicator(
+                value: progress,
+                minHeight: 3,
+                backgroundColor: secondary.withValues(alpha: 0.25),
+                valueColor: AlwaysStoppedAnimation(fg),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _playing
+                  ? voice.formatDurationMs(_position.inMilliseconds)
+                  : '${voice.formatDurationMs(totalMs)} · ${I18n.t('voice.tapToPlay')}',
+              style: GoogleFonts.spaceMono(
+                fontSize: 9,
+                color: secondary,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// Pulsing red dot used in the recording-overlay bar. Self-contained
+/// `AnimationController` so it doesn't hold any State references and
+/// can mount/unmount with the input-row swap.
+class _RecordingDot extends StatefulWidget {
+  const _RecordingDot();
+  @override
+  State<_RecordingDot> createState() => _RecordingDotState();
+}
+
+class _RecordingDotState extends State<_RecordingDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (ctx, _) => Container(
+        width: 12, height: 12,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: kRed.withValues(alpha: 0.4 + 0.6 * _ctrl.value),
+          boxShadow: [
+            BoxShadow(
+              color: kRed.withValues(alpha: 0.6 * _ctrl.value),
+              blurRadius: 8,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _BubblePainter extends CustomPainter {

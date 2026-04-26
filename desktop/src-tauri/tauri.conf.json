@@ -31,7 +31,9 @@
         "enable": true,
         "scope": [
           "$DOWNLOAD/PhantomChat/**",
-          "$HOME/Downloads/PhantomChat/**"
+          "$HOME/Downloads/PhantomChat/**",
+          "$APPDATA/voice/**",
+          "$APPLOCALDATA/voice/**"
         ]
       }
     }

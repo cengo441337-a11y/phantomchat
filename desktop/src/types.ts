@@ -30,12 +30,19 @@ export interface IncomingMessage {
   /// frontend tags outgoing/system rows itself before calling save_history.
   /// Optional because the backend defaults it via serde when absent.
   direction?: "incoming" | "outgoing" | "system";
-  /// Row kind. `"text"` (default for backwards-compat) or `"file"`. The
-  /// `file_meta` field is populated iff `kind === "file"`.
-  kind?: "text" | "file";
+  /// Row kind. `"text"` (default for backwards-compat), `"file"`, or
+  /// `"voice"` (Wave 11B). The corresponding `file_meta` / `voice_meta`
+  /// field is populated iff `kind` matches.
+  kind?: "text" | "file" | "voice";
   /// File-row metadata. Only present for `kind === "file"` rows; mirrored
   /// 1:1 with the Rust `FileMeta` struct.
   file_meta?: FileMeta;
+  /// Voice-row metadata. Only present for `kind === "voice"` rows
+  /// (Wave 11B); mirrored 1:1 with the Rust `VoiceMeta` struct. Carries
+  /// codec hint + duration_ms + on-disk path so the `<VoiceMessageBubble>`
+  /// can render a duration label and feed the path through
+  /// `convertFileSrc` for the `<audio>` element.
+  voice_meta?: VoiceMeta;
   /// Stable per-message identifier used by the receipt path. Computed by
   /// the backend (sha256 over timestamp + plaintext, truncated to 16 hex).
   /// Present on outgoing rows (sender stamps it before send) and on
@@ -100,11 +107,14 @@ export interface MsgLine {
   /// Hex-encoded Ed25519 sender pubkey, present for incoming sealed-sender
   /// rows. Used for the "bind unknown sender" flow.
   sender_pub_hex?: string | null;
-  /// `"text"` (default — plain chat row) or `"file"` (📎 attachment row).
-  /// Optional so old persisted rows still round-trip cleanly.
-  row_kind?: "text" | "file";
+  /// `"text"` (default — plain chat row), `"file"` (📎 attachment row),
+  /// or `"voice"` (Wave 11B 🎙️ recording row). Optional so old persisted
+  /// rows still round-trip cleanly.
+  row_kind?: "text" | "file" | "voice";
   /// Populated for `row_kind === "file"` rows.
   file_meta?: FileMeta;
+  /// Populated for `row_kind === "voice"` rows.
+  voice_meta?: VoiceMeta;
   /// Stable per-message identifier (16 hex chars). Stamped on outgoing
   /// rows by the backend at send time and on incoming rows at decode
   /// time so receipts can match back to their originating row.
@@ -148,6 +158,26 @@ export interface FileMeta {
   /// inline-image-vs-📎-link branch in `MessageStream.tsx`. Optional —
   /// legacy persisted rows pre-feature don't carry it.
   mime?: string;
+}
+
+/// Per-voice-message metadata. Mirrors the Rust `VoiceMeta` struct
+/// (Wave 11B). The desktop saves the audio bytes under
+/// `<app_data>/voice/<msg_id>.<ext>` and emits this struct inline on the
+/// `IncomingMessage` so the `<VoiceMessageBubble>` can render duration
+/// + feed the path through `convertFileSrc`.
+export interface VoiceMeta {
+  /// Container hint copied from the wire `codec_id`. `"opus"` (`.ogg`)
+  /// or `"aac"` (`.m4a`). Both are HTML5 `<audio>`-decodable on every
+  /// Tauri-supported platform without an extra Rust dep.
+  codec: "opus" | "aac" | string;
+  /// Duration of the recording in milliseconds. Set by the SENDER so the
+  /// receiver can render `0:12` immediately, before the `<audio>`
+  /// element's `loadedmetadata` event fires.
+  duration_ms: number;
+  /// Absolute filesystem path the desktop saved the audio bytes to.
+  /// Pipe through `@tauri-apps/api/core::convertFileSrc` to get a
+  /// `tauri://` URL the `<audio>` element can fetch.
+  path: string;
 }
 
 /// Backend `file_received` event payload. Mirrors the Rust struct of the

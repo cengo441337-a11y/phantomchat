@@ -13,6 +13,12 @@
          so the relay/connection-keeper survives Doze on Xiaomi/Huawei/Samsung. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Wave 11B: voice messages — recording on the chat screen. The
+         `record` plugin uses MediaRecorder (or MediaCodec for opus) which
+         requires this runtime permission on API 23+. We request it
+         lazily on first mic press, not at install time. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <!-- Wave 8B: background relay-listener foreground service -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

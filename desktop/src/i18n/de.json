@@ -486,7 +486,15 @@
     "send_button": "Senden",
     "sealing_button": "Wird versiegelt…",
     "file_picker_title": "Datei an {{label}} senden",
-    "typing_pill": "{{label}} schreibt…"
+    "typing_pill": "{{label}} schreibt…",
+    "mic_coming_soon": "Sprachaufnahme am Desktop — bald verfügbar. (Aktuell nimmt nur die Mobile-App auf; der Desktop spielt nur ab.)",
+    "mic_aria": "Sprachnachricht aufnehmen (bald verfügbar)"
+  },
+  "voice": {
+    "voice_message": "Sprachnachricht",
+    "play": "Abspielen",
+    "pause": "Pause",
+    "load_error": "Audio konnte nicht geladen werden"
   },
   "status_footer": {
     "connected": "verbunden",

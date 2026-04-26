@@ -30,6 +30,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../src/rust/api.dart' as rust;
 import 'contact_directory.dart';
+import 'voice_message.dart' as voice;
 
 /// 8-byte ASCII tag prefixed to v1 MLS Welcome bytes. Carries no inviter
 /// metadata; joiner displays inviter as `?<8hex>` until they reply
@@ -176,6 +177,19 @@ class RelayService {
       if (_eq(prefix, kFilePrefixV1)) {
         _handleFileV1(
           plaintext.sublist(kFilePrefixV1.length),
+          senderPubHex,
+          sigOk,
+        );
+        return;
+      }
+      // Wave 11B — voice-message prefix (8 bytes: `VOICE-1:`). Decode
+      // the binary body via `voice.decodeVoiceBody`, persist the audio
+      // to the cache dir, and surface a `voice` event upstream. The
+      // body is intentionally NOT re-encoded as text — handing it to
+      // `utf8.decode` would either lose bytes (allowMalformed) or throw.
+      if (_eq(prefix, voice.kVoicePrefixV1)) {
+        await _handleVoiceV1(
+          plaintext.sublist(voice.kVoicePrefixV1.length),
           senderPubHex,
           sigOk,
         );
@@ -366,6 +380,54 @@ class RelayService {
           'File received from $fromHint: $filename (${_humanSize(size)}) — file transfer not yet supported on mobile, switch to Desktop.',
       'timestamp': _now(),
       'senderLabel': fromHint,
+    }));
+  }
+
+  /// Wave 11B — handler for inbound `VOICE-1:` envelopes. Parses the
+  /// little-endian header, persists the audio bytes to the voice cache
+  /// dir under a uuid-named file, and emits a `voice` [RelayEvent] with
+  /// a `voice://<codec>/<duration_ms>/<filename>` reference string in
+  /// the `plaintext` slot so the chat row can render it without
+  /// model-layer changes.
+  ///
+  /// Failure modes (all silent, with an error event):
+  ///   * malformed wire header → `error`
+  ///   * disk-write failure    → `error`
+  Future<void> _handleVoiceV1(
+    Uint8List body,
+    String? senderPubHex,
+    bool sigOk,
+  ) async {
+    final decoded = voice.decodeVoiceBody(body);
+    if (decoded == null) {
+      _controller.add(RelayEvent('error', {
+        'detail': 'voice: malformed wire body (len=${body.length})',
+      }));
+      return;
+    }
+    final ext = voice.extensionForCodec(decoded.codecId);
+    final filename =
+        'rx_${DateTime.now().microsecondsSinceEpoch}_${senderPubHex?.substring(0, 8.clamp(0, senderPubHex.length)) ?? "anon"}.$ext';
+    final ref = await voice.persistVoiceClip(
+      codecId: decoded.codecId,
+      durationMs: decoded.durationMs,
+      audio: decoded.audio,
+      filename: filename,
+    );
+    final senderLabel = await _resolveSenderLabel(senderPubHex, sigOk);
+    _controller.add(RelayEvent('voice', {
+      // Reuse the `plaintext` slot for parity with the plain-text path
+      // — chat.dart's `_handleIncoming` already pulls `plaintext` and
+      // hands it to a setState; keeping the key name avoids a parallel
+      // listener.
+      'plaintext': ref,
+      'codecId': decoded.codecId,
+      'durationMs': decoded.durationMs,
+      'timestamp': _now(),
+      'senderLabel': senderLabel.label,
+      'sigOk': sigOk,
+      'senderPubHex': senderPubHex,
+      'isUnbound': senderLabel.isUnbound,
     }));
   }
 

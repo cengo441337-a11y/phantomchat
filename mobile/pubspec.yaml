@@ -32,6 +32,14 @@ dependencies:
   # On Xiaomi/Huawei/OnePlus/Samsung this keeps the relay/connection-keeper
   # alive across Doze; without it the OEM kills the process within minutes.
   disable_battery_optimization: ^1.1.1
+  # Wave 11B — voice messages.
+  # `record` 5.x writes opus-in-ogg natively on Android (uses MediaCodec
+  # OPUS encoder, packaged in OGG). iOS falls back to AAC-in-m4a — the
+  # wire-protocol codec_id byte tells the receiver which container to
+  # hand to the playback stack. See `lib/services/voice_message.dart`.
+  record: ^5.1.2
+  audioplayers: ^6.1.0
+  permission_handler: ^11.3.1
 
 dev_dependencies:
   flutter_test:

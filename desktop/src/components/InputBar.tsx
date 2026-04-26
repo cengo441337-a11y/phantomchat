@@ -307,6 +307,22 @@ export default function InputBar({
         {"\u{1F4CE}"}
       </button>
 
+      {/* Wave 11B — voice-record affordance placeholder. Disabled
+          (recording on the desktop is a Wave 11B-extension; for v1 only
+          the mobile side records, the desktop only PLAYS BACK incoming
+          voice messages). The button is here so the UI affordance is
+          discoverable and so the eventual record path has a visual
+          anchor to attach to. */}
+      <button
+        type="button"
+        disabled
+        className="text-cyber-cyan/40 disabled:opacity-40 cursor-not-allowed text-lg leading-none px-1"
+        title={t("input_bar.mic_coming_soon")}
+        aria-label={t("input_bar.mic_aria")}
+      >
+        {"\u{1F399}"}
+      </button>
+
       <span className="text-neon-magenta font-bold pc-brand-glow-magenta">»</span>
       {/* Wrap input so we can overlay a blinking cursor glyph at the
           end of the typed text without losing the native caret. The
