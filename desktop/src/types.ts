@@ -47,6 +47,32 @@ export interface IncomingMessage {
   ///   "read"      -> double cyber-cyan check
   /// Only meaningful on outgoing rows; incoming rows leave it undefined.
   delivery_state?: "sent" | "delivered" | "read";
+  /// Reply-thread metadata, populated when this row was sent via the
+  /// REPL-1: envelope. The MessageStream renders an inline magenta
+  /// "↪ <quoted_preview>" header that scrolls to the quoted row on click.
+  reply_to?: ReplyMeta;
+  /// Accumulated reactions for this row. Mutated in-place by the
+  /// `reaction_updated` event so the UI can group + count emoji pills.
+  reactions?: ReactionEntry[];
+  /// Unix-epoch second after which this row should be hidden + dropped
+  /// from on-disk history by the auto-purge sweep. Both endpoints stamp
+  /// independently from their local TTL setting at send/receive time.
+  expires_at?: number;
+}
+
+/// Per-message reply metadata mirrored from the Rust `ReplyMeta` struct.
+/// `quoted_preview` is the first ~80 chars of the quoted message body so
+/// the recipient can render the quote block without a history lookup.
+export interface ReplyMeta {
+  in_reply_to_msg_id: string;
+  quoted_preview: string;
+}
+
+/// One emoji-reaction entry on a message row. Aggregated client-side
+/// from the `RACT-1:` event stream.
+export interface ReactionEntry {
+  sender_label: string;
+  emoji: string;
 }
 
 export type MsgKind = "incoming" | "outgoing" | "system";
@@ -80,6 +106,17 @@ export interface MsgLine {
   /// this monotonically as `receipt` events arrive (sent → delivered →
   /// read). Undefined / absent on incoming + system rows.
   delivery_state?: "sent" | "delivered" | "read";
+  /// Reply-thread metadata. Populated for rows that quote an earlier
+  /// message; the stream renders the quote block above the body and
+  /// scrolls-to-quoted on click.
+  reply_to?: ReplyMeta;
+  /// Per-row aggregated emoji reactions. Mutated by the
+  /// `reaction_updated` event listener.
+  reactions?: ReactionEntry[];
+  /// Unix-epoch-second deadline for disappearing-messages auto-purge.
+  /// Rows past this deadline are hidden in the UI and removed by the
+  /// 60s backend purge sweep.
+  expires_at?: number;
 }
 
 /// Per-file metadata. Mirrors the Rust `FileMeta` struct.
@@ -319,6 +356,34 @@ export interface UpdateInfo {
   release_notes?: string | null;
 }
 
+// ── Reply / reactions / disappearing-messages event payloads ────────────────
+//
+// All three are emitted by the Rust listener path that decodes the matching
+// `REPL-1:` / `RACT-1:` / `DISA-1:` envelope. The reply event reuses the
+// existing `message` channel (with `reply_to` populated) so React's reducer
+// stays the same. The other two get dedicated channels.
+
+/// Emitted on `reaction_updated` after the backend mutates a target row's
+/// reactions array. `reactions` is the FULL post-update list so the React
+/// reducer can patch in place without merging.
+export interface ReactionUpdatedEvent {
+  target_msg_id: string;
+  reactions: ReactionEntry[];
+}
+
+/// Emitted on `messages_purged` by the 60s auto-purge sweep. `msg_ids`
+/// is the list of rows the sweep removed from `messages.json` so the
+/// React state can drop them in lockstep.
+export interface MessagesPurgedEvent {
+  msg_ids: string[];
+}
+
+/// Emitted on `disappearing_ttl_changed` whenever a peer's `DISA-1:`
+/// envelope decodes (or our own `set_disappearing_ttl` succeeds locally).
+/// `ttl_secs == null` disables auto-purge for the conversation.
+export interface DisappearingTtlChangedEvent {
+  contact_label: string;
+  ttl_secs: number | null;
 // ── Encrypted backup / restore (Wave 8c, compliance Aufbewahrungspflicht) ────
 //
 // Mirror the three Rust DTOs returned by `export_backup` / `verify_backup`
