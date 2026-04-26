@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'services/background_service_config.dart';
 import 'services/storage_service.dart';
 import 'screens/onboarding.dart';
 import 'screens/home.dart';
@@ -39,6 +40,9 @@ void main() async {
 
   final hasIdentity = await StorageService.hasIdentity();
   final rust = await _bootRust();
+  // Wave 8B — register the background relay-listener config (does not
+  // start the service; that requires explicit opt-in in Settings).
+  await PhantomBackgroundService.initialize();
 
   runApp(PhantomApp(hasIdentity: hasIdentity, rust: rust));
 }
