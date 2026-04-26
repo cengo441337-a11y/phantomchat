@@ -267,6 +267,48 @@ export interface AuditEntry {
   details: Record<string, unknown>;
 }
 
+// ── Crash reporting (Diagnostics) ────────────────────────────────────────────
+//
+// Mirrors the Rust `CrashReport` struct. Each row is one captured panic:
+// timestamp, app version, OS, the panic's first-line message + source
+// location, and the captured backtrace. `user_dispatched` flips to `true`
+// after a successful POST via `dispatch_crash_report` so the UI can render
+// "already sent" instead of offering a re-send.
+export interface CrashReport {
+  ts: string;
+  version: string;
+  os: string;
+  panic_msg: string;
+  location: string;
+  backtrace: string;
+  user_dispatched?: boolean;
+// ── LAN org (mDNS zero-touch discovery) ─────────────────────────────────────
+//
+// Mirrors the Rust `LanOrgStatus` + `DiscoveredPeer` structs. The shared-
+// secret "org code" is the only authentication for mDNS-discovered peers;
+// they're auto-added as 1:1 contacts but NOT as MLS group members.
+
+/// Returned by `lan_org_status`. `active` is true iff a `ServiceDaemon` is
+/// running; `code` is the user-shareable 6-char `XXX-XXX` string;
+/// `peer_count` is the deduplicated discovered-peer count;
+/// `last_discovery_ts` is the unix-epoch-seconds string of the most-recent
+/// resolve (or null if we've broadcast but never seen a peer).
+export interface LanOrgStatus {
+  active: boolean;
+  code?: string | null;
+  peer_count: number;
+  last_discovery_ts?: string | null;
+}
+
+/// Pushed by the `lan_peer_discovered` event whenever the browse task
+/// resolves a never-before-seen peer with a matching org code.
+export interface DiscoveredPeer {
+  label: string;
+  address: string;
+  signing_pub_hex: string;
+  last_seen: number;
+}
+
 // ── Auto-updater wire types ──────────────────────────────────────────────────
 //
 // Mirrors the Rust `UpdateInfo` struct from the `check_for_updates` /
@@ -275,4 +317,31 @@ export interface UpdateInfo {
   available: boolean;
   version?: string | null;
   release_notes?: string | null;
+}
+
+// ── Encrypted backup / restore (Wave 8c, compliance Aufbewahrungspflicht) ────
+//
+// Mirror the three Rust DTOs returned by `export_backup` / `verify_backup`
+// / `import_backup`. Used by the Backup section of SettingsPanel to render
+// the success toast (sha256 + path), the pre-restore provenance preview,
+// and the post-restore item count.
+
+export interface BackupResult {
+  path: string;
+  size_bytes: number;
+  sha256_hex: string;
+  item_count: number;
+}
+
+export interface BackupMeta {
+  version: number;
+  created_at: string;
+  item_count: number;
+  host_label: string;
+}
+
+export interface RestoreResult {
+  items_restored: number;
+  identity_replaced: boolean;
+  requires_restart: boolean;
 }

@@ -309,6 +309,9 @@ PhantomChat verteidigt gegen:
 | Quantencomputer (Shor) | ML-KEM-1024 Hybrid — beide Seiten müssen gleichzeitig brechen |
 | Spam / Sybil-Angriffe | Hashcash PoW |
 | Gerätekompromittierung | SQLCipher · Panic Wipe · PIN/Biometrie (geplant) |
+| Filesystem-Diebstahl (gestohlenes Notebook) | OS-Keystore (DPAPI / Keychain / libsecret) statt Plaintext-`keys.json` — siehe [`desktop/README.md` § Key storage](desktop/README.md#key-storage-wave-8h--os-secure-keystore) |
+| Memory-Dump (`gcore`, Hibernation-File) | `Zeroize`/`ZeroizeOnDrop` auf allen privaten Schlüsseltypen, `Zeroizing<Vec<u8>>` auf transienten Plaintext-Buffern |
+| Forensische Recovery nach „Wipe All Data" | Pre-Delete Zero-Overwrite + `fsync` + Truncate für jede Datei ≤ 100 MiB im app-data-dir |
 
 Vollständige Dokumentation: [docs/SECURITY.md](docs/SECURITY.md)
 
@@ -357,6 +360,29 @@ phantomchat/
 | Core für Browser | `RUSTFLAGS='--cfg getrandom_backend="wasm_js"' cargo build -p phantomchat_core --no-default-features --features wasm --target wasm32-unknown-unknown` | Dann `wasm-bindgen --target web --out-dir pkg` |
 | Flutter Mobile | `cd mobile && flutter pub get && flutter run` | Nach FFI-Regen: `flutter_rust_bridge_codegen generate` |
 | Dauer-Listener (systemd) | `infra/systemd/phantom-listener.service` | Startet nach `tor.service` |
+
+---
+
+## Self-Hosted Relay
+
+Public relays (Damus, nos.lol, snort.social) are fine for most users —
+PhantomChat envelopes look indistinguishable from cover-traffic at the
+relay layer, so even a fully malicious operator learns nothing about
+content or recipients.
+
+Organisations with hard data-sovereignty requirements (Kanzleien,
+Steuerberater, Behörden) can run their own Nostr relay so that even the
+TCP-layer metadata never leaves infrastructure they control. The
+walkthrough — `strfry` on Docker, nginx + Let's Encrypt in front,
+PhantomChat client config, ops notes (backup, compaction, monitoring,
+log retention) — lives at:
+
+[**docs/RELAY-SELFHOSTING.md**](docs/RELAY-SELFHOSTING.md)
+
+Quick teaser: ~30 minutes from a fresh VM to a working
+`wss://relay.your-org.de`. The same doc also covers pointing the
+(opt-in) crash-report uploader at your own collector endpoint instead of
+`updates.dc-infosec.de`.
 
 ---
 
