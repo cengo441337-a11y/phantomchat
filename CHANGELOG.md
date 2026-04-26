@@ -5,6 +5,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [3.0.3 / mobile 1.0.4] — 2026-04-26 — Updater UX + PIN-confirm hang fix
+
+### Desktop 3.0.3
+- **Header `↻ updates` button** — surfaces every state of the manual
+  update check (idle / checking / up-to-date / available / install
+  failed). The cold-start probe still runs silently in the background;
+  the new button is what users hit when "is the updater even working?".
+  Hovering the error state shows the backend error string in the tooltip
+  so a misconfigured endpoint or unreachable update server is immediately
+  diagnosable from the UI.
+- Tauri version bump 3.0.2 → 3.0.3.
+
+### Mobile 1.0.4
+- **PIN-confirm hang fix.** PBKDF2 dropped 600k → 50k iterations. The
+  hash already lives in Android Keystore / iOS Keychain (hardware-backed
+  where available) so the iter count is the second line of defence; on
+  emulator-class hardware where pure-Dart PBKDF2 dominates, 600k = 6-15 s
+  of frozen "Securing PIN…", 50k = sub-second. `cryptography_flutter`
+  added so Flutter's plugin auto-registration installs the native
+  (Android Keystore / iOS CommonCrypto) KDF as the default. Per-hash
+  iter count persisted in `_kPinIters`, so existing 600k-era PINs
+  still verify correctly after the iter-count drop.
+- `pbkdf2_timing_test.dart` benchmarks all three iter counts (50k /
+  100k / 600k) in a real isolate to catch future regressions.
+- pubspec 1.0.3+4 → 1.0.4+5.
+
+### Build / Release
+- Both shipped to `https://updates.dc-infosec.de/` — manifests,
+  SHA-256, and minisign signatures all verified end-to-end against the
+  pubkey pinned in `tauri.conf.json`.
+
+---
+
 ## [3.0.2] — 2026-04-26 — Security audit fixes
 
 ### Critical
