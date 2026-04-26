@@ -9,14 +9,11 @@ import type {
   Contact,
   ConversationState,
   ConversationStateChangedEvent,
-  FileReceivedEvent,
-  FileSendResult,
-  IncomingMessage,
-  MessageStateChangedEvent,
   DisappearingTtlChangedEvent,
   FileReceivedEvent,
   FileSendResult,
   IncomingMessage,
+  MessageStateChangedEvent,
   MessagesPurgedEvent,
   MlsEpochEvent,
   MlsGroupMessage,
@@ -628,6 +625,10 @@ export default function App() {
       setMessages(prev =>
         prev.map(m =>
           m.msg_id === msg_id ? { ...m, pinned, starred } : m,
+        ),
+      );
+    }).then(u => unlisteners.push(u));
+
     // ── Reaction events ────────────────────────────────────────────────
     // Backend has already merged the `add`/`remove` action into the on-disk
     // history row's `reactions` array; we just patch in-memory state with
@@ -691,8 +692,7 @@ export default function App() {
     return () => {
       unlisteners.forEach(u => u());
     };
-  }, [pushMlsLog, refreshMlsStatus, myLabel]);
-  }, [pushMlsLog, refreshMlsStatus, t]);
+  }, [pushMlsLog, refreshMlsStatus, myLabel, t]);
 
   // ── Send action ────────────────────────────────────────────────────────
   async function handleSend(body: string) {

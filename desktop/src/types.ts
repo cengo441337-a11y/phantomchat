@@ -341,6 +341,8 @@ export interface CrashReport {
   location: string;
   backtrace: string;
   user_dispatched?: boolean;
+}
+
 // ── LAN org (mDNS zero-touch discovery) ─────────────────────────────────────
 //
 // Mirrors the Rust `LanOrgStatus` + `DiscoveredPeer` structs. The shared-
@@ -407,6 +409,8 @@ export interface MessageStateChangedEvent {
 export interface ConversationStateChangedEvent {
   contact_label: string;
   state: ConversationState;
+}
+
 // ── Reply / reactions / disappearing-messages event payloads ────────────────
 //
 // All three are emitted by the Rust listener path that decodes the matching
@@ -435,6 +439,8 @@ export interface MessagesPurgedEvent {
 export interface DisappearingTtlChangedEvent {
   contact_label: string;
   ttl_secs: number | null;
+}
+
 // ── Encrypted backup / restore (Wave 8c, compliance Aufbewahrungspflicht) ────
 //
 // Mirror the three Rust DTOs returned by `export_backup` / `verify_backup`

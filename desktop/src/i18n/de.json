@@ -397,6 +397,32 @@
       "drawer_title": "Markierte Nachrichten",
       "drawer_empty": "(noch keine markierten Nachrichten)",
       "jump_title": "Zur Unterhaltung wechseln und springen"
+    },
+    "reply": {
+      "toolbar_button": "Antworten",
+      "toolbar_title": "Diese Nachricht in Ihrer Antwort zitieren",
+      "quote_jump_title": "Zur ursprünglichen Nachricht springen",
+      "cancel_aria": "Antwort abbrechen",
+      "cancel_title": "Antwort abbrechen"
+    },
+    "reactions": {
+      "toolbar_button": "Reagieren",
+      "toolbar_title": "Emoji-Reaktion hinzufügen",
+      "pill_title": "Reaktionen von {{senders}}"
+    },
+    "disappearing": {
+      "label": "Auto-Löschung",
+      "preset_off": "Aus",
+      "preset_min5": "5 Min.",
+      "preset_hour1": "1 Stunde",
+      "preset_hour24": "24 Stunden",
+      "preset_day7": "7 Tage",
+      "active_title": "Selbstlöschende Nachrichten: Einträge werden {{secs}} s nach dem Senden entfernt",
+      "inactive_title": "Selbstlöschende Nachrichten: aus",
+      "row_label": "in {{remaining}}",
+      "row_title": "Diese Nachricht wird automatisch gelöscht, sobald der Zähler abläuft",
+      "system_enabled": "Selbstlöschende Nachrichten aktiviert ({{secs}} s) für {{label}}",
+      "system_disabled": "Selbstlöschende Nachrichten deaktiviert für {{label}}"
     }
   },
   "conversation": {
@@ -474,32 +500,5 @@
     "empty": "(keine passenden Mitglieder)",
     "aria_label": "Ein Gruppenmitglied erwähnen",
     "notify_title": "Erwähnt von {{label}}"
-  "messages": {
-    "reply": {
-      "toolbar_button": "Antworten",
-      "toolbar_title": "Diese Nachricht in Ihrer Antwort zitieren",
-      "quote_jump_title": "Zur ursprünglichen Nachricht springen",
-      "cancel_aria": "Antwort abbrechen",
-      "cancel_title": "Antwort abbrechen"
-    },
-    "reactions": {
-      "toolbar_button": "Reagieren",
-      "toolbar_title": "Emoji-Reaktion hinzufügen",
-      "pill_title": "Reaktionen von {{senders}}"
-    },
-    "disappearing": {
-      "label": "Auto-Löschung",
-      "preset_off": "Aus",
-      "preset_min5": "5 Min.",
-      "preset_hour1": "1 Stunde",
-      "preset_hour24": "24 Stunden",
-      "preset_day7": "7 Tage",
-      "active_title": "Selbstlöschende Nachrichten: Einträge werden {{secs}} s nach dem Senden entfernt",
-      "inactive_title": "Selbstlöschende Nachrichten: aus",
-      "row_label": "in {{remaining}}",
-      "row_title": "Diese Nachricht wird automatisch gelöscht, sobald der Zähler abläuft",
-      "system_enabled": "Selbstlöschende Nachrichten aktiviert ({{secs}} s) für {{label}}",
-      "system_disabled": "Selbstlöschende Nachrichten deaktiviert für {{label}}"
-    }
   }
 }

@@ -2,24 +2,20 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 import AddressQR from "./AddressQR";
 import ThemeSwitcher from "./ThemeSwitcher";
-import type { AuditEntry, PrivacyConfigDto, UpdateInfo } from "../types";
-import { listen } from "@tauri-apps/api/event";
-import type { ConversationStateChangedEvent } from "../types";
 import type {
   AuditEntry,
-  CrashReport,
-  PrivacyConfigDto,
-  UpdateInfo,
-} from "../types";
   BackupMeta,
   BackupResult,
+  ConversationStateChangedEvent,
+  CrashReport,
+  LanOrgStatus,
   PrivacyConfigDto,
   RestoreResult,
   UpdateInfo,
 } from "../types";
-import type { AuditEntry, LanOrgStatus, PrivacyConfigDto, UpdateInfo } from "../types";
 
 interface Props {
   onClose: () => void;
@@ -284,6 +280,7 @@ export default function SettingsPanel({ onClose }: Props) {
         setCrashOptIn(flag);
       } catch {
         /* leave default false */
+      }
       try {
         const s = await invoke<LanOrgStatus>("lan_org_status");
         setLanStatus(s);
@@ -894,6 +891,8 @@ export default function SettingsPanel({ onClose }: Props) {
             {t("settings.theme.description")}
           </p>
           <ThemeSwitcher />
+        </section>
+
         {/* ── Backup & Restore ───────────────────────────────────────── */}
         <section className="mb-6">
           <h3 className="text-neon-green text-xs uppercase tracking-widest mb-2">

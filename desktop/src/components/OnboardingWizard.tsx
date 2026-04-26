@@ -9,14 +9,13 @@ interface Props {
 }
 
 /// Total wizard steps. Bumped from 5 → 6 in wave-8d when we inserted the
-/// "Erscheinungsbild wählen" step between step 4 (share address) and the
-/// final "Done" step. Renumbering the trailing step from 5 → 6 (and
-/// widening every `1 | 2 | 3 | 4 | 5` union to include 6) keeps the
-/// flow's tail logic intact.
-const TOTAL_STEPS = 6;
+/// "Erscheinungsbild wählen" step between step 5 (share address) and the
+/// final "Done" step. Renumbering the trailing step (and widening every
+/// `1 | 2 | 3 | 4 | 5` union accordingly) keeps the flow's tail logic
+/// intact.
+const TOTAL_STEPS = 7;
 
-type StepIdx = 1 | 2 | 3 | 4 | 5 | 6;
-const TOTAL_STEPS = 6;
+type StepIdx = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 const DEFAULT_RELAY_OPTIONS = [
   "wss://relay.damus.io",
@@ -40,7 +39,6 @@ const DEFAULT_RELAY_OPTIONS = [
 export default function OnboardingWizard({ onDone }: Props) {
   const { t } = useTranslation();
   const [step, setStep] = useState<StepIdx>(1);
-  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1);
 
   // ── Step 2 ──────────────────────────────────────────────────────────────
   const [identityMode, setIdentityMode] = useState<"none" | "generate" | "restore">(
@@ -240,12 +238,11 @@ export default function OnboardingWizard({ onDone }: Props) {
       case 4:
         return relaysDone;
       case 5:
+        return true; // share-address step — always advanceable.
+      case 6:
         return true; // theme step — any default is valid, picker is live.
-      case 6:
+      case 7:
         return false; // final step uses the dedicated "Start" button.
-        return true;
-      case 6:
-        return false; // step 6 uses the dedicated "Start" button.
     }
   }
 
@@ -255,11 +252,6 @@ export default function OnboardingWizard({ onDone }: Props) {
   function next() {
     if (step < TOTAL_STEPS && canAdvance()) {
       setStep((s) => (s + 1) as StepIdx);
-    if (step > 1) setStep((s) => (s - 1) as 1 | 2 | 3 | 4 | 5 | 6);
-  }
-  function next() {
-    if (step < 6 && canAdvance()) {
-      setStep((s) => (s + 1) as 1 | 2 | 3 | 4 | 5 | 6);
     }
   }
 
@@ -576,9 +568,6 @@ export default function OnboardingWizard({ onDone }: Props) {
           </div>
         )}
 
-        {step === 5 && (
-          <div className="space-y-4">
-            <div className="text-center text-xs text-soft-grey uppercase tracking-widest">
         {step === 6 && (
           <div className="text-center space-y-5">
             <div className="text-2xl tracking-widest font-bold text-neon-green">
@@ -594,7 +583,7 @@ export default function OnboardingWizard({ onDone }: Props) {
           </div>
         )}
 
-        {step === 6 && (
+        {step === 7 && (
           <div className="text-center space-y-5">
             <div className="text-2xl tracking-widest font-bold text-neon-green">
               {t("onboarding.step6.header")}
@@ -622,8 +611,6 @@ export default function OnboardingWizard({ onDone }: Props) {
         {/* Back / Next bar (hidden on the final step — that step has its own
             "Start" button). */}
         {step !== TOTAL_STEPS && (
-        {/* Back / Next bar (hidden on step 6 — that step has its own button) */}
-        {step !== 6 && (
           <div className="flex justify-between pt-3 border-t border-dim-green/30">
             <button
               onClick={back}
