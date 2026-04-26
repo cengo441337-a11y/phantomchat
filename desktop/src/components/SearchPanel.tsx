@@ -108,7 +108,7 @@ export default function SearchPanel({ contacts, onClose, onJumpTo }: Props) {
   }, [contacts]);
 
   return (
-    <div className="border-b border-neon-magenta/40 bg-bg-panel/95 backdrop-blur-sm shadow-[0_4px_24px_rgba(255,0,255,0.15)]">
+    <div className="border-b border-neon-magenta/40 bg-bg-panel/95 backdrop-blur-sm shadow-neon-magenta">
       {/* ── Search bar row ─────────────────────────────────────────── */}
       <div className="flex items-center gap-2 px-3 py-2">
         <span className="text-neon-magenta text-xs font-display uppercase tracking-widest">

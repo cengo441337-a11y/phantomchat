@@ -65,6 +65,11 @@
       "description": "Lassen Sie Ihren Kontakt diesen QR-Code scannen oder kopieren Sie die Klartext-Adresse — beide kodieren denselben phantom:view:spend-Inhalt. Kann bedenkenlos veröffentlicht werden: enthält keine Geheimnisse."
     },
     "step5": {
+      "header": "Schritt 5 · Erscheinungsbild wählen",
+      "description": "Wählen Sie die Optik, die zu Ihrem Umfeld passt. Sie können später jederzeit über Einstellungen → Erscheinungsbild wechseln.",
+      "hint": "Soft Light und Corporate deaktivieren die CRT-Scanlinien und Glitch-Effekte."
+    },
+    "step6": {
       "header": "Bereit",
       "description": "Sie können jetzt chatten. Der Empfänger wird auf Ihren konfigurierten Relays gestartet, und Sie können Kontakte über das Hauptfenster hinzufügen.",
       "start_button": "PhantomChat starten",
@@ -155,6 +160,16 @@
       "auto": "Auto (Browser)",
       "en": "English",
       "de": "Deutsch"
+    },
+    "theme": {
+      "title": "Erscheinungsbild",
+      "description": "Wählen Sie den visuellen Stil, der zu Ihrem Umfeld passt. CRT-Scanlinien und Glitch-Effekte sind ausschließlich im Cyberpunk-Theme aktiv.",
+      "cyberpunk_name": "Cyberpunk",
+      "cyberpunk_hint": "Dunkles CRT-inspiriertes Theme mit Neon-Grün und Magenta (Standard).",
+      "light_name": "Soft Light",
+      "light_hint": "Heller Hintergrund mit dezenten Pastell-Akzenten — professionelles Erscheinungsbild für die meisten Umgebungen.",
+      "corporate_name": "Corporate",
+      "corporate_hint": "Nahezu monochrome neutrale Palette mit einem einzigen Kobalt-Akzent — ideal für Screenshots und Präsentationen."
     },
     "privacy": {
       "title": "Privatsphäre",

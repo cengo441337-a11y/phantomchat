@@ -65,6 +65,11 @@
       "description": "Have your contact scan this QR or copy the raw address — both encode the same phantom:view:spend payload. Safe to publish: it contains no secrets."
     },
     "step5": {
+      "header": "step 5 · choose your appearance",
+      "description": "Pick the look that fits your environment. You can switch any time later in Settings → Appearance.",
+      "hint": "Soft Light and Corporate disable the CRT scanlines and glitch effects."
+    },
+    "step6": {
       "header": "all set",
       "description": "You are ready to chat. The listener will start on your configured relays and you will be able to add contacts from the main panel.",
       "start_button": "start using PhantomChat",
@@ -155,6 +160,16 @@
       "auto": "Auto (browser)",
       "en": "English",
       "de": "Deutsch"
+    },
+    "theme": {
+      "title": "appearance",
+      "description": "Choose the visual style that fits your environment. The CRT scanlines and glitch effects only appear in the Cyberpunk theme.",
+      "cyberpunk_name": "Cyberpunk",
+      "cyberpunk_hint": "Dark CRT-inspired theme with neon-green and magenta accents (default).",
+      "light_name": "Soft Light",
+      "light_hint": "Bright background with soft pastel accents — professional look for most environments.",
+      "corporate_name": "Corporate",
+      "corporate_hint": "Near-monochrome neutral palette with a single cobalt accent — ideal for screenshots and presentations."
     },
     "privacy": {
       "title": "privacy",

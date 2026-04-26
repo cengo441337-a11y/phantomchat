@@ -4,15 +4,36 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Cyberpunk palette — matches the CLI banner / Flutter theme.
-        "neon-green":   "#00FF9F",
-        "neon-magenta": "#FF00FF",
-        "cyber-cyan":   "#00FFFF",
-        "dim-green":    "#008250",
-        "soft-grey":    "#9696A0",
-        "bg-deep":      "#0A0A0F",
-        "bg-panel":     "#11111A",
-        "bg-elevated":  "#161623",
+        // Theme tokens — wired to CSS custom properties defined per
+        // [data-theme="…"] in styles.css. Each value uses the `rgb(... / <alpha-value>)`
+        // shape so Tailwind's `text-neon-green/60` opacity shorthand can
+        // substitute the alpha channel. The underlying RGB triplet vars
+        // (`--pc-rgb-primary` etc.) are also defined per theme block, so
+        // every existing component class adopts the active palette
+        // automatically with NO per-component edits.
+
+        // New canonical aliases (prefer these in fresh code):
+        "pc-bg":         "rgb(var(--pc-rgb-bg, 7 7 16) / <alpha-value>)",
+        "pc-panel":      "var(--pc-bg-panel)",
+        "pc-elevated":   "var(--pc-bg-elevated)",
+        "pc-fg":         "var(--pc-fg)",
+        "pc-fg-dim":     "var(--pc-fg-dim)",
+        "pc-primary":    "rgb(var(--pc-rgb-primary) / <alpha-value>)",
+        "pc-secondary":  "rgb(var(--pc-rgb-secondary) / <alpha-value>)",
+        "pc-tertiary":   "rgb(var(--pc-rgb-tertiary) / <alpha-value>)",
+
+        // Legacy aliases — every existing component class points here.
+        // These are the SAME triplets as the canonical aliases above,
+        // so a switch to data-theme="light" cascades to every neon-*
+        // class without per-component edits.
+        "neon-green":    "rgb(var(--pc-rgb-primary) / <alpha-value>)",
+        "neon-magenta":  "rgb(var(--pc-rgb-secondary) / <alpha-value>)",
+        "cyber-cyan":    "rgb(var(--pc-rgb-tertiary) / <alpha-value>)",
+        "dim-green":     "rgb(var(--pc-rgb-dim) / <alpha-value>)",
+        "soft-grey":     "rgb(var(--pc-rgb-fg-dim) / <alpha-value>)",
+        "bg-deep":       "var(--pc-bg-deep)",
+        "bg-panel":      "var(--pc-bg-panel)",
+        "bg-elevated":   "var(--pc-bg-elevated)",
       },
       fontFamily: {
         mono: [
@@ -23,17 +44,25 @@ export default {
           "monospace",
         ],
         // Display font for headers / pane titles. Used sparingly via
-        // `font-display`. See index.html for the Google Fonts <link>.
+        // `font-display`. The actual resolved family is theme-driven via
+        // the `--pc-font-display` CSS var (see styles.css), so corporate
+        // theme renders Inter while cyberpunk/light render Orbitron. This
+        // entry is the Tailwind-config fallback for any code that uses
+        // the family directly via `font-display`.
         display: [
           "Orbitron",
+          "Inter",
           "JetBrains Mono",
           "monospace",
         ],
       },
       boxShadow: {
-        "neon-green":   "0 0 12px rgba(0, 255, 159, 0.45)",
-        "neon-magenta": "0 0 12px rgba(255, 0, 255, 0.45)",
-        "cyber-cyan":   "0 0 12px rgba(0, 255, 255, 0.45)",
+        // rgba() can't take a CSS-var directly, so we use the rgb-triplet
+        // vars defined in styles.css (`--pc-rgb-primary` etc.). Result:
+        // shadows recolor automatically with the active theme.
+        "neon-green":   "0 0 12px rgba(var(--pc-rgb-primary), 0.45)",
+        "neon-magenta": "0 0 12px rgba(var(--pc-rgb-secondary), 0.45)",
+        "cyber-cyan":   "0 0 12px rgba(var(--pc-rgb-tertiary), 0.45)",
       },
       animation: {
         // Connection-pill pulses (3 states). Keyframes are defined in
