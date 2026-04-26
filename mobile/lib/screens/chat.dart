@@ -42,9 +42,10 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     _loadMessages();
     // Subscribe to the relay event stream so `RelayService.feedEnvelope`
-    // calls (driven by whatever transport is wired in wave 7B-followup)
-    // surface as incoming bubbles here. Filtered down to messages whose
-    // sealed-sender attribution maps to this contact's signing pub.
+    // calls — now driven by the per-relay WebSockets opened below in
+    // `RelayService.connect` — surface as incoming bubbles here. Filtered
+    // down to messages whose sealed-sender attribution maps to this
+    // contact's signing pub.
     _relaySub = RelayService.instance.events.listen((ev) {
       if (!mounted) return;
       switch (ev.kind) {
@@ -56,6 +57,11 @@ class _ChatScreenState extends State<ChatScreen> {
           break;
       }
     });
+    // Wave 7B2 — kick off the relay-publish path. Idempotent across screen
+    // rebuilds (the singleton's `_connected` guard short-circuits after
+    // the first call). Default URLs are the Damus / nos.lol / snort
+    // triple, same as Desktop.
+    unawaited(RelayService.instance.connect());
   }
 
   @override
@@ -130,13 +136,13 @@ class _ChatScreenState extends State<ChatScreen> {
     String ciphertextHex = '';
     String ephemeralHex = '';
     String nonceHex = '';
+    bool relayDelivered = false;
     try {
       // v3 path — sealed-sender 1:1 via the wrapper Rust crate. Returns the
-      // raw envelope wire bytes; the relay-transport hookup that ships
-      // these to the recipient is wave 7B-followup. For now we still emit
-      // a legacy CryptoService payload so the on-disk row keeps the
-      // ciphertext/ephemeral/nonce columns populated (StorageService /
-      // PhantomMessage round-trip).
+      // raw envelope wire bytes; we then ship them via every connected
+      // Nostr relay (Wave 7B2 publish path). The Rust call is the slow
+      // bit; the relay fan-out is parallel + bounded by `publish`'s
+      // 5-second ack timeout.
       final wire = await rust.sendSealedV3(
         recipientAddress:
             'phantom:${widget.contact.publicViewKey}:${widget.contact.publicSpendKey}',
@@ -147,6 +153,7 @@ class _ChatScreenState extends State<ChatScreen> {
       // ciphertext was produced.
       ciphertextHex =
           wire.take(32).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      relayDelivered = await RelayService.instance.publish(wire);
     } catch (_) {
       // Fall back to the legacy demo crypto so first-launch (no v3
       // identity loaded yet) doesn't hard-fail. The demo is intentionally
@@ -173,6 +180,10 @@ class _ChatScreenState extends State<ChatScreen> {
       ephemeralKey: ephemeralHex,
       nonce: nonceHex,
       timestamp: DateTime.now(),
+      // `MessageStatus.sent` reflects "encrypted + handed to transport".
+      // A future state-machine pass can flip this to `delivered` once an
+      // explicit `RCPT-1:` receipt lands; for now `sent` covers the
+      // not-yet-acked + acked cases (relay OK doesn't imply delivery).
       status: MessageStatus.sent,
     );
     await StorageService.addMessage(msg);
@@ -183,6 +194,22 @@ class _ChatScreenState extends State<ChatScreen> {
       _sending = false;
     });
     _scrollToBottom();
+    // Surface a visible failure if no relay accepted within the publish
+    // timeout. Only triggered when the v3 path itself succeeded (so the
+    // CryptoService fallback shouldn't show this banner — that path
+    // doesn't run a relay publish).
+    if (!relayDelivered && ciphertextHex.isNotEmpty && ephemeralHex.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '! FAILED TO PUBLISH — NO RELAY REACHED. RECIPIENT WILL '
+            'NOT GET THIS MESSAGE UNTIL A RELAY ACCEPTS A RETRY.',
+          ),
+          duration: Duration(seconds: 4),
+        ),
+      );
+    }
   }
 
   /// Surface a "Bind to contact" sheet when the most-recent inbound

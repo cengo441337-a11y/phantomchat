@@ -37,6 +37,13 @@ once_cell = "1.20"
 x25519-dalek = { version = "2.0", features = ["static_secrets", "serde"] }
 rand_core = { version = "0.6", features = ["std"] }
 
+# Nostr publish path (Wave 7B2): the Dart RelayService asks Rust to wrap
+# raw envelope bytes into a signed Nostr event so the secp256k1 + Schnorr
+# logic stays in one place (mirrors phantomchat_relays::NostrEvent::new).
+secp256k1 = { version = "0.27", features = ["rand-std", "global-context"] }
+sha2 = "0.10"
+rand = "0.8"
+
 # MLS group ops use the openmls types re-exported by phantomchat_core::mls
 # (GroupId / MlsGroup), so we pull openmls directly only for the GroupId
 # constructor we feed back into core::mls::load_group. Forwarded behind the

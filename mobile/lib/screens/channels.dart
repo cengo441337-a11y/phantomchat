@@ -67,6 +67,9 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
     super.initState();
     _initBundle();
     _sub = RelayService.instance.events.listen(_handleRelay);
+    // Wave 7B2 — make sure the relay-publish path is open before the
+    // user hits SEND. Idempotent across screens (singleton guard).
+    unawaited(RelayService.instance.connect());
   }
 
   @override
@@ -283,21 +286,57 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
     if (text.isEmpty || !_inGroup) return;
     _msgCtrl.clear();
     try {
-      final wire = await rust.mlsEncrypt(plaintext: utf8.encode(text));
+      final ciphertext = await rust.mlsEncrypt(plaintext: utf8.encode(text));
       _appendOutgoing(text);
-      // The MLS-APP1 wire bytes need to go to every other group member via
-      // sealed-sender 1:1. The Rust side gives us the ciphertext, so we
-      // wrap with the prefix here. Actually shipping it is the relay
-      // layer's job (Wave 7B-followup hooks the websocket transport in).
-      final payload = BytesBuilder(copy: false)
-        ..add(kMlsAppPrefix)
-        ..add(wire);
-      // For now we just stash a hint so the user knows the encryption
-      // happened correctly even if no transport is wired yet.
-      final size = payload.length;
+      // Wrap the MLS app ciphertext in the 8-byte `MLS-APP1` prefix so the
+      // receiver's `RelayService.feedEnvelope` dispatches it correctly.
+      final payload = encodeMlsApp(ciphertext);
+      // Per-member fan-out: each peer in the directory gets its own
+      // sealed-sender envelope wrapping the same `MLS-APP1` payload.
+      // We publish in parallel; the publish helper itself fans out across
+      // every connected relay, so the total broadcast cost is
+      // O(members × relays) WebSocket frames.
+      final dir = await rust.mlsDirectory();
+      final selfPub = (await rust.mlsSelfSigningPubHex()).toLowerCase();
+      final peers = dir
+          .where((m) => m.signingPubHex.toLowerCase() != selfPub)
+          .toList(growable: false);
+      if (peers.isEmpty) {
+        _appendSystem(
+          'encrypted ${payload.length} B MLS-APP1 — no remote members in '
+          'directory yet, so nothing was published. Add members first.',
+        );
+        return;
+      }
+      int delivered = 0;
+      await Future.wait(peers.map((peer) async {
+        try {
+          final sealed = await rust.sendSealedV3(
+            recipientAddress: peer.address,
+            plaintext: payload,
+          );
+          final ok = await RelayService.instance.publish(sealed);
+          if (ok) delivered++;
+        } catch (e) {
+          _showErr('send to ${peer.label}: $e');
+        }
+      }));
       _appendSystem(
-        'sent $size B MLS-APP1 ciphertext (transport hookup pending — wave 7B-followup).',
+        'sent ${payload.length} B MLS-APP1 to $delivered/${peers.length} '
+        'group peer(s) via relays.',
       );
+      if (delivered < peers.length) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '! ${peers.length - delivered}/${peers.length} GROUP PEERS '
+              'NOT REACHABLE — RELAY FAN-OUT INCOMPLETE.',
+            ),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
     } catch (e) {
       _showErr('encrypt: $e');
     }

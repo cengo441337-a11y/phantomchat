@@ -20,7 +20,13 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
+
+import 'package:path_provider/path_provider.dart';
+import 'package:web_socket_channel/io.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../src/rust/api.dart' as rust;
 import 'contact_directory.dart';
@@ -70,10 +76,12 @@ class RelayEvent {
 }
 
 /// Singleton service. Holds the Dart-side stream sink the UI listens to.
-/// The actual websocket / libp2p subscription is set up by whoever invokes
-/// [feedEnvelope] for each inbound wire blob (the existing libp2p path on
-/// Desktop, the relays-crate websocket on mobile when wave 7B-followup
-/// lands).
+/// On startup, [connect] opens one persistent WebSocket per configured
+/// Nostr relay URL; the same channels are re-used for both directions
+/// (subscribe + publish). Inbound `["EVENT", ...]` frames are handed to
+/// the existing [feedEnvelope] dispatcher; outbound bytes are wrapped via
+/// the Rust `nostr_build_event` helper and fanned out to every connected
+/// relay in parallel by [publish].
 class RelayService {
   RelayService._();
   static final RelayService instance = RelayService._();
@@ -82,6 +90,44 @@ class RelayService {
       StreamController<RelayEvent>.broadcast();
 
   Stream<RelayEvent> get events => _controller.stream;
+
+  /// Sane defaults — same well-known Nostr relays the Desktop's
+  /// `relays/src/lib.rs` factory uses. Persisted relay list overrides
+  /// these on subsequent launches.
+  static const List<String> defaultRelayUrls = <String>[
+    'wss://relay.damus.io',
+    'wss://nos.lol',
+    'wss://relay.snort.social',
+  ];
+
+  /// One persistent connection slot per configured relay URL. A `null`
+  /// value means the slot is currently waiting on a reconnect backoff.
+  final Map<String, _RelayConn> _relayConns = <String, _RelayConn>{};
+
+  /// Subscription id we send in our `REQ` frame (and which incoming
+  /// `EVENT` frames echo back). Constant per process; relays don't care.
+  static const String _subId = 'phantom-mob-1';
+
+  /// In-flight publish acks, keyed by Nostr event id. The publish call
+  /// completes the inner completer when EITHER the first relay sends an
+  /// `["OK", <id>, true, …]` OR the 5s timeout fires.
+  final Map<String, Completer<bool>> _pendingAcks =
+      <String, Completer<bool>>{};
+
+  /// Have we kicked off [connect] yet? Idempotent guard so multiple
+  /// screens calling `RelayService.instance.connect()` don't spawn N
+  /// stacks of WebSockets.
+  bool _connected = false;
+
+  /// True if at least one underlying WebSocket is currently open. Drives
+  /// the `> NO RELAYS REACHABLE` UI banner if it stays false for >5s
+  /// after a publish attempt.
+  bool get hasAnyConnection =>
+      _relayConns.values.any((c) => c.isOpen);
+
+  /// Snapshot of the configured relay URL list. Returned for UI status
+  /// surfaces.
+  List<String> get relayUrls => List.unmodifiable(_relayConns.keys);
 
   /// Feed one inbound wire blob (the bytes a relay handed us). The service
   /// runs `receiveFullV3` to decrypt + extract sealed-sender attribution,
@@ -396,6 +442,199 @@ class RelayService {
     String two(int v) => v.toString().padLeft(2, '0');
     return '${two(n.hour)}:${two(n.minute)}:${two(n.second)}';
   }
+
+  // ── Connection management ────────────────────────────────────────────────
+  //
+  // Per-relay persistent WebSocket. The first call wins — subsequent calls
+  // return immediately so screen-rebuilds don't pile up sockets. Pass
+  // `force: true` from a settings-screen "reconnect now" button when we
+  // eventually ship one (deferred — see PR description).
+
+  /// Open one WebSocket per `relayUrls`. Idempotent. Uses
+  /// [defaultRelayUrls] if the persisted [relays.json] file doesn't exist
+  /// yet (or the caller passes an empty list). Each socket auto-reconnects
+  /// with exponential backoff (1s → 60s, capped, ±jitter) on close/error,
+  /// and re-sends the subscription `REQ` on every successful reconnect.
+  Future<void> connect({List<String>? relayUrls}) async {
+    if (_connected) return;
+    _connected = true;
+    final urls = relayUrls ?? await loadPersistedRelayUrls();
+    for (final url in urls) {
+      final conn = _RelayConn(url, _onWsFrame, _onWsStateChange);
+      _relayConns[url] = conn;
+      // Kicks off the connect-loop in a microtask; doesn't block here so
+      // the UI thread stays responsive even if all 3 relays are slow.
+      conn.start();
+    }
+  }
+
+  /// Tear down every open socket. Called on app shutdown / sign-out so we
+  /// don't leak background reconnect timers across hot-restart in dev.
+  Future<void> disconnect() async {
+    for (final c in _relayConns.values) {
+      await c.close();
+    }
+    _relayConns.clear();
+    _connected = false;
+  }
+
+  /// Wrap `wireBytes` in a NIP-01 EVENT (kind 1059, hex content) and
+  /// broadcast to every connected relay. Returns `true` if AT LEAST ONE
+  /// relay sent an `["OK", <id>, true, …]` ack inside [timeout]. Returns
+  /// `false` if no socket was open OR every relay either rejected or
+  /// timed out.
+  Future<bool> publish(
+    Uint8List wireBytes, {
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    final openConns =
+        _relayConns.values.where((c) => c.isOpen).toList(growable: false);
+    if (openConns.isEmpty) {
+      return false;
+    }
+    rust.NostrEventWire wrapped;
+    try {
+      wrapped = await rust.nostrBuildEvent(envelopeBytes: wireBytes);
+    } catch (e) {
+      _controller.add(RelayEvent('error', {'detail': 'nostr_build_event: $e'}));
+      return false;
+    }
+    final completer = Completer<bool>();
+    _pendingAcks[wrapped.eventId] = completer;
+    // Timeout arms here — completes false if no relay acks in time.
+    final timer = Timer(timeout, () {
+      if (!completer.isCompleted) {
+        _pendingAcks.remove(wrapped.eventId);
+        completer.complete(false);
+      }
+    });
+    // Fire all sends in parallel; per-socket failures are logged but
+    // don't abort the publish (another relay may still ack).
+    for (final c in openConns) {
+      try {
+        c.send(wrapped.publishJson);
+      } catch (e) {
+        _controller.add(RelayEvent('error',
+            {'detail': 'publish to ${c.url}: $e'}));
+      }
+    }
+    final result = await completer.future;
+    timer.cancel();
+    return result;
+  }
+
+  // ── Persistence (relays.json) ────────────────────────────────────────────
+  //
+  // Stored next to the identity file in ApplicationDocumentsDirectory.
+  // Same shape as Desktop's `relays.json` — a JSON array of URL strings
+  // — so a future shared-storage path can read either.
+
+  static Future<File> _relayConfigFile() async {
+    final dir = await getApplicationDocumentsDirectory();
+    return File('${dir.path}/relays.json');
+  }
+
+  /// Load the persisted relay URL list, or [defaultRelayUrls] on first
+  /// launch. The first-launch case writes the defaults back so the file
+  /// shows up in storage inspectors immediately.
+  static Future<List<String>> loadPersistedRelayUrls() async {
+    try {
+      final f = await _relayConfigFile();
+      if (!await f.exists()) {
+        await savePersistedRelayUrls(defaultRelayUrls);
+        return defaultRelayUrls;
+      }
+      final raw = await f.readAsString();
+      final list = (jsonDecode(raw) as List<dynamic>)
+          .map((e) => e as String)
+          .toList();
+      if (list.isEmpty) return defaultRelayUrls;
+      return list;
+    } catch (_) {
+      // Corrupt file / permission denied — fall back to defaults rather
+      // than leaving the app silent (defaults still publish anywhere).
+      return defaultRelayUrls;
+    }
+  }
+
+  /// Persist the relay URL list. Idempotent — overwrites the file.
+  static Future<void> savePersistedRelayUrls(List<String> urls) async {
+    try {
+      final f = await _relayConfigFile();
+      await f.writeAsString(jsonEncode(urls));
+    } catch (_) {
+      // Best-effort. A failure here only costs us the defaults on next
+      // launch; not a crash-worthy condition.
+    }
+  }
+
+  // ── Socket frame dispatch ────────────────────────────────────────────────
+
+  /// Per-socket text-frame callback. Splits Nostr command frames:
+  ///
+  ///   `["EVENT", subId, eventObj]`  → extract envelope + feedEnvelope
+  ///   `["OK", eventId, accepted, msg]` → resolve pending publish ack
+  ///   `["EOSE", subId]` / `["NOTICE", msg]` → ignored (no UI surface)
+  Future<void> _onWsFrame(String url, String text) async {
+    // Cheap prefix peek before paying the JSON parse cost. Most frames in
+    // a busy chat are EVENT, so check that one first.
+    if (text.startsWith('["EVENT"')) {
+      Uint8List? envelope;
+      try {
+        envelope = await rust.nostrExtractEventPayload(frameText: text);
+      } catch (e) {
+        _controller.add(RelayEvent(
+            'error', {'detail': 'nostr_extract_event_payload: $e'}));
+        return;
+      }
+      if (envelope == null) return;
+      // feedEnvelope handles its own error reporting via the events stream.
+      await feedEnvelope(envelope);
+      return;
+    }
+    if (text.startsWith('["OK"')) {
+      try {
+        final arr = jsonDecode(text) as List<dynamic>;
+        if (arr.length >= 3) {
+          final eventId = arr[1] as String;
+          final accepted = arr[2] as bool;
+          final completer = _pendingAcks.remove(eventId);
+          if (completer != null && !completer.isCompleted) {
+            completer.complete(accepted);
+          }
+        }
+      } catch (_) {
+        // Malformed OK — ignore; the timeout will close the publish.
+      }
+      return;
+    }
+    // EOSE / NOTICE / unknown — silent drop is fine for v1.
+  }
+
+  /// Per-socket state change. Currently only used to surface a `system`
+  /// event with the connect/disconnect transition so the chat screens can
+  /// flash a banner. Keep it best-effort — losing one of three relays is
+  /// not user-actionable.
+  void _onWsStateChange(String url, _ConnState state) {
+    // Re-send the subscription REQ on every successful (re)connect so a
+    // recovering link starts streaming events immediately.
+    if (state == _ConnState.connected) {
+      final c = _relayConns[url];
+      if (c != null) {
+        unawaited(_resendSubscription(c));
+      }
+    }
+  }
+
+  Future<void> _resendSubscription(_RelayConn c) async {
+    try {
+      final req = await rust.nostrSubscriptionReq(subId: _subId);
+      // The connection may have flipped to disconnected during the await
+      // of the (sync-on-Rust-side but async-over-FRB) `nostrSubscriptionReq`
+      // call; `send` itself raises StateError which we swallow.
+      c.send(req);
+    } catch (_) {/* connect-state may have flipped already */}
+  }
 }
 
 // ── Wire encoders / decoders (parity with Tauri side) ───────────────────────
@@ -680,4 +919,163 @@ Uint8List _padSha256(List<int> data) {
     out[out.length - 1 - i] = (bitLen >> (i * 8)) & 0xFF;
   }
   return out;
+}
+
+// ── Per-relay WebSocket with auto-reconnect (file-private) ──────────────────
+//
+// One instance per relay URL. Owns a WebSocketChannel + a backoff loop that
+// transparently reconnects on close/error. `RelayService` only holds the
+// callbacks (frame + state); this class encapsulates the lifetime.
+//
+// Backoff curve (matches `phantomchat_relays::NostrRelay::subscribe`):
+//   attempt 0 → 1s, 1 → 2s, 2 → 4s, …, 6+ → 60s, all + 0..5s jitter.
+
+enum _ConnState { connecting, connected, disconnected }
+
+class _RelayConn {
+  final String url;
+  final Future<void> Function(String url, String text) _onFrame;
+  final void Function(String url, _ConnState state) _onState;
+
+  WebSocketChannel? _channel;
+  StreamSubscription<dynamic>? _sub;
+  bool _isOpen = false;
+  bool _closed = false;
+  int _attempt = 0;
+  Timer? _reconnectTimer;
+  static final Random _rng = Random();
+
+  _RelayConn(this.url, this._onFrame, this._onState);
+
+  bool get isOpen => _isOpen;
+
+  void start() {
+    // Fire-and-forget: the connect-loop owns the lifetime, errors surface
+    // through the state callback rather than blocking the caller.
+    unawaited(_connectLoop());
+  }
+
+  Future<void> _connectLoop() async {
+    while (!_closed) {
+      _onState(url, _ConnState.connecting);
+      try {
+        // `IOWebSocketChannel.connect` constructs the channel synchronously;
+        // the `ready` future completes once the TLS + WebSocket upgrade
+        // finishes (or throws on DNS / refused / TLS / 4xx). The
+        // `connectTimeout` cap stops a half-open relay from wedging this
+        // loop indefinitely.
+        _channel = IOWebSocketChannel.connect(
+          Uri.parse(url),
+          pingInterval: const Duration(seconds: 30),
+          connectTimeout: const Duration(seconds: 10),
+        );
+        await _channel!.ready;
+        _isOpen = true;
+        _attempt = 0;
+        _onState(url, _ConnState.connected);
+        // We only return from this future when the stream errors / closes,
+        // which is exactly when we want the loop to retry.
+        final completer = Completer<void>();
+        _sub = _channel!.stream.listen(
+          (raw) {
+            if (raw is String) {
+              // Don't await — handler runs on its own microtask so a slow
+              // frame doesn't block the next one.
+              unawaited(_onFrame(url, raw));
+            } else if (raw is List<int>) {
+              try {
+                unawaited(_onFrame(url, utf8.decode(raw)));
+              } catch (_) {/* binary frames not part of NIP-01 */}
+            }
+          },
+          onError: (Object e) {
+            if (!completer.isCompleted) completer.complete();
+          },
+          onDone: () {
+            if (!completer.isCompleted) completer.complete();
+          },
+          cancelOnError: true,
+        );
+        await completer.future;
+      } catch (_) {
+        // Connect failed (TLS, DNS, refused) — fall through to backoff.
+      }
+      // ── Disconnect cleanup ─────────────────────────────────────────────
+      _isOpen = false;
+      await _sub?.cancel();
+      _sub = null;
+      try {
+        await _channel?.sink.close();
+      } catch (_) {}
+      _channel = null;
+      if (_closed) break;
+      _onState(url, _ConnState.disconnected);
+
+      // Exponential backoff with jitter; same curve as Desktop's
+      // NostrRelay subscribe loop. attempt 0 → 1s, capped at 60s.
+      _attempt = min(_attempt + 1, 6);
+      final base = (1 << _attempt).clamp(1, 60);
+      final jitter = _rng.nextInt(5);
+      final wait = Duration(seconds: base + jitter);
+      final waitCompleter = Completer<void>();
+      _reconnectTimer = Timer(wait, () {
+        if (!waitCompleter.isCompleted) waitCompleter.complete();
+      });
+      await waitCompleter.future;
+    }
+  }
+
+  void send(String text) {
+    final ch = _channel;
+    if (ch == null || !_isOpen) {
+      throw StateError('relay $url not connected');
+    }
+    ch.sink.add(text);
+  }
+
+  Future<void> close() async {
+    _closed = true;
+    _reconnectTimer?.cancel();
+    await _sub?.cancel();
+    _sub = null;
+    try {
+      await _channel?.sink.close();
+    } catch (_) {}
+    _channel = null;
+    _isOpen = false;
+  }
+}
+
+// ── Outgoing wire-prefix encoders (parity with Desktop's send helpers) ─────
+//
+// The receive-side prefix dispatch already lives at the top of this file.
+// These mirror the build_*_payload helpers Desktop uses on its Tauri side
+// so the chat / channels screens can wrap their plain bytes in the right
+// frame before handing them to `RelayService.publish`.
+
+/// `MLS-APP1 || ciphertext` — wraps the bytes returned by `mlsEncrypt`
+/// for transport via sealed-sender 1:1 (per-member fan-out is the
+/// caller's job).
+Uint8List encodeMlsApp(Uint8List ciphertext) {
+  final out = BytesBuilder(copy: false);
+  out.add(kMlsAppPrefix);
+  out.add(ciphertext);
+  return out.toBytes();
+}
+
+/// `RCPT-1: || ULEB128(len) || {"msg_id": ..., "kind": "delivered"|"read"}`.
+Uint8List encodeReceipt({required String msgId, required String kind}) {
+  return encodePrefixedJson(kRcptPrefixV1, <String, dynamic>{
+    'msg_id': msgId,
+    'kind': kind,
+  });
+}
+
+/// `TYPN-1: || ULEB128(len) || {"ttl_secs": <int>}`. Default TTL is
+/// [kTypingTtlSecs] so a brief tap of the keyboard surfaces as a 5-second
+/// `is typing…` indicator on the receiver.
+Uint8List encodeTyping({int ttlSecs = kTypingTtlSecs}) {
+  return encodePrefixedJson(kTypnPrefixV1, <String, dynamic>{
+    'ttl_secs': ttlSecs,
+  });
 }

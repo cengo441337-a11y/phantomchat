@@ -48,6 +48,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MlsMemberRefV3 dco_decode_mls_member_ref_v_3(dynamic raw);
 
   @protected
+  NostrEventWire dco_decode_nostr_event_wire(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
@@ -104,6 +107,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   MlsMemberRefV3 sse_decode_mls_member_ref_v_3(SseDeserializer deserializer);
+
+  @protected
+  NostrEventWire sse_decode_nostr_event_wire(SseDeserializer deserializer);
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -179,6 +185,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_mls_member_ref_v_3(
     MlsMemberRefV3 self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_nostr_event_wire(
+    NostrEventWire self,
     SseSerializer serializer,
   );
 
