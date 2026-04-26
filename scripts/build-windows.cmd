@@ -39,6 +39,12 @@ if not exist "%PHANTOMCHAT_PFX_PATH%" (
     exit /b 1
 )
 
+REM Tauri's signCommand parser does not expand env vars in the program-name
+REM position, so we put signtool's directory on PATH and the signCommand in
+REM tauri.conf.json just says "signtool".
+for %%I in ("%PHANTOMCHAT_SIGNTOOL%") do set "_SIGNTOOL_DIR=%%~dpI"
+set "PATH=%_SIGNTOOL_DIR%;%PATH%"
+
 echo === Building signed Windows bundles ===
 echo Signtool: %PHANTOMCHAT_SIGNTOOL%
 echo PFX:      %PHANTOMCHAT_PFX_PATH%
