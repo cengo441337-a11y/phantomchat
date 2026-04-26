@@ -4044,6 +4044,156 @@ fn try_apply_bootstrap(app: AppHandle) -> Result<bool, String> {
                         "bootstrap: read {} failed: {} — trying next path",
                         candidate.display(),
                         e
+                    );
+                }
+            }
+        }
+    }
+    let (boot_path, raw) = match (found_path, raw_bytes) {
+        (Some(p), Some(r)) => (p, r),
+        _ => return Ok(false),
+    };
+
+    let parsed: BootstrapFile = serde_json::from_slice(&raw)
+        .map_err(|e| format!("bootstrap parse {}: {}", boot_path.display(), e))?;
+    if parsed.schema_version != BOOTSTRAP_SCHEMA_VERSION {
+        return Err(format!(
+            "bootstrap {} has schema_version={} — this build only supports version {}",
+            boot_path.display(),
+            parsed.schema_version,
+            BOOTSTRAP_SCHEMA_VERSION
+        ));
+    }
+
+    // 1. Generate fresh identity (same write_identity helper the wizard's
+    //    generate_identity command uses, kept additive so the wizard path
+    //    stays untouched).
+    let identity = write_identity(&keyfile)
+        .map_err(|e| format!("bootstrap: identity gen failed: {}", e))?;
+    // `signing_pub_short` is the 16-hex-char prefix of the freshly-
+    // generated identity. We use it as the self-exclusion key against
+    // `directory[].signing_pub_hex` (full 64-char hex) — `starts_with`
+    // gives us a 64-bit collision domain inside a single org directory,
+    // which is astronomically safe.
+    let self_signing_pub_short = identity.signing_pub_short.clone();
+
+    // 2. Pre-populate contacts.json from directory[] (excluding self).
+    let contacts_p = contacts_path(&app).map_err(|e| e.to_string())?;
+    let mut book = ContactBook::default();
+    let mut contacts_added = 0usize;
+    let mut contacts_skipped_self = 0usize;
+    for entry in &parsed.directory {
+        // Self-exclusion: a directory entry whose signing_pub_hex starts
+        // with our own short signing-pub prefix is "us" (probability of
+        // collision in a same-org directory is astronomical for a 64-bit
+        // prefix). The directory is the org-wide list, so the install
+        // doesn't a-priori know which entry is itself — we mark all
+        // others as contacts and rely on (a) Wave 7A mDNS auto-discovery
+        // for onsite + (b) other org members adding this fresh identity
+        // through their own contact-add flow for remote.
+        if !entry.signing_pub_hex.is_empty()
+            && entry.signing_pub_hex.starts_with(&self_signing_pub_short)
+        {
+            contacts_skipped_self += 1;
+            continue;
+        }
+        book.contacts.push(Contact {
+            label: entry.label.clone(),
+            address: entry.address.clone(),
+            signing_pub: if entry.signing_pub_hex.is_empty() {
+                None
+            } else {
+                Some(entry.signing_pub_hex.clone())
+            },
+        });
+        contacts_added += 1;
+    }
+    save_contacts(&contacts_p, &book)
+        .map_err(|e| format!("bootstrap: write contacts.json: {}", e))?;
+
+    // 3. Pre-populate relays.json from default_relays.
+    if !parsed.default_relays.is_empty() {
+        if let Err(e) = save_relays(&app, &parsed.default_relays) {
+            eprintln!("bootstrap: write relays.json failed: {}", e);
+        }
+    }
+
+    // 4. Persist branding + window title (best-effort).
+    if let Some(display_name) = parsed
+        .branding
+        .display_name
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        // Stamp into me.json so MLS Welcome metadata shows the branded
+        // label as the inviter.
+        let _ = save_me(
+            &app,
+            &MeDisk {
+                label: display_name.clone(),
+            },
+        );
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.set_title(&display_name);
+        }
+    }
+
+    // 5. Persist the org bootstrap blob into a separate sidecar so a
+    //    follow-up wave can read `org_secret` / `org_id` without re-parsing
+    //    the original bootstrap.json (which the admin may delete after
+    //    apply). Best-effort.
+    if let Ok(dir) = app_data(&app) {
+        let sidecar = dir.join("org_bootstrap.json");
+        let blob = serde_json::json!({
+            "schema_version": parsed.schema_version,
+            "org_name":   parsed.org_name,
+            "org_id":     parsed.org_id,
+            "org_secret": parsed.org_secret,
+            "branding": {
+                "display_name":  parsed.branding.display_name,
+                "primary_color": parsed.branding.primary_color,
+            },
+        });
+        if let Ok(buf) = serde_json::to_vec_pretty(&blob) {
+            let _ = fs::write(&sidecar, buf);
+        }
+    }
+
+    // 6. Best-effort LAN auto-join. Wave 7A's `lan_org_join` is on a
+    //    separate branch (`feat/wave7-mdns-lan-discovery`) and not yet
+    //    merged into this worktree's base. When that PR lands, replace
+    //    this stub with `let _ = lan_org_join(app.clone(), code.clone());`
+    //    — the bootstrap.json field is wire-compatible already.
+    if let Some(code) = parsed.auto_join_lan_org_code.as_ref() {
+        eprintln!(
+            "bootstrap: auto_join_lan_org_code {:?} present — Wave 7A `lan_org_join` not yet merged into this branch; skipping (best-effort)",
+            code
+        );
+    }
+
+    // 7. Audit + auto-mark onboarded so the wizard never shows.
+    audit(
+        &app,
+        "bootstrap",
+        "applied",
+        serde_json::json!({
+            "org_id": parsed.org_id,
+            "org_name_len": parsed.org_name.len(),
+            "directory_entries": parsed.directory.len(),
+            "contacts_added": contacts_added,
+            "contacts_skipped_self": contacts_skipped_self,
+            "relay_count": parsed.default_relays.len(),
+            "lan_code_present": parsed.auto_join_lan_org_code.is_some(),
+            "source_path": boot_path.display().to_string(),
+        }),
+    );
+    if let Err(e) = mark_onboarded(app.clone()) {
+        eprintln!("bootstrap: mark_onboarded failed: {} — continuing", e);
+    }
+    Ok(true)
+}
+
 // ── Crash reporting ─────────────────────────────────────────────────────────
 //
 // MVP design:
@@ -4359,6 +4509,8 @@ async fn dispatch_crash_report(
     );
 
     Ok(status.to_string())
+}
+
 // ── LAN org: zero-touch mDNS discovery for office deployments ───────────────
 //
 // Goal: turn 30-PC enrollment from "all 30 users manually exchange
@@ -4770,150 +4922,6 @@ async fn ingest_lan_peer(app: &AppHandle, peer: DiscoveredPeer) {
                 }
             }
         }
-    }
-    let (boot_path, raw) = match (found_path, raw_bytes) {
-        (Some(p), Some(r)) => (p, r),
-        _ => return Ok(false),
-    };
-
-    let parsed: BootstrapFile = serde_json::from_slice(&raw)
-        .map_err(|e| format!("bootstrap parse {}: {}", boot_path.display(), e))?;
-    if parsed.schema_version != BOOTSTRAP_SCHEMA_VERSION {
-        return Err(format!(
-            "bootstrap {} has schema_version={} — this build only supports version {}",
-            boot_path.display(),
-            parsed.schema_version,
-            BOOTSTRAP_SCHEMA_VERSION
-        ));
-    }
-
-    // 1. Generate fresh identity (same write_identity helper the wizard's
-    //    generate_identity command uses, kept additive so the wizard path
-    //    stays untouched).
-    let identity = write_identity(&keyfile)
-        .map_err(|e| format!("bootstrap: identity gen failed: {}", e))?;
-    // `signing_pub_short` is the 16-hex-char prefix of the freshly-
-    // generated identity. We use it as the self-exclusion key against
-    // `directory[].signing_pub_hex` (full 64-char hex) — `starts_with`
-    // gives us a 64-bit collision domain inside a single org directory,
-    // which is astronomically safe.
-    let self_signing_pub_short = identity.signing_pub_short.clone();
-
-    // 2. Pre-populate contacts.json from directory[] (excluding self).
-    let contacts_p = contacts_path(&app).map_err(|e| e.to_string())?;
-    let mut book = ContactBook::default();
-    let mut contacts_added = 0usize;
-    let mut contacts_skipped_self = 0usize;
-    for entry in &parsed.directory {
-        // Self-exclusion: a directory entry whose signing_pub_hex starts
-        // with our own short signing-pub prefix is "us" (probability of
-        // collision in a same-org directory is astronomical for a 64-bit
-        // prefix). The directory is the org-wide list, so the install
-        // doesn't a-priori know which entry is itself — we mark all
-        // others as contacts and rely on (a) Wave 7A mDNS auto-discovery
-        // for onsite + (b) other org members adding this fresh identity
-        // through their own contact-add flow for remote.
-        if !entry.signing_pub_hex.is_empty()
-            && entry.signing_pub_hex.starts_with(&self_signing_pub_short)
-        {
-            contacts_skipped_self += 1;
-            continue;
-        }
-        book.contacts.push(Contact {
-            label: entry.label.clone(),
-            address: entry.address.clone(),
-            signing_pub: if entry.signing_pub_hex.is_empty() {
-                None
-            } else {
-                Some(entry.signing_pub_hex.clone())
-            },
-        });
-        contacts_added += 1;
-    }
-    save_contacts(&contacts_p, &book)
-        .map_err(|e| format!("bootstrap: write contacts.json: {}", e))?;
-
-    // 3. Pre-populate relays.json from default_relays.
-    if !parsed.default_relays.is_empty() {
-        if let Err(e) = save_relays(&app, &parsed.default_relays) {
-            eprintln!("bootstrap: write relays.json failed: {}", e);
-        }
-    }
-
-    // 4. Persist branding + window title (best-effort).
-    if let Some(display_name) = parsed
-        .branding
-        .display_name
-        .as_ref()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-    {
-        // Stamp into me.json so MLS Welcome metadata shows the branded
-        // label as the inviter.
-        let _ = save_me(
-            &app,
-            &MeDisk {
-                label: display_name.clone(),
-            },
-        );
-        if let Some(win) = app.get_webview_window("main") {
-            let _ = win.set_title(&display_name);
-        }
-    }
-
-    // 5. Persist the org bootstrap blob into a separate sidecar so a
-    //    follow-up wave can read `org_secret` / `org_id` without re-parsing
-    //    the original bootstrap.json (which the admin may delete after
-    //    apply). Best-effort.
-    if let Ok(dir) = app_data(&app) {
-        let sidecar = dir.join("org_bootstrap.json");
-        let blob = serde_json::json!({
-            "schema_version": parsed.schema_version,
-            "org_name":   parsed.org_name,
-            "org_id":     parsed.org_id,
-            "org_secret": parsed.org_secret,
-            "branding": {
-                "display_name":  parsed.branding.display_name,
-                "primary_color": parsed.branding.primary_color,
-            },
-        });
-        if let Ok(buf) = serde_json::to_vec_pretty(&blob) {
-            let _ = fs::write(&sidecar, buf);
-        }
-    }
-
-    // 6. Best-effort LAN auto-join. Wave 7A's `lan_org_join` is on a
-    //    separate branch (`feat/wave7-mdns-lan-discovery`) and not yet
-    //    merged into this worktree's base. When that PR lands, replace
-    //    this stub with `let _ = lan_org_join(app.clone(), code.clone());`
-    //    — the bootstrap.json field is wire-compatible already.
-    if let Some(code) = parsed.auto_join_lan_org_code.as_ref() {
-        eprintln!(
-            "bootstrap: auto_join_lan_org_code {:?} present — Wave 7A `lan_org_join` not yet merged into this branch; skipping (best-effort)",
-            code
-        );
-    }
-
-    // 7. Audit + auto-mark onboarded so the wizard never shows.
-    audit(
-        &app,
-        "bootstrap",
-        "applied",
-        serde_json::json!({
-            "org_id": parsed.org_id,
-            "org_name_len": parsed.org_name.len(),
-            "directory_entries": parsed.directory.len(),
-            "contacts_added": contacts_added,
-            "contacts_skipped_self": contacts_skipped_self,
-            "relay_count": parsed.default_relays.len(),
-            "lan_code_present": parsed.auto_join_lan_org_code.is_some(),
-            "source_path": boot_path.display().to_string(),
-        }),
-    );
-    if let Err(e) = mark_onboarded(app.clone()) {
-        eprintln!("bootstrap: mark_onboarded failed: {} — continuing", e);
-    }
-    Ok(true)
         let _ = app.emit("lan_peer_discovered", peer);
     }
 }
@@ -6295,6 +6303,34 @@ where
     let path = messages_path(app).map_err(|e| e.to_string())?;
     let mut history: Vec<IncomingMessage> = if path.exists() {
         let raw = fs::read(&path).map_err(|e| format!("read {}: {}", path.display(), e))?;
+        serde_json::from_slice(&raw).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let mut hit = None;
+    for m in history.iter_mut() {
+        if m.msg_id.as_deref() == Some(msg_id) {
+            mutator(m);
+            hit = Some((m.pinned, m.starred));
+            break;
+        }
+    }
+    let (pinned, starred) =
+        hit.ok_or_else(|| format!("msg_id '{msg_id}' not found in history"))?;
+    let buf = serde_json::to_vec_pretty(&history).map_err(|e| e.to_string())?;
+    fs::write(&path, buf).map_err(|e| format!("write {}: {}", path.display(), e))?;
+    drop(_guard);
+    let _ = app.emit(
+        "message_state_changed",
+        MessageStateChangedEvent {
+            msg_id: msg_id.to_string(),
+            pinned,
+            starred,
+        },
+    );
+    Ok(())
+}
+
 // ── Reply / reactions / disappearing messages ──────────────────────────────
 //
 // Three additive sealed-sender envelopes:
@@ -6509,6 +6545,8 @@ fn handle_incoming_reply_v1(
         file_meta: None,
         msg_id: Some(msg_id.clone()),
         delivery_state: None,
+        pinned: false,
+        starred: false,
         reply_to: Some(ReplyMeta {
             in_reply_to_msg_id: meta.in_reply_to_msg_id,
             quoted_preview: meta.quoted_preview,
@@ -6623,56 +6661,6 @@ fn handle_incoming_reaction_v1(
     } else {
         Vec::new()
     };
-    let mut hit = None;
-    for m in history.iter_mut() {
-        if m.msg_id.as_deref() == Some(msg_id) {
-            mutator(m);
-            hit = Some((m.pinned, m.starred));
-            break;
-        }
-    }
-    let (pinned, starred) =
-        hit.ok_or_else(|| format!("msg_id '{msg_id}' not found in history"))?;
-    let buf = serde_json::to_vec_pretty(&history).map_err(|e| e.to_string())?;
-    fs::write(&path, buf).map_err(|e| format!("write {}: {}", path.display(), e))?;
-    drop(_guard);
-    let _ = app.emit(
-        "message_state_changed",
-        MessageStateChangedEvent {
-            msg_id: msg_id.to_string(),
-            pinned,
-            starred,
-        },
-    );
-    Ok(())
-}
-
-/// Mutate `conversation_state.json` for the named contact via `mutator`,
-/// persist, and emit `conversation_state_changed`. Inserts a default
-/// `ConversationState` if the contact has no entry yet so a first-time
-/// archive/pin/mute lands cleanly.
-fn mutate_conversation_state<F>(
-    app: &AppHandle,
-    state: &AppState,
-    contact_label: &str,
-    mutator: F,
-) -> Result<(), String>
-where
-    F: Fn(&mut ConversationState),
-{
-    let _guard = state.history_lock.lock().map_err(|e| e.to_string())?;
-    let mut map = load_conversation_state(app);
-    let entry = map.entry(contact_label.to_string()).or_default();
-    mutator(entry);
-    let snapshot = entry.clone();
-    save_conversation_state(app, &map)?;
-    drop(_guard);
-    let _ = app.emit(
-        "conversation_state_changed",
-        ConversationStateChangedEvent {
-            contact_label: contact_label.to_string(),
-            state: snapshot,
-        },
 
     let mut updated_reactions: Option<Vec<ReactionEntry>> = None;
     for row in history.iter_mut() {
@@ -6715,6 +6703,36 @@ where
     // No matching row -> silently drop. The reaction may have arrived
     // before the history hydrated on a fresh launch; the wire stream is
     // append-only so a future re-send would re-apply.
+}
+
+/// Mutate `conversation_state.json` for the named contact via `mutator`,
+/// persist, and emit `conversation_state_changed`. Inserts a default
+/// `ConversationState` if the contact has no entry yet so a first-time
+/// archive/pin/mute lands cleanly.
+fn mutate_conversation_state<F>(
+    app: &AppHandle,
+    state: &AppState,
+    contact_label: &str,
+    mutator: F,
+) -> Result<(), String>
+where
+    F: Fn(&mut ConversationState),
+{
+    let _guard = state.history_lock.lock().map_err(|e| e.to_string())?;
+    let mut map = load_conversation_state(app);
+    let entry = map.entry(contact_label.to_string()).or_default();
+    mutator(entry);
+    let snapshot = entry.clone();
+    save_conversation_state(app, &map)?;
+    drop(_guard);
+    let _ = app.emit(
+        "conversation_state_changed",
+        ConversationStateChangedEvent {
+            contact_label: contact_label.to_string(),
+            state: snapshot,
+        },
+    );
+    Ok(())
 }
 
 /// Receiver-side handler for a `DISA-1:` envelope. Mutates the local
@@ -7016,6 +7034,8 @@ async fn list_archived_conversations(app: AppHandle) -> Result<Vec<String>, Stri
         .filter(|(_, s)| s.archived)
         .map(|(k, _)| k)
         .collect())
+}
+
 /// Frontend command: read the current TTL (in seconds) for a given
 /// contact. `None` means no auto-disappear is configured.
 #[tauri::command]
@@ -7843,6 +7863,8 @@ async fn import_backup(
         identity_replaced: true,
         requires_restart: false,
     })
+}
+
 /// Frontend command: surfaced in Settings → "Erscheinungsbild" as
 /// "Fenster zurücksetzen". Deletes `window_state.json` so the next
 /// launch falls back to the default 1100×720 window centered on the

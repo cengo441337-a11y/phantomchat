@@ -44,8 +44,8 @@ mdns-sd      = "0.13"
 rand         = "0.8"
 # Wave 8H — keystore migration uses `Zeroizing<Vec<u8>>` to wipe transient
 # plaintext key bytes from RAM as soon as they're stashed in the host
-# keystore. Same `zeroize` version core already pulls in.
-zeroize      = "1.7"
+# keystore. Same `zeroize` version core already pulls in. (Combined entry
+# also covers Wave 8c backup/restore which needs the `zeroize_derive` feature.)
 
 # ── Encrypted backup / restore (Wave 8c) ────────────────────────────────────
 # Argon2id KDF for the passphrase → key-encryption-key derivation, OWASP
@@ -59,7 +59,7 @@ zeroize      = "1.7"
 argon2             = "0.5"
 chacha20poly1305   = "0.10"
 zip                = "4"
-zeroize            = { version = "1", features = ["zeroize_derive"] }
+zeroize            = { version = "1.7", features = ["zeroize_derive"] }
 
 # Same feature subset as the CLI: envelope/scanner/session + the libp2p/Nostr
 # net + MLS group stack, but no Flutter FFI bridge or SQLCipher.
