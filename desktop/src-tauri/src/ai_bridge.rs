@@ -72,9 +72,16 @@ pub struct AiBridgeConfig {
     pub ollama_model: String,
 
     pub claude_cli_path: String,
-    /// Extra args appended after `--print <prompt>`. Useful for `--model
-    /// claude-sonnet-4-7` or MCP/tool flags.
+    /// Extra args appended after `--print`. Useful for `--model
+    /// claude-sonnet-4-6`, `--mcp-config`, etc.
     pub claude_cli_extra_args: Vec<String>,
+    /// When true, pass `--dangerously-skip-permissions` so Claude can
+    /// invoke tools (Bash, Read, Edit, MCP servers) without an interactive
+    /// approval prompt that would deadlock a headless bridge. Default
+    /// true — the bridge runs unattended by definition. Disable only if
+    /// you specifically want a no-tools "chat-only" bridge.
+    #[serde(default = "default_true")]
+    pub claude_cli_skip_permissions: bool,
 
     pub openai_endpoint: String,
     pub openai_api_key: String,
@@ -90,6 +97,10 @@ pub struct AiBridgeConfig {
     pub max_history_turns: u32,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 impl Default for AiBridgeConfig {
     fn default() -> Self {
         Self {
@@ -99,6 +110,7 @@ impl Default for AiBridgeConfig {
             ollama_model: DEFAULT_OLLAMA_MODEL.to_string(),
             claude_cli_path: DEFAULT_CLAUDE_CLI_PATH.to_string(),
             claude_cli_extra_args: Vec::new(),
+            claude_cli_skip_permissions: true,
             openai_endpoint: DEFAULT_OPENAI_ENDPOINT.to_string(),
             openai_api_key: String::new(),
             openai_model: DEFAULT_OPENAI_MODEL.to_string(),
@@ -343,6 +355,9 @@ async fn claude_cli_complete(
 
     let mut cmd = TokioCommand::new(&cfg.claude_cli_path);
     cmd.arg("--print");
+    if cfg.claude_cli_skip_permissions {
+        cmd.arg("--dangerously-skip-permissions");
+    }
     for a in &cfg.claude_cli_extra_args {
         cmd.arg(a);
     }

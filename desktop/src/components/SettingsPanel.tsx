@@ -1436,6 +1436,23 @@ export default function SettingsPanel({ onClose }: Props) {
                       placeholder="--model claude-sonnet-4-6"
                     />
                   </div>
+                  <label className="flex items-center gap-2 text-xs text-cyber-cyan cursor-pointer pt-1">
+                    <input
+                      type="checkbox"
+                      checked={aiCfg.claude_cli_skip_permissions}
+                      onChange={e =>
+                        void saveAiCfg({
+                          ...aiCfg,
+                          claude_cli_skip_permissions: e.target.checked,
+                        })
+                      }
+                      className="accent-neon-green"
+                    />
+                    {t("settings.ai_bridge.claude_cli_skip_permissions")}
+                  </label>
+                  <div className="text-xs text-soft-grey">
+                    {t("settings.ai_bridge.claude_cli_skip_permissions_hint")}
+                  </div>
                 </div>
               )}
 

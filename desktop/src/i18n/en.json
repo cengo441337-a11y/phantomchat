@@ -215,6 +215,8 @@
       "claude_cli_hint": "Uses your existing Claude Code OAuth session in ~/.claude/. Prerequisite: run `claude login` once.",
       "claude_cli_path": "Path to `claude` CLI",
       "claude_cli_extra_args": "Extra args (e.g. --model claude-sonnet-4-6)",
+      "claude_cli_skip_permissions": "Auto-approve tool permissions",
+      "claude_cli_skip_permissions_hint": "Required for a headless bridge — otherwise Claude stalls on the interactive tool-approval prompt. Claude can then run Bash / file edits / MCP tools without asking. Disable only for chat-only bridges with no tool use.",
       "openai_endpoint": "Endpoint (base URL without /chat/completions)",
       "openai_model": "Model",
       "openai_api_key": "API key",

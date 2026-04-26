@@ -524,6 +524,7 @@ export interface AiBridgeConfig {
 
   claude_cli_path: string;
   claude_cli_extra_args: string[];
+  claude_cli_skip_permissions: boolean;
 
   openai_endpoint: string;
   openai_api_key: string;
