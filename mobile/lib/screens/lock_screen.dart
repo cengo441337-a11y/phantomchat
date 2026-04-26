@@ -35,6 +35,12 @@ class _LockScreenState extends State<LockScreen> {
   int? _remainingAttempts;
   bool _biometricAvailable = false;
   bool _biometricEnabled   = false;
+  /// True while a PBKDF2 setPin/verifyPin round-trip is in flight. Disables
+  /// the CONFIRM button + numeric pad so a second tap can't double-fire,
+  /// and replaces the status line with a "verifying" progress hint —
+  /// without this the 100k-iter PBKDF2 hash on mobile (5–15 s in pure Dart)
+  /// looks like the button is broken.
+  bool _busy = false;
 
   @override
   void initState() {
@@ -85,6 +91,7 @@ class _LockScreenState extends State<LockScreen> {
   }
 
   Future<void> _submit() async {
+    if (_busy) return;
     if (_buffer.length < 4) {
       setState(() => _statusLine = 'PIN must be at least 4 digits');
       return;
@@ -114,13 +121,44 @@ class _LockScreenState extends State<LockScreen> {
       });
       return;
     }
-    await AppLockService.setPin(_buffer);
+    setState(() {
+      _busy = true;
+      _statusLine = 'Securing PIN…';
+    });
+    try {
+      await AppLockService.setPin(_buffer);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _statusLine = 'PIN-Setup fehlgeschlagen: $e';
+        _pendingSetupPin = null;
+        _buffer = '';
+      });
+      return;
+    }
+    if (!mounted) return;
     HapticFeedback.heavyImpact();
     widget.onUnlocked();
   }
 
   Future<void> _handleUnlockSubmit() async {
-    final ok = await AppLockService.verifyPin(_buffer);
+    setState(() {
+      _busy = true;
+      _statusLine = 'Verifying…';
+    });
+    bool ok;
+    try {
+      ok = await AppLockService.verifyPin(_buffer);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _statusLine = 'PIN-Prüfung fehlgeschlagen: $e';
+        _buffer = '';
+      });
+      return;
+    }
     if (!mounted) return;
 
     if (ok) {
@@ -133,6 +171,7 @@ class _LockScreenState extends State<LockScreen> {
     final left = await AppLockService.remainingAttempts();
     if (!mounted) return;
     setState(() {
+      _busy = false;
       _buffer = '';
       _remainingAttempts = left;
       _statusLine = left == 0
@@ -232,14 +271,21 @@ class _LockScreenState extends State<LockScreen> {
 
                 const Spacer(),
 
-                // Numeric pad
+                // Numeric pad — disabled while a setPin/verifyPin
+                // PBKDF2 round-trip is in flight, otherwise a second
+                // CONFIRM tap during the multi-second hash spawns a
+                // duplicate operation.
                 _PinPad(
-                  onDigit: _append,
-                  onBackspace: _backspace,
-                  onConfirm: _submit,
-                  onBiometric: (!widget.setupMode && _biometricAvailable && _biometricEnabled)
-                      ? _tryBiometric
-                      : null,
+                  onDigit: _busy ? (_) {} : _append,
+                  onBackspace: _busy ? () {} : _backspace,
+                  onConfirm: _busy ? () {} : _submit,
+                  onBiometric: (_busy ||
+                          widget.setupMode ||
+                          !_biometricAvailable ||
+                          !_biometricEnabled)
+                      ? null
+                      : _tryBiometric,
+                  busy: _busy,
                 ),
 
                 const SizedBox(height: 24),
@@ -291,12 +337,14 @@ class _PinPad extends StatelessWidget {
   final VoidCallback onBackspace;
   final VoidCallback onConfirm;
   final VoidCallback? onBiometric;
+  final bool busy;
 
   const _PinPad({
     required this.onDigit,
     required this.onBackspace,
     required this.onConfirm,
     required this.onBiometric,
+    this.busy = false,
   });
 
   @override
@@ -334,17 +382,34 @@ class _PinPad extends StatelessWidget {
         GestureDetector(
           onTap: onConfirm,
           child: CyberCard(
-            borderColor: kCyan,
-            glow: true,
+            borderColor: busy ? kGray : kCyan,
+            glow: !busy,
             padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 24),
-            child: Text(
-              'CONFIRM',
-              style: GoogleFonts.orbitron(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: kCyan,
-                letterSpacing: 3,
-              ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (busy)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 10),
+                    child: SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.6,
+                        valueColor: AlwaysStoppedAnimation<Color>(kCyan),
+                      ),
+                    ),
+                  ),
+                Text(
+                  busy ? 'WORKING…' : 'CONFIRM',
+                  style: GoogleFonts.orbitron(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: busy ? kGray : kCyan,
+                    letterSpacing: 3,
+                  ),
+                ),
+              ],
             ),
           ),
         ),
