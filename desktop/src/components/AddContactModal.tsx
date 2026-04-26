@@ -11,12 +11,20 @@ export default function AddContactModal({ onClose, onSubmit }: Props) {
   const [label, setLabel] = useState("");
   const [address, setAddress] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // Modal-local error so the user sees Tauri-side `add_contact` rejection
+  // (invalid format, duplicate label, save failure) inline instead of
+  // having the parent's pushSystem write into a chat stream they're not
+  // looking at, which made the modal appear to "do nothing".
+  const [error, setError] = useState<string | null>(null);
 
   async function fire() {
     if (!label.trim() || !address.trim() || submitting) return;
     setSubmitting(true);
+    setError(null);
     try {
       await onSubmit(label.trim(), address.trim());
+    } catch (e) {
+      setError(String(e));
     } finally {
       setSubmitting(false);
     }
@@ -61,6 +69,9 @@ export default function AddContactModal({ onClose, onSubmit }: Props) {
               className="neon-input w-full text-xs"
             />
           </div>
+          {error && (
+            <div className="text-xs text-neon-magenta">! {error}</div>
+          )}
         </div>
 
         <div className="flex justify-end gap-2 mt-5">

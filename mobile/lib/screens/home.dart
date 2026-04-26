@@ -45,123 +45,165 @@ class _HomeScreenState extends State<HomeScreen> {
   void _showAddContact() {
     final ctrl = TextEditingController();
     final nameCtrl = TextEditingController();
+    String? errorMsg; // sheet-local — surfaced inline so the user actually sees it
+    bool busy = false;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: kBgCard,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(
-          left: 24, right: 24, top: 24,
-          bottom: MediaQuery.of(ctx).viewInsets.bottom + 32,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(height: 1, color: kCyan.withValues(alpha: 0.4)),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                Container(width: 3, height: 22, color: kCyan),
-                const SizedBox(width: 12),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => Padding(
+          padding: EdgeInsets.only(
+            left: 24, right: 24, top: 24,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 32,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(height: 1, color: kCyan.withValues(alpha: 0.4)),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Container(width: 3, height: 22, color: kCyan),
+                  const SizedBox(width: 12),
+                  Text(
+                    'ADD_CONTACT //',
+                    style: GoogleFonts.orbitron(
+                      fontSize: 16, fontWeight: FontWeight.w700,
+                      color: kWhite, letterSpacing: 1.5,
+                      shadows: [Shadow(color: kCyan.withValues(alpha: 0.5), blurRadius: 10)],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+              Text('NICKNAME:', style: GoogleFonts.spaceMono(fontSize: 10, color: kCyan, letterSpacing: 1)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: nameCtrl,
+                style: GoogleFonts.spaceMono(color: kWhite, fontSize: 14),
+                decoration: const InputDecoration(hintText: 'ghost · cipher · zero'),
+              ),
+              const SizedBox(height: 16),
+              Text('PHANTOM_ID:', style: GoogleFonts.spaceMono(fontSize: 10, color: kCyan, letterSpacing: 1)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: ctrl,
+                style: GoogleFonts.spaceMono(color: kCyan, fontSize: 11),
+                maxLines: 3,
+                decoration: const InputDecoration(hintText: 'phantom:abc123...:def456...'),
+              ),
+              if (errorMsg != null) ...[
+                const SizedBox(height: 8),
                 Text(
-                  'ADD_CONTACT //',
-                  style: GoogleFonts.orbitron(
-                    fontSize: 16, fontWeight: FontWeight.w700,
-                    color: kWhite, letterSpacing: 1.5,
-                    shadows: [Shadow(color: kCyan.withValues(alpha: 0.5), blurRadius: 10)],
+                  '! $errorMsg',
+                  style: GoogleFonts.spaceMono(
+                    fontSize: 11,
+                    color: kMagenta,
+                    letterSpacing: 1,
                   ),
                 ),
               ],
-            ),
-            const SizedBox(height: 24),
-            Text('NICKNAME:', style: GoogleFonts.spaceMono(fontSize: 10, color: kCyan, letterSpacing: 1)),
-            const SizedBox(height: 8),
-            TextField(
-              controller: nameCtrl,
-              style: GoogleFonts.spaceMono(color: kWhite, fontSize: 14),
-              decoration: const InputDecoration(hintText: 'ghost · cipher · zero'),
-            ),
-            const SizedBox(height: 16),
-            Text('PHANTOM_ID:', style: GoogleFonts.spaceMono(fontSize: 10, color: kCyan, letterSpacing: 1)),
-            const SizedBox(height: 8),
-            TextField(
-              controller: ctrl,
-              style: GoogleFonts.spaceMono(color: kCyan, fontSize: 11),
-              maxLines: 3,
-              decoration: const InputDecoration(hintText: 'phantom:eyJ...'),
-            ),
-            const SizedBox(height: 12),
-            // QR-scan shortcut — populates the PHANTOM_ID field above with
-            // whatever the camera reads, so the rest of the flow (validation,
-            // CONFIRM ADD) is identical for typed and scanned IDs.
-            GestureDetector(
-              onTap: () async {
-                final scanned = await Navigator.of(ctx).push<String>(
-                  MaterialPageRoute(builder: (_) => const QrScanScreen()),
-                );
-                if (scanned != null && scanned.isNotEmpty) {
-                  ctrl.text = scanned.trim();
-                }
-              },
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                decoration: BoxDecoration(
-                  border: Border.all(color: kMagenta.withValues(alpha: 0.6), width: 1.2),
-                  color: kMagenta.withValues(alpha: 0.06),
-                ),
-                child: Center(
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.qr_code_scanner, color: kMagenta, size: 18),
-                      const SizedBox(width: 10),
-                      Text(
-                        'SCAN QR',
-                        style: GoogleFonts.orbitron(fontSize: 11, color: kMagenta, letterSpacing: 2),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            GestureDetector(
-              onTap: () async {
-                final contact = PhantomContact.fromPhantomId(
-                  ctrl.text.trim(),
-                  nameCtrl.text.trim().isEmpty ? 'UNKNOWN' : nameCtrl.text.trim().toUpperCase(),
-                );
-                if (contact == null) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('! INVALID PHANTOM ID')),
+              const SizedBox(height: 12),
+              // QR-scan shortcut — populates the PHANTOM_ID field above with
+              // whatever the camera reads, so the rest of the flow (validation,
+              // CONFIRM ADD) is identical for typed and scanned IDs.
+              GestureDetector(
+                onTap: () async {
+                  final scanned = await Navigator.of(ctx).push<String>(
+                    MaterialPageRoute(builder: (_) => const QrScanScreen()),
                   );
-                  return;
-                }
-                _contacts.add(contact);
-                await StorageService.saveContacts(_contacts);
-                setState(() {});
-                if (ctx.mounted) Navigator.pop(ctx);
-              },
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                decoration: BoxDecoration(
-                  border: Border.all(color: kCyan, width: 1.5),
-                  color: kCyan.withValues(alpha: 0.08),
-                  boxShadow: neonGlow(kCyan, radius: 8),
-                ),
-                child: Center(
-                  child: Text(
-                    'CONFIRM ADD',
-                    style: GoogleFonts.orbitron(fontSize: 12, color: kCyan, letterSpacing: 2),
+                  if (scanned != null && scanned.isNotEmpty) {
+                    ctrl.text = scanned.trim();
+                    setSheetState(() => errorMsg = null);
+                  }
+                },
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: kMagenta.withValues(alpha: 0.6), width: 1.2),
+                    color: kMagenta.withValues(alpha: 0.06),
+                  ),
+                  child: Center(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.qr_code_scanner, color: kMagenta, size: 18),
+                        const SizedBox(width: 10),
+                        Text(
+                          'SCAN QR',
+                          style: GoogleFonts.orbitron(fontSize: 11, color: kMagenta, letterSpacing: 2),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
-          ],
+              const SizedBox(height: 16),
+              GestureDetector(
+                onTap: busy ? null : () async {
+                  final raw = ctrl.text.trim();
+                  if (raw.isEmpty) {
+                    setSheetState(() => errorMsg = 'Phantom-ID darf nicht leer sein');
+                    return;
+                  }
+                  final contact = PhantomContact.fromPhantomId(
+                    raw,
+                    nameCtrl.text.trim().isEmpty ? 'UNKNOWN' : nameCtrl.text.trim().toUpperCase(),
+                  );
+                  if (contact == null) {
+                    setSheetState(() => errorMsg =
+                        'Ungültiges Format. Erwartet: phantom:<view_hex>:<spend_hex>');
+                    return;
+                  }
+                  if (_contacts.any((c) => c.publicSpendKey == contact.publicSpendKey)) {
+                    setSheetState(() => errorMsg = 'Kontakt mit dieser Spend-Key existiert bereits');
+                    return;
+                  }
+                  setSheetState(() {
+                    busy = true;
+                    errorMsg = null;
+                  });
+                  try {
+                    _contacts.add(contact);
+                    await StorageService.saveContacts(_contacts);
+                  } catch (e) {
+                    setSheetState(() {
+                      busy = false;
+                      errorMsg = 'Speichern fehlgeschlagen: $e';
+                    });
+                    _contacts.removeLast();
+                    return;
+                  }
+                  if (!mounted) return;
+                  setState(() {});
+                  if (ctx.mounted) Navigator.pop(ctx);
+                },
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: busy ? kGrayText : kCyan, width: 1.5),
+                    color: kCyan.withValues(alpha: 0.08),
+                    boxShadow: busy ? null : neonGlow(kCyan, radius: 8),
+                  ),
+                  child: Center(
+                    child: Text(
+                      busy ? 'SAVING…' : 'CONFIRM ADD',
+                      style: GoogleFonts.orbitron(
+                        fontSize: 12,
+                        color: busy ? kGrayText : kCyan,
+                        letterSpacing: 2,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -19,21 +19,88 @@ class PhantomContact {
     this.lastMessageAt,
   });
 
+  /// Parse a phantom address string. Accepts both the canonical Desktop
+  /// wire format (since v3) and the legacy mobile-only base64-JSON form
+  /// emitted by older mobile builds — that way an existing mobile↔mobile
+  /// QR code keeps working AND mobile can finally add a Desktop-generated
+  /// address.
+  ///
+  ///   New: `phantom:<view_hex>:<spend_hex>`
+  ///        (matches `core::address::PhantomAddress::Display` on the Rust
+  ///        side; what `get_address` Tauri command returns)
+  ///   Hybrid: `phantomx:<view_hex>:<spend_hex>:<mlkem_b64>`
+  ///        (PQXDH path; we store view+spend, drop the mlkem since the
+  ///        mobile send-path doesn't yet emit hybrid envelopes)
+  ///   Legacy: `phantom:<base64url-of-JSON-{vk,sk,n}>`
   static PhantomContact? fromPhantomId(String phantomId, String nickname) {
-    try {
-      final encoded = phantomId.replaceFirst('phantom:', '');
-      final decoded = utf8.decode(base64Url.decode(encoded));
-      final json = jsonDecode(decoded) as Map<String, dynamic>;
+    final trimmed = phantomId.trim();
+
+    // Hybrid `phantomx:` — strip prefix, treat first two colon-separated
+    // parts as view/spend hex, ignore the mlkem segment for now.
+    if (trimmed.startsWith('phantomx:')) {
+      final rest = trimmed.substring('phantomx:'.length);
+      final parts = rest.split(':');
+      if (parts.length >= 2 &&
+          _isHex(parts[0], 64) &&
+          _isHex(parts[1], 64)) {
+        return PhantomContact(
+          id: parts[1],
+          nickname: nickname,
+          publicViewKey: parts[0],
+          publicSpendKey: parts[1],
+          addedAt: DateTime.now(),
+        );
+      }
+      return null;
+    }
+
+    final body = trimmed.startsWith('phantom:')
+        ? trimmed.substring('phantom:'.length)
+        : trimmed;
+
+    // New colon-hex format: phantom:<view_hex>:<spend_hex>
+    final colonParts = body.split(':');
+    if (colonParts.length == 2 &&
+        _isHex(colonParts[0], 64) &&
+        _isHex(colonParts[1], 64)) {
       return PhantomContact(
-        id: json['sk'] as String,
+        id: colonParts[1],
         nickname: nickname,
-        publicViewKey: json['vk'] as String,
-        publicSpendKey: json['sk'] as String,
+        publicViewKey: colonParts[0],
+        publicSpendKey: colonParts[1],
+        addedAt: DateTime.now(),
+      );
+    }
+
+    // Legacy base64-JSON fallback so existing mobile↔mobile QR codes still
+    // import. New mobile builds emit the colon-hex format above.
+    try {
+      final decoded = utf8.decode(base64Url.decode(body));
+      final json = jsonDecode(decoded) as Map<String, dynamic>;
+      final vk = json['vk'] as String?;
+      final sk = json['sk'] as String?;
+      if (vk == null || sk == null) return null;
+      return PhantomContact(
+        id: sk,
+        nickname: nickname,
+        publicViewKey: vk,
+        publicSpendKey: sk,
         addedAt: DateTime.now(),
       );
     } catch (_) {
       return null;
     }
+  }
+
+  static bool _isHex(String s, int expectedLen) {
+    if (s.length != expectedLen) return false;
+    for (final c in s.codeUnits) {
+      final isDigit = c >= 0x30 && c <= 0x39;
+      final isLowAF = c >= 0x61 && c <= 0x66;
+      final isUpAF = c >= 0x41 && c <= 0x46;
+      if (!isDigit && !isLowAF && !isUpAF) return false;
+    }
+    return true;
   }
 
   Map<String, dynamic> toJson() => {

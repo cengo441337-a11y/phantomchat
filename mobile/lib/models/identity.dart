@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 class PhantomIdentity {
   final String id;
   final String nickname;
@@ -19,14 +17,14 @@ class PhantomIdentity {
     required this.createdAt,
   });
 
-  String get phantomId {
-    final data = jsonEncode({
-      'vk': publicViewKey,
-      'sk': publicSpendKey,
-      'n': nickname,
-    });
-    return 'phantom:${base64Url.encode(utf8.encode(data))}';
-  }
+  /// Canonical phantom-address wire form. Matches the Rust
+  /// `core::address::PhantomAddress::Display` on the Desktop side, so a
+  /// scan of this QR by Desktop's "Add contact" flow imports cleanly.
+  /// The legacy `phantom:<base64-JSON>` form is no longer emitted (was
+  /// only ever consumed by mobile↔mobile QR exchanges, and the
+  /// `fromPhantomId` parser still accepts it as a backwards-compat
+  /// fallback so older shared QR codes keep working).
+  String get phantomId => 'phantom:$publicViewKey:$publicSpendKey';
 
   Map<String, dynamic> toJson() => {
     'id': id,

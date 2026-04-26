@@ -932,16 +932,17 @@ export default function App() {
   }, [activeLabel]);
 
   async function handleAddContact(label: string, addr: string) {
-    try {
-      await invoke("add_contact", { label, address: addr });
-      const cs = await invoke<Contact[]>("list_contacts");
-      setContacts(cs);
-      if (!activeLabel) setActiveLabel(label);
-      setShowAddContact(false);
-      pushSystem(t("app.system.added_contact", { label }));
-    } catch (e) {
-      pushSystem(t("app.system.add_contact_failed", { error: String(e) }));
-    }
+    // Let exceptions bubble so AddContactModal can render the error
+    // inline. The previous behaviour of swallowing them into pushSystem
+    // surfaced the failure in the chat-stream area (which the user
+    // couldn't see while focused on the modal), making the button
+    // appear to "do nothing" on bad input.
+    await invoke("add_contact", { label, address: addr });
+    const cs = await invoke<Contact[]>("list_contacts");
+    setContacts(cs);
+    if (!activeLabel) setActiveLabel(label);
+    setShowAddContact(false);
+    pushSystem(t("app.system.added_contact", { label }));
   }
 
   const handleBindToContact = useCallback(
