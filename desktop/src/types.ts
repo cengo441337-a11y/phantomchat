@@ -467,3 +467,47 @@ export interface RestoreResult {
   identity_replaced: boolean;
   requires_restart: boolean;
 }
+
+// ── Wave 11A: Home-LLM Bridge ──────────────────────────────────────────────
+//
+// Mirrors `desktop/src-tauri/src/ai_bridge.rs`. The four providers correspond
+// to four ways a Pro/Team-subscriber or pay-as-you-go user can plug an LLM
+// into PhantomChat without breaking the messenger's E2E story:
+//   - `ollama`        — local HTTP, nothing leaves the box
+//   - `claude_cli`    — `claude --print` subprocess, OAuth via Claude Code
+//                       (counts against the user's Pro/Team plan)
+//   - `openai_compat` — any /v1/chat/completions endpoint with a bearer key
+//   - `claude_api`    — Anthropic's native /v1/messages with `x-api-key`
+
+export type AiBridgeProvider =
+  | "ollama"
+  | "claude_cli"
+  | "openai_compat"
+  | "claude_api";
+
+export interface AiBridgeConfig {
+  active: boolean;
+  provider: AiBridgeProvider;
+
+  ollama_endpoint: string;
+  ollama_model: string;
+
+  claude_cli_path: string;
+  claude_cli_extra_args: string[];
+
+  openai_endpoint: string;
+  openai_api_key: string;
+  openai_model: string;
+
+  claude_api_key: string;
+  claude_api_model: string;
+
+  system_prompt: string;
+  allowlist: string[];
+  max_history_turns: number;
+}
+
+export interface AiBridgeTurn {
+  role: "user" | "assistant";
+  content: string;
+}

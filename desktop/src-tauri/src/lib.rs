@@ -9,6 +9,8 @@
 //! `%APPDATA%\de.dc-infosec.phantomchat\` on Windows, the corresponding
 //! `~/.local/share/...` on Linux for `cargo check` purposes.
 
+mod ai_bridge;
+
 use std::{
     fs,
     fs::OpenOptions,
@@ -2074,6 +2076,7 @@ async fn spawn_listener_task(
                         &format!("From {}", payload.sender_label),
                         &payload.plaintext,
                     );
+                    ai_bridge_maybe_handle(&app, &payload.sender_label, &payload.plaintext);
                     let _ = app.emit("message", payload);
 
                     // Auto-emit a `delivered` receipt to the sender so they
@@ -5122,6 +5125,147 @@ async fn rehydrate_lan_org_on_startup(app: AppHandle) {
     });
 }
 
+// ── Wave 11A: Home-LLM Bridge commands ─────────────────────────────────────
+
+#[tauri::command]
+fn ai_bridge_get_config(app: AppHandle) -> Result<ai_bridge::AiBridgeConfig, String> {
+    let dir = app_data(&app).map_err(|e| e.to_string())?;
+    Ok(ai_bridge::load_config(&dir))
+}
+
+#[tauri::command]
+fn ai_bridge_set_config(
+    app: AppHandle,
+    config: ai_bridge::AiBridgeConfig,
+) -> Result<(), String> {
+    let dir = app_data(&app).map_err(|e| e.to_string())?;
+    ai_bridge::save_config(&dir, &config).map_err(|e| e.to_string())?;
+    audit(
+        &app,
+        "ai_bridge",
+        "config_set",
+        serde_json::json!({
+            "active": config.active,
+            "provider": config.provider,
+            "allowlist_len": config.allowlist.len(),
+        }),
+    );
+    let _ = app.emit("ai_bridge_config_changed", &config);
+    Ok(())
+}
+
+#[tauri::command]
+fn ai_bridge_get_history(
+    app: AppHandle,
+    contact_label: String,
+) -> Result<Vec<ai_bridge::Turn>, String> {
+    let dir = app_data(&app).map_err(|e| e.to_string())?;
+    Ok(ai_bridge::get_history(&dir, &contact_label))
+}
+
+#[tauri::command]
+fn ai_bridge_clear_history(app: AppHandle, contact_label: String) -> Result<(), String> {
+    let dir = app_data(&app).map_err(|e| e.to_string())?;
+    ai_bridge::clear_history(&dir, &contact_label).map_err(|e| e.to_string())
+}
+
+/// Manual one-shot test — sends `prompt` through the configured provider
+/// without involving the relay/inbox. Used by the Settings UI's "Test
+/// connection" button so the user can verify their config before flipping
+/// the bridge live.
+#[tauri::command]
+async fn ai_bridge_test(app: AppHandle, prompt: String) -> Result<String, String> {
+    let dir = app_data(&app).map_err(|e| e.to_string())?;
+    let cfg = ai_bridge::load_config(&dir);
+    ai_bridge::complete(&cfg, &[], &prompt)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Inbox hook (called from `start_listener` after `app.emit("message", ...)`).
+/// Spawns a background task that calls the configured provider and replies
+/// via the existing send pipeline. Returns immediately so the listener loop
+/// stays unblocked.
+fn ai_bridge_maybe_handle(app: &AppHandle, sender_label: &str, plaintext: &str) {
+    let app_data_dir = match app_data(app) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let cfg = ai_bridge::load_config(&app_data_dir);
+    if !ai_bridge::should_respond(&cfg, sender_label) {
+        return;
+    }
+    let app = app.clone();
+    let sender_label = sender_label.to_string();
+    let plaintext = plaintext.to_string();
+    tokio::spawn(async move {
+        let history = ai_bridge::get_history(&app_data_dir, &sender_label);
+        match ai_bridge::complete(&cfg, &history, &plaintext).await {
+            Ok(reply) => {
+                let _ = ai_bridge::append_turn(
+                    &app_data_dir,
+                    &sender_label,
+                    ai_bridge::Turn {
+                        role: ai_bridge::Role::User,
+                        content: plaintext.clone(),
+                    },
+                    cfg.max_history_turns,
+                );
+                let _ = ai_bridge::append_turn(
+                    &app_data_dir,
+                    &sender_label,
+                    ai_bridge::Turn {
+                        role: ai_bridge::Role::Assistant,
+                        content: reply.clone(),
+                    },
+                    cfg.max_history_turns,
+                );
+                if let Err(e) = send_message_inner(
+                    app.clone(),
+                    sender_label.clone(),
+                    reply.clone(),
+                )
+                .await
+                {
+                    let _ = app.emit(
+                        "error",
+                        format!("AI bridge: send reply to '{}' failed: {}", sender_label, e),
+                    );
+                    audit(
+                        &app,
+                        "ai_bridge",
+                        "send_failed",
+                        serde_json::json!({"to": sender_label, "err": e.to_string()}),
+                    );
+                } else {
+                    audit(
+                        &app,
+                        "ai_bridge",
+                        "replied",
+                        serde_json::json!({
+                            "to": sender_label,
+                            "in_chars": plaintext.chars().count(),
+                            "out_chars": reply.chars().count(),
+                        }),
+                    );
+                }
+            }
+            Err(e) => {
+                let _ = app.emit(
+                    "error",
+                    format!("AI bridge: provider call failed: {}", e),
+                );
+                audit(
+                    &app,
+                    "ai_bridge",
+                    "provider_error",
+                    serde_json::json!({"err": e.to_string()}),
+                );
+            }
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -5207,6 +5351,12 @@ pub fn run() {
             lan_org_status,
             lan_org_leave,
             reset_window_state,
+            // ── Wave 11A: Home-LLM bridge ──────────────────────────
+            ai_bridge_get_config,
+            ai_bridge_set_config,
+            ai_bridge_get_history,
+            ai_bridge_clear_history,
+            ai_bridge_test,
         ])
         .setup(|app| {
             // Pre-create the data dir on first launch so command handlers

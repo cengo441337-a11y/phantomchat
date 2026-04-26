@@ -6,6 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import AddressQR from "./AddressQR";
 import ThemeSwitcher from "./ThemeSwitcher";
 import type {
+  AiBridgeConfig,
   AuditEntry,
   BackupMeta,
   BackupResult,
@@ -127,6 +128,54 @@ export default function SettingsPanel({ onClose }: Props) {
   const [wipeText, setWipeText] = useState("");
   const [wipeErr, setWipeErr] = useState<string | null>(null);
 
+  // ── Wave 11A: AI Bridge section ─────────────────────────────────────────
+  // Lets the user run PhantomChat as a daemon that auto-replies to messages
+  // from allow-listed contacts by routing them through a local or hosted LLM.
+  // The wire path is the standard E2E + relay; the bridge is just an inbox
+  // hook in the Rust backend (`ai_bridge_maybe_handle` in lib.rs).
+  const [aiCfg, setAiCfg] = useState<AiBridgeConfig | null>(null);
+  const [aiCfgErr, setAiCfgErr] = useState<string | null>(null);
+  const [aiCfgSaved, setAiCfgSaved] = useState(false);
+  const [aiTestPrompt, setAiTestPrompt] = useState("Hello — say 'pong' if you can read this.");
+  const [aiTestResult, setAiTestResult] = useState<string | null>(null);
+  const [aiTesting, setAiTesting] = useState(false);
+
+  async function reloadAiCfg() {
+    try {
+      const cfg = await invoke<AiBridgeConfig>("ai_bridge_get_config");
+      setAiCfg(cfg);
+      setAiCfgErr(null);
+    } catch (e) {
+      setAiCfgErr(String(e));
+    }
+  }
+
+  async function saveAiCfg(next: AiBridgeConfig) {
+    try {
+      await invoke("ai_bridge_set_config", { config: next });
+      setAiCfg(next);
+      setAiCfgSaved(true);
+      setAiCfgErr(null);
+      setTimeout(() => setAiCfgSaved(false), 1200);
+    } catch (e) {
+      setAiCfgErr(String(e));
+    }
+  }
+
+  async function runAiTest() {
+    if (!aiCfg) return;
+    setAiTesting(true);
+    setAiTestResult(null);
+    try {
+      const out = await invoke<string>("ai_bridge_test", { prompt: aiTestPrompt });
+      setAiTestResult(out);
+    } catch (e) {
+      setAiTestResult(`ERROR: ${String(e)}`);
+    } finally {
+      setAiTesting(false);
+    }
+  }
+
   // ── Wave 8G: Archive section ────────────────────────────────────────────
   // Lists all currently-archived conversation labels. Click → unarchive
   // (round-trip via `unarchive_conversation`). The "Alle Archive leeren"
@@ -143,6 +192,10 @@ export default function SettingsPanel({ onClose }: Props) {
       console.warn("list_archived_conversations failed:", e);
     }
   }
+
+  useEffect(() => {
+    void reloadAiCfg();
+  }, []);
 
   useEffect(() => {
     void reloadArchive();
@@ -1257,6 +1310,317 @@ export default function SettingsPanel({ onClose }: Props) {
               </span>
             )}
           </div>
+        </section>
+
+        {/* ── AI Bridge (Wave 11A) ────────────────────────────────────── */}
+        <section className="mb-6">
+          <h3 className="text-neon-green text-xs uppercase tracking-widest mb-2">
+            {t("settings.ai_bridge.title")}
+          </h3>
+          <p className="text-xs text-soft-grey mb-3">
+            {t("settings.ai_bridge.description")}
+          </p>
+          {aiCfgErr && (
+            <div className="text-xs text-neon-magenta mb-2">{aiCfgErr}</div>
+          )}
+          {aiCfg && (
+            <div className="space-y-3">
+              {/* Active toggle */}
+              <label className="flex items-center gap-2 text-xs text-cyber-cyan cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={aiCfg.active}
+                  onChange={e =>
+                    void saveAiCfg({ ...aiCfg, active: e.target.checked })
+                  }
+                  className="accent-neon-green"
+                />
+                {t("settings.ai_bridge.active_label")}
+              </label>
+
+              {/* Provider dropdown */}
+              <div>
+                <label className="text-xs text-soft-grey block mb-1">
+                  {t("settings.ai_bridge.provider_label")}
+                </label>
+                <select
+                  value={aiCfg.provider}
+                  onChange={e =>
+                    void saveAiCfg({
+                      ...aiCfg,
+                      provider: e.target.value as AiBridgeConfig["provider"],
+                    })
+                  }
+                  className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full"
+                >
+                  <option value="claude_cli">{t("settings.ai_bridge.provider_claude_cli")}</option>
+                  <option value="ollama">{t("settings.ai_bridge.provider_ollama")}</option>
+                  <option value="openai_compat">{t("settings.ai_bridge.provider_openai_compat")}</option>
+                  <option value="claude_api">{t("settings.ai_bridge.provider_claude_api")}</option>
+                </select>
+              </div>
+
+              {/* Per-provider fields */}
+              {aiCfg.provider === "ollama" && (
+                <div className="space-y-2 pl-2 border-l border-cyber-cyan/20">
+                  <div>
+                    <label className="text-xs text-soft-grey block mb-1">
+                      {t("settings.ai_bridge.ollama_endpoint")}
+                    </label>
+                    <input
+                      type="text"
+                      value={aiCfg.ollama_endpoint}
+                      onChange={e =>
+                        setAiCfg({ ...aiCfg, ollama_endpoint: e.target.value })
+                      }
+                      onBlur={() => void saveAiCfg(aiCfg)}
+                      className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full font-mono"
+                      placeholder="http://localhost:11434"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-soft-grey block mb-1">
+                      {t("settings.ai_bridge.ollama_model")}
+                    </label>
+                    <input
+                      type="text"
+                      value={aiCfg.ollama_model}
+                      onChange={e =>
+                        setAiCfg({ ...aiCfg, ollama_model: e.target.value })
+                      }
+                      onBlur={() => void saveAiCfg(aiCfg)}
+                      className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full font-mono"
+                      placeholder="llama3.1"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {aiCfg.provider === "claude_cli" && (
+                <div className="space-y-2 pl-2 border-l border-cyber-cyan/20">
+                  <div className="text-xs text-soft-grey">
+                    {t("settings.ai_bridge.claude_cli_hint")}
+                  </div>
+                  <div>
+                    <label className="text-xs text-soft-grey block mb-1">
+                      {t("settings.ai_bridge.claude_cli_path")}
+                    </label>
+                    <input
+                      type="text"
+                      value={aiCfg.claude_cli_path}
+                      onChange={e =>
+                        setAiCfg({ ...aiCfg, claude_cli_path: e.target.value })
+                      }
+                      onBlur={() => void saveAiCfg(aiCfg)}
+                      className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full font-mono"
+                      placeholder="claude"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-soft-grey block mb-1">
+                      {t("settings.ai_bridge.claude_cli_extra_args")}
+                    </label>
+                    <input
+                      type="text"
+                      value={aiCfg.claude_cli_extra_args.join(" ")}
+                      onChange={e =>
+                        setAiCfg({
+                          ...aiCfg,
+                          claude_cli_extra_args: e.target.value
+                            .split(/\s+/)
+                            .filter(s => s.length > 0),
+                        })
+                      }
+                      onBlur={() => void saveAiCfg(aiCfg)}
+                      className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full font-mono"
+                      placeholder="--model claude-sonnet-4-6"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {aiCfg.provider === "openai_compat" && (
+                <div className="space-y-2 pl-2 border-l border-cyber-cyan/20">
+                  <div>
+                    <label className="text-xs text-soft-grey block mb-1">
+                      {t("settings.ai_bridge.openai_endpoint")}
+                    </label>
+                    <input
+                      type="text"
+                      value={aiCfg.openai_endpoint}
+                      onChange={e =>
+                        setAiCfg({ ...aiCfg, openai_endpoint: e.target.value })
+                      }
+                      onBlur={() => void saveAiCfg(aiCfg)}
+                      className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full font-mono"
+                      placeholder="https://api.openai.com/v1"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-soft-grey block mb-1">
+                      {t("settings.ai_bridge.openai_model")}
+                    </label>
+                    <input
+                      type="text"
+                      value={aiCfg.openai_model}
+                      onChange={e =>
+                        setAiCfg({ ...aiCfg, openai_model: e.target.value })
+                      }
+                      onBlur={() => void saveAiCfg(aiCfg)}
+                      className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full font-mono"
+                      placeholder="gpt-4o-mini"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-soft-grey block mb-1">
+                      {t("settings.ai_bridge.openai_api_key")}
+                    </label>
+                    <input
+                      type="password"
+                      value={aiCfg.openai_api_key}
+                      onChange={e =>
+                        setAiCfg({ ...aiCfg, openai_api_key: e.target.value })
+                      }
+                      onBlur={() => void saveAiCfg(aiCfg)}
+                      className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full font-mono"
+                      placeholder="sk-..."
+                    />
+                  </div>
+                </div>
+              )}
+
+              {aiCfg.provider === "claude_api" && (
+                <div className="space-y-2 pl-2 border-l border-cyber-cyan/20">
+                  <div>
+                    <label className="text-xs text-soft-grey block mb-1">
+                      {t("settings.ai_bridge.claude_api_model")}
+                    </label>
+                    <input
+                      type="text"
+                      value={aiCfg.claude_api_model}
+                      onChange={e =>
+                        setAiCfg({ ...aiCfg, claude_api_model: e.target.value })
+                      }
+                      onBlur={() => void saveAiCfg(aiCfg)}
+                      className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full font-mono"
+                      placeholder="claude-opus-4-7"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-soft-grey block mb-1">
+                      {t("settings.ai_bridge.claude_api_key")}
+                    </label>
+                    <input
+                      type="password"
+                      value={aiCfg.claude_api_key}
+                      onChange={e =>
+                        setAiCfg({ ...aiCfg, claude_api_key: e.target.value })
+                      }
+                      onBlur={() => void saveAiCfg(aiCfg)}
+                      className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full font-mono"
+                      placeholder="sk-ant-..."
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* System prompt */}
+              <div>
+                <label className="text-xs text-soft-grey block mb-1">
+                  {t("settings.ai_bridge.system_prompt")}
+                </label>
+                <textarea
+                  value={aiCfg.system_prompt}
+                  onChange={e =>
+                    setAiCfg({ ...aiCfg, system_prompt: e.target.value })
+                  }
+                  onBlur={() => void saveAiCfg(aiCfg)}
+                  rows={3}
+                  className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full font-mono"
+                />
+              </div>
+
+              {/* Allowlist (comma-separated contact labels) */}
+              <div>
+                <label className="text-xs text-soft-grey block mb-1">
+                  {t("settings.ai_bridge.allowlist_label")}
+                </label>
+                <input
+                  type="text"
+                  value={aiCfg.allowlist.join(", ")}
+                  onChange={e =>
+                    setAiCfg({
+                      ...aiCfg,
+                      allowlist: e.target.value
+                        .split(",")
+                        .map(s => s.trim())
+                        .filter(s => s.length > 0),
+                    })
+                  }
+                  onBlur={() => void saveAiCfg(aiCfg)}
+                  className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full font-mono"
+                  placeholder={t("settings.ai_bridge.allowlist_placeholder")}
+                />
+                <div className="text-xs text-soft-grey mt-1">
+                  {t("settings.ai_bridge.allowlist_hint")}
+                </div>
+              </div>
+
+              {/* History cap */}
+              <div>
+                <label className="text-xs text-soft-grey block mb-1">
+                  {t("settings.ai_bridge.max_history_turns")}
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={200}
+                  value={aiCfg.max_history_turns}
+                  onChange={e =>
+                    setAiCfg({
+                      ...aiCfg,
+                      max_history_turns: parseInt(e.target.value) || 0,
+                    })
+                  }
+                  onBlur={() => void saveAiCfg(aiCfg)}
+                  className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-24 font-mono"
+                />
+              </div>
+
+              {/* Test connection */}
+              <div className="border-t border-cyber-cyan/20 pt-3">
+                <div className="text-xs text-neon-green mb-1">
+                  {t("settings.ai_bridge.test_title")}
+                </div>
+                <input
+                  type="text"
+                  value={aiTestPrompt}
+                  onChange={e => setAiTestPrompt(e.target.value)}
+                  className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full font-mono mb-2"
+                />
+                <button
+                  onClick={() => void runAiTest()}
+                  disabled={aiTesting}
+                  className="neon-button text-xs disabled:opacity-40"
+                >
+                  {aiTesting
+                    ? t("settings.ai_bridge.test_running")
+                    : t("settings.ai_bridge.test_button")}
+                </button>
+                {aiTestResult && (
+                  <pre className="mt-2 text-xs text-soft-grey whitespace-pre-wrap bg-black/40 p-2 border border-cyber-cyan/20 max-h-40 overflow-auto font-mono">
+                    {aiTestResult}
+                  </pre>
+                )}
+              </div>
+
+              {aiCfgSaved && (
+                <div className="text-xs text-cyber-cyan">
+                  {t("settings.ai_bridge.saved")}
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         {/* ── About ───────────────────────────────────────────────────── */}
