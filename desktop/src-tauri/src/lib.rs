@@ -8146,7 +8146,11 @@ fn spawn_purge_task(app: &AppHandle) {
         *started = true;
     }
     let app_for_task = app.clone();
-    tokio::spawn(async move {
+    // `tauri::async_runtime::spawn` (rather than `tokio::spawn`) because
+    // `spawn_purge_task` is invoked from `Builder::setup`, before tokio
+    // is current on the calling thread — a bare `tokio::spawn` panics
+    // with "no reactor running" on cold start.
+    tauri::async_runtime::spawn(async move {
         // Sleep first so a cold-start purge doesn't fire before the
         // history file even exists (the React side hydrates async on
         // launch). Subsequent ticks fire on the configured interval.
