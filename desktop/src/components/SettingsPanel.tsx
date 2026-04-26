@@ -11,6 +11,7 @@ import type {
   RestoreResult,
   UpdateInfo,
 } from "../types";
+import type { AuditEntry, LanOrgStatus, PrivacyConfigDto, UpdateInfo } from "../types";
 
 interface Props {
   onClose: () => void;
@@ -78,6 +79,17 @@ export default function SettingsPanel({ onClose }: Props) {
   });
   const [privacySaving, setPrivacySaving] = useState(false);
   const [privacyMsg, setPrivacyMsg] = useState<string | null>(null);
+
+  // ── LAN Org ─────────────────────────────────────────────────────────────
+  // Mirrors the wizard's join/create/skip flow but persists across the
+  // app's lifetime — used by colleagues who joined later or by the user
+  // changing their mind about which org they're in.
+  const [lanStatus, setLanStatus] = useState<LanOrgStatus | null>(null);
+  const [lanCodeInput, setLanCodeInput] = useState("");
+  const [lanBusy, setLanBusy] = useState(false);
+  const [lanErr, setLanErr] = useState<string | null>(null);
+  const [lanShowCode, setLanShowCode] = useState(false);
+  const [lanCodeCopied, setLanCodeCopied] = useState(false);
 
   // ── About ───────────────────────────────────────────────────────────────
   const [version, setVersion] = useState<string>("?.?.?");
@@ -174,6 +186,12 @@ export default function SettingsPanel({ onClose }: Props) {
         setAuditEntries(entries);
       } catch (e) {
         setAuditErr(String(e));
+      }
+      try {
+        const s = await invoke<LanOrgStatus>("lan_org_status");
+        setLanStatus(s);
+      } catch (e) {
+        setLanErr(String(e));
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -496,6 +514,76 @@ export default function SettingsPanel({ onClose }: Props) {
     }
   }
 
+  /// Mirror of the wizard's input formatter — keeps the code field
+  /// rendering as `XXX-XXX` regardless of how the user types/pastes.
+  function formatLanCode(raw: string): string {
+    const cleaned = raw.replace(/[^0-9A-Za-z]/g, "").toUpperCase().slice(0, 6);
+    if (cleaned.length <= 3) return cleaned;
+    return `${cleaned.slice(0, 3)}-${cleaned.slice(3)}`;
+  }
+
+  async function refreshLanStatus() {
+    try {
+      const s = await invoke<LanOrgStatus>("lan_org_status");
+      setLanStatus(s);
+    } catch (e) {
+      setLanErr(String(e));
+    }
+  }
+
+  async function lanCreate() {
+    setLanBusy(true);
+    setLanErr(null);
+    try {
+      await invoke<string>("lan_org_create");
+      await refreshLanStatus();
+      setLanShowCode(true);
+    } catch (e) {
+      setLanErr(String(e));
+    } finally {
+      setLanBusy(false);
+    }
+  }
+
+  async function lanJoin() {
+    setLanBusy(true);
+    setLanErr(null);
+    try {
+      await invoke("lan_org_join", { code: lanCodeInput });
+      await refreshLanStatus();
+      setLanCodeInput("");
+    } catch (e) {
+      setLanErr(String(e));
+    } finally {
+      setLanBusy(false);
+    }
+  }
+
+  async function lanLeave() {
+    setLanBusy(true);
+    setLanErr(null);
+    try {
+      await invoke("lan_org_leave");
+      setLanShowCode(false);
+      await refreshLanStatus();
+    } catch (e) {
+      setLanErr(String(e));
+    } finally {
+      setLanBusy(false);
+    }
+  }
+
+  async function copyLanCode() {
+    if (!lanStatus?.code) return;
+    try {
+      await navigator.clipboard.writeText(lanStatus.code);
+      setLanCodeCopied(true);
+      window.setTimeout(() => setLanCodeCopied(false), 1200);
+    } catch {
+      /* clipboard refused — silent */
+    }
+  }
+
   async function reloadAudit() {
     try {
       const entries = await invoke<AuditEntry[]>("read_audit_log", { limit: 100 });
@@ -804,6 +892,108 @@ export default function SettingsPanel({ onClose }: Props) {
                 </span>
               )}
             </div>
+          </div>
+        </section>
+
+        {/* ── LAN Org ────────────────────────────────────────────────── */}
+        <section className="mb-6">
+          <h3 className="text-neon-green text-xs uppercase tracking-widest mb-2">
+            {t("settings.lan.title")}
+          </h3>
+          <p className="text-xs text-soft-grey mb-2 leading-relaxed">
+            {t("settings.lan.description")}
+          </p>
+          {lanStatus?.active ? (
+            <div className="space-y-3 text-xs">
+              <Row
+                label={t("settings.lan.code_label")}
+                mono
+                value={lanShowCode && lanStatus.code ? lanStatus.code : "•••-•••"}
+              />
+              <Row
+                label={t("settings.lan.peer_count_label")}
+                value={String(lanStatus.peer_count)}
+              />
+              {lanStatus.last_discovery_ts && (
+                <Row
+                  label={t("settings.lan.last_discovery_label")}
+                  mono
+                  value={new Date(
+                    Number(lanStatus.last_discovery_ts) * 1000,
+                  ).toLocaleString()}
+                />
+              )}
+              <div className="flex gap-2 items-center flex-wrap">
+                <button
+                  onClick={() => setLanShowCode(v => !v)}
+                  className="neon-button text-xs"
+                >
+                  {lanShowCode
+                    ? t("settings.lan.hide_code_button")
+                    : t("settings.lan.show_code_button")}
+                </button>
+                {lanShowCode && lanStatus.code && (
+                  <button
+                    onClick={() => void copyLanCode()}
+                    className="neon-button text-xs"
+                  >
+                    {lanCodeCopied
+                      ? t("settings.lan.copied_button")
+                      : t("settings.lan.copy_button")}
+                  </button>
+                )}
+                <button
+                  onClick={() => void lanLeave()}
+                  disabled={lanBusy}
+                  className="neon-button text-xs border-neon-magenta/70 text-neon-magenta hover:bg-neon-magenta/10 disabled:opacity-40"
+                >
+                  {t("settings.lan.leave_button")}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3 text-xs">
+              <div className="flex flex-col gap-2">
+                <input
+                  type="text"
+                  value={lanCodeInput}
+                  onChange={e => setLanCodeInput(formatLanCode(e.target.value))}
+                  placeholder={t("settings.lan.code_placeholder")}
+                  className="neon-input text-xs font-mono tracking-widest"
+                  maxLength={7}
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => void lanJoin()}
+                    disabled={
+                      lanBusy || lanCodeInput.replace("-", "").length !== 6
+                    }
+                    className="neon-button text-xs flex-1 disabled:opacity-40"
+                  >
+                    {lanBusy
+                      ? t("settings.lan.joining")
+                      : t("settings.lan.join_button")}
+                  </button>
+                  <button
+                    onClick={() => void lanCreate()}
+                    disabled={lanBusy}
+                    className="neon-button text-xs flex-1 disabled:opacity-40"
+                  >
+                    {lanBusy
+                      ? t("settings.lan.creating")
+                      : t("settings.lan.create_button")}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+          {lanErr && (
+            <div className="text-xs text-neon-magenta mt-2 break-words">
+              {lanErr}
+            </div>
+          )}
+          <div className="text-[10px] text-neon-magenta border border-neon-magenta/60 rounded-md p-2 leading-relaxed mt-3">
+            {t("settings.lan.warning")}
           </div>
         </section>
 

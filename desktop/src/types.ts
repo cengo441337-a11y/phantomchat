@@ -267,6 +267,33 @@ export interface AuditEntry {
   details: Record<string, unknown>;
 }
 
+// ── LAN org (mDNS zero-touch discovery) ─────────────────────────────────────
+//
+// Mirrors the Rust `LanOrgStatus` + `DiscoveredPeer` structs. The shared-
+// secret "org code" is the only authentication for mDNS-discovered peers;
+// they're auto-added as 1:1 contacts but NOT as MLS group members.
+
+/// Returned by `lan_org_status`. `active` is true iff a `ServiceDaemon` is
+/// running; `code` is the user-shareable 6-char `XXX-XXX` string;
+/// `peer_count` is the deduplicated discovered-peer count;
+/// `last_discovery_ts` is the unix-epoch-seconds string of the most-recent
+/// resolve (or null if we've broadcast but never seen a peer).
+export interface LanOrgStatus {
+  active: boolean;
+  code?: string | null;
+  peer_count: number;
+  last_discovery_ts?: string | null;
+}
+
+/// Pushed by the `lan_peer_discovered` event whenever the browse task
+/// resolves a never-before-seen peer with a matching org code.
+export interface DiscoveredPeer {
+  label: string;
+  address: string;
+  signing_pub_hex: string;
+  last_seen: number;
+}
+
 // ── Auto-updater wire types ──────────────────────────────────────────────────
 //
 // Mirrors the Rust `UpdateInfo` struct from the `check_for_updates` /

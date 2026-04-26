@@ -69,6 +69,77 @@ Files written there: `keys.json`, `contacts.json`, `sessions.json`,
 group state. All of these are included in the encrypted `.pcbackup`
 export — see [Backup & Restore](#backup--restore) below.
 
+## Key storage (Wave 8H — OS-secure keystore)
+
+From v3.1 onward, the three identity-secret scalars (`view_private`,
+`spend_private`, `signing_private`) **no longer live as plaintext in
+`keys.json`**. They are stashed in the host's native credential vault and
+the on-disk `keys.json` only carries opaque `*_private_ref` IDs that
+resolve in that vault.
+
+| OS         | Backend                       | Inspect with                                                              |
+| ---------- | ----------------------------- | ------------------------------------------------------------------------- |
+| Windows    | DPAPI (Credential Manager)    | `cmdkey /list:phantomchat:*`                                              |
+| macOS      | Keychain                      | `security find-generic-password -s phantomchat -a phantomchat:<id>`       |
+| Linux      | libsecret (GNOME Keyring/KWallet) | `secret-tool search service phantomchat`                              |
+| Android    | (deferred — falls back)       | `secure_storage_fallback_warning` in `audit.log`                          |
+| Headless   | In-process plaintext fallback | same warning entry; secrets live in RAM only, never written to disk       |
+
+Each identity uses four entries with the prefix
+`phantomchat:<sha256(keys-json-path)[..16]>`, suffixed `:view`, `:spend`,
+`:signing`, `:identity`.
+
+### Migration semantics
+
+- **Automatic** — the first launch after upgrading to v3.1 reads the
+  legacy plaintext `keys.json`, copies the secrets into the OS keystore,
+  rewrites `keys.json` atomically (`.tmp` + fsync + rename) with the new
+  `*_private_ref` form, and emits an
+  `audit("identity", "migrated_to_secure_storage", { backend: ... })`
+  line.
+- **One-way** — there is no "downgrade to plaintext" command. If you
+  need a plaintext copy for backup, use Settings → Export Key (the
+  exporter materialises the secrets back into the legacy schema in
+  memory, writes to a user-selected path, and zeroizes the buffer).
+- **Crash-safe** — if any step before the atomic rename fails, the
+  original `keys.json` (with plaintext) is left intact and the next
+  launch retries the migration.
+
+### Detecting fallback mode
+
+If no OS keystore is reachable (CI worker, headless server, fresh
+Android install before the JNI bridge lands), the loader degrades to an
+in-process plaintext store. Look for these in `audit.log`:
+
+```jsonl
+{"category":"identity","event":"secure_storage_fallback_warning",
+ "details":{"reason":"no OS keystore detected; secrets live in process memory only"}}
+```
+
+The frontend Settings panel surfaces the same status via the
+`storage_backend` field that gets stamped into `keys.json` after
+migration.
+
+### Wipe & anti-forensic shred
+
+`Settings → Wipe All Data` now (in addition to deleting every file
+under the app-data dir):
+
+1. Drops every `phantomchat:<id>:*` entry from the OS keystore.
+2. For each file ≤ 100 MiB, opens it for write, overwrites with zeros,
+   `fsync`s, truncates to zero length, and unlinks.
+3. For each file > 100 MiB (probably a user-staged backup), unlinks
+   directly and logs a WARN in `audit.log` so a compliance reviewer can
+   see which files skipped the scrub pass.
+4. Recurses into subdirectories with the same rules, then removes the
+   empty directory tree.
+5. Hard-exits the process to prevent background tasks (relay
+   subscriber, session writer) from recreating files we just wiped.
+
+The zero-overwrite pass is partially mitigated by SSD wear-leveling and
+TRIM, but materially raises the bar against forensic recovery on
+spinning disks and on flash without TRIM (e.g. SD-card-backed appdata).
+
 ## Relay configuration
 
 Default relay set written to `relays.json` on first launch:

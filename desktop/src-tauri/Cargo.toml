@@ -31,6 +31,17 @@ dirs         = "5"
 x25519-dalek = "2.0"
 chrono       = { version = "0.4", default-features = false, features = ["clock"] }
 qrcodegen    = "1.8"
+# Pure-Rust mDNS responder + browser used for zero-touch LAN org discovery.
+# No system mdns daemon required; runs its own ServiceDaemon on UDP 5353.
+mdns-sd      = "0.13"
+# CSPRNG for the 6-character LAN org code generator. `OsRng` + `gen_range`
+# (rand 0.8 API) gives us a uniformly-random pick from the unambiguous-
+# alphabet table without pulling in a heavier crypto-rng dep.
+rand         = "0.8"
+# Wave 8H — keystore migration uses `Zeroizing<Vec<u8>>` to wipe transient
+# plaintext key bytes from RAM as soon as they're stashed in the host
+# keystore. Same `zeroize` version core already pulls in.
+zeroize      = "1.7"
 
 # ── Encrypted backup / restore (Wave 8c) ────────────────────────────────────
 # Argon2id KDF for the passphrase → key-encryption-key derivation, OWASP
