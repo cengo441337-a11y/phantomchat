@@ -34,6 +34,7 @@ use pqcrypto_traits::kem::PublicKey as KemPubTrait;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use x25519_dalek::PublicKey;
+use zeroize::Zeroizing;
 
 use crate::address::PhantomAddress;
 use crate::envelope::{Envelope, SealedSender, VERSION_HYBRID};
@@ -90,7 +91,12 @@ impl SessionStore {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let raw = fs::read(path)?;
+        // `Zeroizing` wraps the freshly-read JSON so the disk image of every
+        // session's ratchet seed is wiped from RAM as soon as deserialisation
+        // hands the structured form back. Without this wrap a `read()` for
+        // 200 sessions would leave hundreds of KiB of secret-bearing JSON
+        // sitting in the allocator's free-list.
+        let raw: Zeroizing<Vec<u8>> = Zeroizing::new(fs::read(path)?);
         let mut store: Self = serde_json::from_slice(&raw)?;
         for session in store.sessions.values_mut() {
             session.restore_secret();
@@ -99,8 +105,11 @@ impl SessionStore {
     }
 
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), SessionError> {
-        let bytes = serde_json::to_vec_pretty(self)?;
-        fs::write(path, bytes)?;
+        // Same rationale as `load`: the serialised form contains the ratchet
+        // chain seeds. Wrap it so the buffer is zeroized after the write
+        // syscall returns.
+        let bytes: Zeroizing<Vec<u8>> = Zeroizing::new(serde_json::to_vec_pretty(self)?);
+        fs::write(path, bytes.as_slice())?;
         Ok(())
     }
 

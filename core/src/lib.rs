@@ -23,6 +23,7 @@ pub mod file_transfer;
 pub mod psi;
 pub mod ratchet;
 pub mod scanner;
+pub mod secure_storage;
 pub mod session;
 pub mod util;
 
