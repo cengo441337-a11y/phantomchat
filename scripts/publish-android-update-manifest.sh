@@ -53,8 +53,15 @@ fi
 echo "[manifest] version = $VERSION"
 
 REMOTE_DIR="/var/www/updates/download"
-REMOTE_MANIFEST_DIR="/var/www/updates/phantomchat/android"
-REMOTE_MANIFEST_PATH="$REMOTE_MANIFEST_DIR/latest.json"
+# nginx config for updates.dc-infosec.de rewrites
+# `/phantomchat/<target>/<version>` → `/phantomchat/manifests/<target>.json`
+# so the canonical on-disk location of the Android manifest is
+# `/var/www/updates/phantomchat/manifests/android.json` regardless of what
+# the mobile client pretends the URL is. The user-facing URL is then
+# `https://updates.dc-infosec.de/phantomchat/android/latest.json`
+# (the trailing "latest" is consumed by the nginx regex).
+REMOTE_MANIFEST_DIR="/var/www/updates/phantomchat/manifests"
+REMOTE_MANIFEST_PATH="$REMOTE_MANIFEST_DIR/android.json"
 
 echo "[manifest] fetching APK metadata from hostinger:$REMOTE_DIR …"
 
