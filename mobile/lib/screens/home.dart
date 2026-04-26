@@ -8,6 +8,10 @@ import '../theme.dart';
 import '../widgets/glitch_text.dart';
 import '../widgets/cyber_card.dart';
 import 'chat.dart';
+import 'qr_scan.dart';
+import 'settings.dart';
+import 'channels.dart';
+import 'package:path_provider/path_provider.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -87,7 +91,42 @@ class _HomeScreenState extends State<HomeScreen> {
               maxLines: 3,
               decoration: const InputDecoration(hintText: 'phantom:eyJ...'),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 12),
+            // QR-scan shortcut — populates the PHANTOM_ID field above with
+            // whatever the camera reads, so the rest of the flow (validation,
+            // CONFIRM ADD) is identical for typed and scanned IDs.
+            GestureDetector(
+              onTap: () async {
+                final scanned = await Navigator.of(ctx).push<String>(
+                  MaterialPageRoute(builder: (_) => const QrScanScreen()),
+                );
+                if (scanned != null && scanned.isNotEmpty) {
+                  ctrl.text = scanned.trim();
+                }
+              },
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: kMagenta.withOpacity(0.6), width: 1.2),
+                  color: kMagenta.withOpacity(0.06),
+                ),
+                child: Center(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.qr_code_scanner, color: kMagenta, size: 18),
+                      const SizedBox(width: 10),
+                      Text(
+                        'SCAN QR',
+                        style: GoogleFonts.orbitron(fontSize: 11, color: kMagenta, letterSpacing: 2),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
             GestureDetector(
               onTap: () async {
                 final contact = PhantomContact.fromPhantomId(
@@ -288,6 +327,18 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           const SizedBox(width: 8),
           GestureDetector(
+            onTap: _openChannels,
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                border: Border.all(color: kCyan.withOpacity(0.4)),
+                color: kBgCard,
+              ),
+              child: const Icon(Icons.groups_outlined, color: kCyan, size: 20),
+            ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
             onTap: _showMyId,
             child: Container(
               padding: const EdgeInsets.all(8),
@@ -298,7 +349,39 @@ class _HomeScreenState extends State<HomeScreen> {
               child: const Icon(Icons.fingerprint, color: kGrayText, size: 20),
             ),
           ),
+          const SizedBox(width: 6),
+          GestureDetector(
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              );
+            },
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                border: Border.all(color: kGrayText.withOpacity(0.3)),
+                color: kBgCard,
+              ),
+              child: const Icon(Icons.settings_outlined, color: kGrayText, size: 20),
+            ),
+          ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _openChannels() async {
+    final dir = await getApplicationSupportDirectory();
+    final mlsDir = '${dir.path}/mls';
+    final selfLabel = (_identity?.nickname.isNotEmpty ?? false)
+        ? _identity!.nickname
+        : 'phantom';
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            ChannelsScreen(storageDir: mlsDir, selfLabel: selfLabel),
       ),
     );
   }

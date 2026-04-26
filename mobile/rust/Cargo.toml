@@ -1,0 +1,51 @@
+[workspace]
+# Standalone crate — keep out of the workspace at the repo root so we can
+# pick our own feature combination (mls + ffi-mobile, no rusqlite) without
+# affecting the desktop / cli profiles.
+
+[package]
+name = "phantomchat_mobile"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone (not part of the workspace) so we can opt into different feature
+# flags than the desktop / cli crates pull. Mobile builds always want
+# `mls` + `ffi-mobile` and never `rusqlite` (no SQLCipher on plain NDK).
+[lib]
+name = "phantomchat_mobile"
+path = "src/lib.rs"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = ["mls"]
+# Forwarded to phantomchat_core: enables the openmls-based group-chat
+# primitives. Off by default in the core crate but on here because the
+# mobile listener needs MLS-WLC2 / MLS-APP1 dispatch.
+mls = ["phantomchat_core/mls", "dep:openmls"]
+
+[dependencies]
+# Pull the production core via path so the wrapper always tracks the
+# checked-out workspace version.
+phantomchat_core = { path = "../../core", default-features = false, features = ["net"] }
+
+flutter_rust_bridge = "=2.12.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+hex = "0.4"
+base64 = "0.22"
+once_cell = "1.20"
+x25519-dalek = { version = "2.0", features = ["static_secrets", "serde"] }
+rand_core = { version = "0.6", features = ["std"] }
+
+# Nostr publish path (Wave 7B2): the Dart RelayService asks Rust to wrap
+# raw envelope bytes into a signed Nostr event so the secp256k1 + Schnorr
+# logic stays in one place (mirrors phantomchat_relays::NostrEvent::new).
+secp256k1 = { version = "0.27", features = ["rand-std", "global-context"] }
+sha2 = "0.10"
+rand = "0.8"
+
+# MLS group ops use the openmls types re-exported by phantomchat_core::mls
+# (GroupId / MlsGroup), so we pull openmls directly only for the GroupId
+# constructor we feed back into core::mls::load_group. Forwarded behind the
+# `mls` feature so a non-MLS build doesn't pay the openmls compile cost.
+openmls = { version = "0.8", optional = true }

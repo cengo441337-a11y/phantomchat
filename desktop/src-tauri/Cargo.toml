@@ -38,6 +38,10 @@ mdns-sd      = "0.13"
 # (rand 0.8 API) gives us a uniformly-random pick from the unambiguous-
 # alphabet table without pulling in a heavier crypto-rng dep.
 rand         = "0.8"
+# Wave 8H — keystore migration uses `Zeroizing<Vec<u8>>` to wipe transient
+# plaintext key bytes from RAM as soon as they're stashed in the host
+# keystore. Same `zeroize` version core already pulls in.
+zeroize      = "1.7"
 
 # Same feature subset as the CLI: envelope/scanner/session + the libp2p/Nostr
 # net + MLS group stack, but no Flutter FFI bridge or SQLCipher.
