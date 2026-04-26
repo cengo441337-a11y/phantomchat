@@ -5399,7 +5399,7 @@ dependencies = [
 
 [[package]]
 name = "phantomchat_desktop"
-version = "3.0.2"
+version = "3.0.3"
 dependencies = [
  "anyhow",
  "argon2",
