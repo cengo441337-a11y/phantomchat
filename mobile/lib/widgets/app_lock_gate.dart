@@ -163,7 +163,7 @@ class _BioLaunchOverlay extends StatelessWidget {
                   Icons.lock_outline,
                   size: 56,
                   color: kCyan,
-                  shadows: [Shadow(color: kCyan.withOpacity(0.6), blurRadius: 16)],
+                  shadows: [Shadow(color: kCyan.withValues(alpha: 0.6), blurRadius: 16)],
                 ),
                 const SizedBox(height: 24),
                 Text(
@@ -173,7 +173,7 @@ class _BioLaunchOverlay extends StatelessWidget {
                     fontWeight: FontWeight.w900,
                     color: kWhite,
                     letterSpacing: 4,
-                    shadows: [Shadow(color: kCyan.withOpacity(0.5), blurRadius: 12)],
+                    shadows: [Shadow(color: kCyan.withValues(alpha: 0.5), blurRadius: 12)],
                   ),
                 ),
                 const SizedBox(height: 6),

@@ -23,7 +23,6 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../src/rust/api.dart' as rust_api;
 import '../src/rust/frb_generated.dart';
 import '../src/rust/network.dart';
 
@@ -149,17 +148,20 @@ void _onBackgroundStart(ServiceInstance service) async {
     service.stopSelf();
   });
 
-  // Drive the relay-listener loop. Re-uses the SAME entry point as the
-  // foreground UI (PR #4) — we deliberately do not duplicate dispatch
-  // logic here.
+  // Drive the relay-listener loop. The original Wave 8B plan was to bridge
+  // a `start_network_node()` Rust stream into this isolate, but that Rust
+  // entry point was never finished — `mobile/rust/src/api.rs` does not
+  // expose it. Until the bridge lands the bg-service stays alive (so
+  // Android keeps the process for the foreground notification + boot
+  // autostart contract) but emits no events. `_handleEvent` is preserved
+  // below so the wiring is one line away once the Rust stream exists.
   StreamSubscription<NetworkEvent>? sub;
-  try {
-    sub = rust_api.startNetworkNode().listen(
+  // ignore: dead_code
+  if (false) {
+    sub = const Stream<NetworkEvent>.empty().listen(
       (event) => _handleEvent(event, prefs),
       onError: (Object e) => debugPrint('[bg] relay error: $e'),
     );
-  } catch (e) {
-    debugPrint('[bg] startNetworkNode failed: $e');
   }
 
   service.on('stopService').listen((_) async {

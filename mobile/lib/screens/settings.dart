@@ -210,8 +210,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  border: Border.all(color: stateColor.withOpacity(0.6)),
-                  color: stateColor.withOpacity(0.08),
+                  border: Border.all(color: stateColor.withValues(alpha: 0.6)),
+                  color: stateColor.withValues(alpha: 0.08),
                 ),
                 child: Text(
                   stateLabel,
@@ -248,7 +248,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 decoration: BoxDecoration(
                   border: Border.all(color: kMagenta, width: 1.5),
-                  color: kMagenta.withOpacity(0.08),
+                  color: kMagenta.withValues(alpha: 0.08),
                 ),
                 child: Center(
                   child: Text(

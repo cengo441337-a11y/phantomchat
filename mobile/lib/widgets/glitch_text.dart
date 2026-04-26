@@ -79,7 +79,7 @@ class _GlitchTextState extends State<GlitchText> {
             child: Text(
               widget.text,
               style: widget.style.copyWith(
-                color: const Color(0xFFFF0066).withOpacity(_opacityR),
+                color: const Color(0xFFFF0066).withValues(alpha: _opacityR),
                 shadows: null,
               ),
             ),
@@ -91,7 +91,7 @@ class _GlitchTextState extends State<GlitchText> {
             child: Text(
               widget.text,
               style: widget.style.copyWith(
-                color: const Color(0xFF00F5FF).withOpacity(_opacityB),
+                color: const Color(0xFF00F5FF).withValues(alpha: _opacityB),
                 shadows: null,
               ),
             ),

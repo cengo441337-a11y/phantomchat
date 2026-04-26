@@ -180,7 +180,7 @@ class _LockScreenState extends State<LockScreen> {
                     fontWeight: FontWeight.w900,
                     color: kWhite,
                     letterSpacing: 3,
-                    shadows: [Shadow(color: kCyan.withOpacity(0.6), blurRadius: 14)],
+                    shadows: [Shadow(color: kCyan.withValues(alpha: 0.6), blurRadius: 14)],
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -273,9 +273,9 @@ class _PinDots extends StatelessWidget {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: filled ? kCyan : Colors.transparent,
-            border: Border.all(color: kCyan.withOpacity(filled ? 1 : 0.35), width: 1.5),
+            border: Border.all(color: kCyan.withValues(alpha: filled ? 1 : 0.35), width: 1.5),
             boxShadow: filled
-                ? [BoxShadow(color: kCyan.withOpacity(0.6), blurRadius: 10)]
+                ? [BoxShadow(color: kCyan.withValues(alpha: 0.6), blurRadius: 10)]
                 : null,
           ),
         );
@@ -376,8 +376,8 @@ class _PadKey extends StatelessWidget {
           width: 72,
           height: 64,
           decoration: BoxDecoration(
-            border: Border.all(color: color.withOpacity(0.5)),
-            color: color.withOpacity(0.05),
+            border: Border.all(color: color.withValues(alpha: 0.5)),
+            color: color.withValues(alpha: 0.05),
           ),
           child: Center(
             child: label != null

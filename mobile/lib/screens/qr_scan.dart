@@ -184,7 +184,7 @@ class _ReticlePainter extends CustomPainter {
     final cx = size.width / 2;
     final cy = size.height / 2;
     final dim = Paint()
-      ..color = kCyan.withOpacity(0.35)
+      ..color = kCyan.withValues(alpha: 0.35)
       ..strokeWidth = 1;
     canvas.drawLine(Offset(cx - 12, cy), Offset(cx + 12, cy), dim);
     canvas.drawLine(Offset(cx, cy - 12), Offset(cx, cy + 12), dim);

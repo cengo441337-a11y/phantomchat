@@ -20,7 +20,7 @@ class RustBootState {
 Future<RustBootState> _bootRust() async {
   try {
     await RustLib.init();
-    final id = await rust_api.generatePhantomId();
+    final id = rust_api.generatePhantomId();
     return RustBootState(initialised: true, phantomId: id);
   } catch (e) {
     return RustBootState(initialised: false, error: e.toString());

@@ -94,6 +94,6 @@ ThemeData phantomTheme() {
 
 // Shared glow shadow helper
 List<BoxShadow> neonGlow(Color color, {double radius = 12}) => [
-  BoxShadow(color: color.withOpacity(0.4), blurRadius: radius, spreadRadius: 0),
-  BoxShadow(color: color.withOpacity(0.1), blurRadius: radius * 3, spreadRadius: 2),
+  BoxShadow(color: color.withValues(alpha: 0.4), blurRadius: radius, spreadRadius: 0),
+  BoxShadow(color: color.withValues(alpha: 0.1), blurRadius: radius * 3, spreadRadius: 2),
 ];

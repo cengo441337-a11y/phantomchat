@@ -58,7 +58,7 @@ class _HomeScreenState extends State<HomeScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(height: 1, color: kCyan.withOpacity(0.4)),
+            Container(height: 1, color: kCyan.withValues(alpha: 0.4)),
             const SizedBox(height: 20),
             Row(
               children: [
@@ -69,7 +69,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: GoogleFonts.orbitron(
                     fontSize: 16, fontWeight: FontWeight.w700,
                     color: kWhite, letterSpacing: 1.5,
-                    shadows: [Shadow(color: kCyan.withOpacity(0.5), blurRadius: 10)],
+                    shadows: [Shadow(color: kCyan.withValues(alpha: 0.5), blurRadius: 10)],
                   ),
                 ),
               ],
@@ -108,8 +108,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 decoration: BoxDecoration(
-                  border: Border.all(color: kMagenta.withOpacity(0.6), width: 1.2),
-                  color: kMagenta.withOpacity(0.06),
+                  border: Border.all(color: kMagenta.withValues(alpha: 0.6), width: 1.2),
+                  color: kMagenta.withValues(alpha: 0.06),
                 ),
                 child: Center(
                   child: Row(
@@ -149,7 +149,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 decoration: BoxDecoration(
                   border: Border.all(color: kCyan, width: 1.5),
-                  color: kCyan.withOpacity(0.08),
+                  color: kCyan.withValues(alpha: 0.08),
                   boxShadow: neonGlow(kCyan, radius: 8),
                 ),
                 child: Center(
@@ -178,7 +178,7 @@ class _HomeScreenState extends State<HomeScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(height: 1, color: kMagenta.withOpacity(0.5)),
+            Container(height: 1, color: kMagenta.withValues(alpha: 0.5)),
             const SizedBox(height: 20),
             Row(
               children: [
@@ -206,7 +206,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     style: GoogleFonts.orbitron(
                       fontSize: 20, fontWeight: FontWeight.w900,
                       color: kWhite, letterSpacing: 2,
-                      shadows: [Shadow(color: kMagenta.withOpacity(0.5), blurRadius: 12)],
+                      shadows: [Shadow(color: kMagenta.withValues(alpha: 0.5), blurRadius: 12)],
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -231,7 +231,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 decoration: BoxDecoration(
                   border: Border.all(color: kMagenta, width: 1.5),
-                  color: kMagenta.withOpacity(0.08),
+                  color: kMagenta.withValues(alpha: 0.08),
                 ),
                 child: Center(
                   child: Text(
@@ -256,7 +256,7 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             children: [
               _buildHeader(),
-              Container(height: 1, color: kCyan.withOpacity(0.12)),
+              Container(height: 1, color: kCyan.withValues(alpha: 0.12)),
               Expanded(
                 child: _loading
                     ? const Center(child: CircularProgressIndicator(color: kCyan, strokeWidth: 1.5))
@@ -280,7 +280,7 @@ class _HomeScreenState extends State<HomeScreen> {
           Container(
             width: 36, height: 36,
             decoration: BoxDecoration(
-              border: Border.all(color: kCyan.withOpacity(0.6), width: 1),
+              border: Border.all(color: kCyan.withValues(alpha: 0.6), width: 1),
               color: kCyanDim,
               boxShadow: neonGlow(kCyan, radius: 8),
             ),
@@ -296,7 +296,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 style: GoogleFonts.orbitron(
                   fontSize: 18, fontWeight: FontWeight.w900,
                   color: kWhite, letterSpacing: 3,
-                  shadows: [Shadow(color: kCyan.withOpacity(0.5), blurRadius: 8)],
+                  shadows: [Shadow(color: kCyan.withValues(alpha: 0.5), blurRadius: 8)],
                 ),
               ),
               Row(
@@ -319,7 +319,7 @@ class _HomeScreenState extends State<HomeScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                border: Border.all(color: kGrayText.withOpacity(0.3)),
+                border: Border.all(color: kGrayText.withValues(alpha: 0.3)),
                 color: kBgCard,
               ),
               child: Text('${_contacts.length} NODES',
@@ -331,7 +331,7 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                border: Border.all(color: kCyan.withOpacity(0.4)),
+                border: Border.all(color: kCyan.withValues(alpha: 0.4)),
                 color: kBgCard,
               ),
               child: const Icon(Icons.groups_outlined, color: kCyan, size: 20),
@@ -343,7 +343,7 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                border: Border.all(color: kGrayText.withOpacity(0.3)),
+                border: Border.all(color: kGrayText.withValues(alpha: 0.3)),
                 color: kBgCard,
               ),
               child: const Icon(Icons.fingerprint, color: kGrayText, size: 20),
@@ -359,7 +359,7 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                border: Border.all(color: kGrayText.withOpacity(0.3)),
+                border: Border.all(color: kGrayText.withValues(alpha: 0.3)),
                 color: kBgCard,
               ),
               child: const Icon(Icons.settings_outlined, color: kGrayText, size: 20),
@@ -413,7 +413,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   Text(
                     'Share your Phantom ID and\nadd contacts by theirs.',
                     textAlign: TextAlign.center,
-                    style: GoogleFonts.spaceMono(fontSize: 11, color: kGrayText.withOpacity(0.6), height: 1.5),
+                    style: GoogleFonts.spaceMono(fontSize: 11, color: kGrayText.withValues(alpha: 0.6), height: 1.5),
                   ),
                 ],
               ),
@@ -424,8 +424,8 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                 decoration: BoxDecoration(
-                  border: Border.all(color: kMagenta.withOpacity(0.6), width: 1.5),
-                  color: kMagenta.withOpacity(0.06),
+                  border: Border.all(color: kMagenta.withValues(alpha: 0.6), width: 1.5),
+                  color: kMagenta.withValues(alpha: 0.06),
                 ),
                 child: Text('BROADCAST MY ID',
                   style: GoogleFonts.orbitron(fontSize: 11, color: kMagenta, letterSpacing: 2)),
@@ -447,9 +447,9 @@ class _HomeScreenState extends State<HomeScreen> {
           await Navigator.push(
             context,
             PageRouteBuilder(
-              pageBuilder: (_, __, ___) => ChatScreen(contact: _contacts[i], identity: _identity!),
+              pageBuilder: (_, _, _) => ChatScreen(contact: _contacts[i], identity: _identity!),
               transitionDuration: const Duration(milliseconds: 300),
-              transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
+              transitionsBuilder: (_, anim, _, child) => FadeTransition(opacity: anim, child: child),
             ),
           );
           _load();
@@ -471,14 +471,14 @@ class _ContactTile extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
         child: CyberCard(
-          borderColor: kCyan.withOpacity(0.2),
+          borderColor: kCyan.withValues(alpha: 0.2),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           child: Row(
             children: [
               Container(
                 width: 44, height: 44,
                 decoration: BoxDecoration(
-                  border: Border.all(color: kCyan.withOpacity(0.4)),
+                  border: Border.all(color: kCyan.withValues(alpha: 0.4)),
                   color: kCyanDim,
                 ),
                 child: Center(
@@ -487,7 +487,7 @@ class _ContactTile extends StatelessWidget {
                     style: GoogleFonts.orbitron(
                       fontSize: 18, fontWeight: FontWeight.w900,
                       color: kCyan,
-                      shadows: [Shadow(color: kCyan.withOpacity(0.6), blurRadius: 8)],
+                      shadows: [Shadow(color: kCyan.withValues(alpha: 0.6), blurRadius: 8)],
                     ),
                   ),
                 ),

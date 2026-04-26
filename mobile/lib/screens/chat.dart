@@ -249,7 +249,7 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Column(
             children: [
               _buildAppBar(),
-              Container(height: 1, color: kCyan.withOpacity(0.12)),
+              Container(height: 1, color: kCyan.withValues(alpha: 0.12)),
               Expanded(
                 child: _messages.isEmpty ? _buildEmptyChat() : _buildMessages(),
               ),
@@ -271,7 +271,7 @@ class _ChatScreenState extends State<ChatScreen> {
             child: Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                border: Border.all(color: kGray.withOpacity(0.5)),
+                border: Border.all(color: kGray.withValues(alpha: 0.5)),
                 color: kBgCard,
               ),
               child: const Icon(Icons.arrow_back_ios_new, color: kWhite, size: 14),
@@ -281,7 +281,7 @@ class _ChatScreenState extends State<ChatScreen> {
           Container(
             width: 38, height: 38,
             decoration: BoxDecoration(
-              border: Border.all(color: kCyan.withOpacity(0.5)),
+              border: Border.all(color: kCyan.withValues(alpha: 0.5)),
               color: kCyanDim,
             ),
             child: Center(
@@ -290,7 +290,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 style: GoogleFonts.orbitron(
                   fontSize: 16, fontWeight: FontWeight.w900,
                   color: kCyan,
-                  shadows: [Shadow(color: kCyan.withOpacity(0.6), blurRadius: 8)],
+                  shadows: [Shadow(color: kCyan.withValues(alpha: 0.6), blurRadius: 8)],
                 ),
               ),
             ),
@@ -327,8 +327,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 padding: const EdgeInsets.symmetric(
                     horizontal: 10, vertical: 8),
                 decoration: BoxDecoration(
-                  border: Border.all(color: kMagenta.withOpacity(0.6)),
-                  color: kMagenta.withOpacity(0.08),
+                  border: Border.all(color: kMagenta.withValues(alpha: 0.6)),
+                  color: kMagenta.withValues(alpha: 0.08),
                 ),
                 child: Text(
                   'BIND $_lastUnboundSenderLabel',
@@ -344,7 +344,7 @@ class _ChatScreenState extends State<ChatScreen> {
             child: Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                border: Border.all(color: kGray.withOpacity(0.3)),
+                border: Border.all(color: kGray.withValues(alpha: 0.3)),
                 color: kBgCard,
               ),
               child: const Icon(Icons.info_outline, color: kGrayText, size: 16),
@@ -373,7 +373,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 style: GoogleFonts.orbitron(
                   fontSize: 13, fontWeight: FontWeight.w700,
                   color: kCyan, letterSpacing: 2, height: 1.4,
-                  shadows: [Shadow(color: kCyan.withOpacity(0.4), blurRadius: 8)],
+                  shadows: [Shadow(color: kCyan.withValues(alpha: 0.4), blurRadius: 8)],
                 ),
               ),
               const SizedBox(height: 12),
@@ -415,7 +415,7 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       decoration: BoxDecoration(
         color: kBgCard,
-        border: Border(top: BorderSide(color: kCyan.withOpacity(0.12))),
+        border: Border(top: BorderSide(color: kCyan.withValues(alpha: 0.12))),
       ),
       child: Row(
         children: [
@@ -423,8 +423,8 @@ class _ChatScreenState extends State<ChatScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             decoration: BoxDecoration(
-              border: Border.all(color: kGreen.withOpacity(0.4)),
-              color: kGreen.withOpacity(0.06),
+              border: Border.all(color: kGreen.withValues(alpha: 0.4)),
+              color: kGreen.withValues(alpha: 0.06),
             ),
             child: const Icon(Icons.lock_outline, color: kGreen, size: 14),
           ),
@@ -438,11 +438,11 @@ class _ChatScreenState extends State<ChatScreen> {
                 hintStyle: GoogleFonts.spaceMono(color: kGrayText, fontSize: 12),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(4),
-                  borderSide: BorderSide(color: kGray.withOpacity(0.5)),
+                  borderSide: BorderSide(color: kGray.withValues(alpha: 0.5)),
                 ),
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(4),
-                  borderSide: BorderSide(color: kGray.withOpacity(0.4)),
+                  borderSide: BorderSide(color: kGray.withValues(alpha: 0.4)),
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(4),
@@ -492,7 +492,7 @@ class _ChatScreenState extends State<ChatScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(height: 1, color: kCyan.withOpacity(0.3)),
+            Container(height: 1, color: kCyan.withValues(alpha: 0.3)),
             const SizedBox(height: 16),
             Text(
               'NODE_INFO //',
@@ -508,8 +508,8 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
             const SizedBox(height: 16),
             CyberCard(
-              borderColor: kGreen.withOpacity(0.4),
-              bgColor: kGreen.withOpacity(0.04),
+              borderColor: kGreen.withValues(alpha: 0.4),
+              bgColor: kGreen.withValues(alpha: 0.04),
               padding: const EdgeInsets.all(12),
               cut: 8,
               child: Row(
@@ -519,7 +519,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   Expanded(
                     child: Text(
                       'All messages encrypted with X25519 ECDH + ChaCha20-Poly1305. Zero server involvement.',
-                      style: GoogleFonts.spaceMono(fontSize: 10, color: kGreen.withOpacity(0.8), height: 1.5),
+                      style: GoogleFonts.spaceMono(fontSize: 10, color: kGreen.withValues(alpha: 0.8), height: 1.5),
                     ),
                   ),
                 ],
@@ -579,12 +579,12 @@ class _MsgBubble extends StatelessWidget {
                           _fmt(message.timestamp),
                           style: GoogleFonts.spaceMono(
                             fontSize: 9,
-                            color: isOut ? kBg.withOpacity(0.5) : kGrayText,
+                            color: isOut ? kBg.withValues(alpha: 0.5) : kGrayText,
                           ),
                         ),
                         if (isOut) ...[
                           const SizedBox(width: 4),
-                          Icon(Icons.done_all, size: 10, color: kBg.withOpacity(0.5)),
+                          Icon(Icons.done_all, size: 10, color: kBg.withValues(alpha: 0.5)),
                         ],
                       ],
                     ),
@@ -639,7 +639,7 @@ class _BubblePainter extends CustomPainter {
       canvas.drawPath(
         path,
         Paint()
-          ..color = kCyan.withOpacity(0.2)
+          ..color = kCyan.withValues(alpha: 0.2)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 4
           ..maskFilter = const MaskFilter.blur(BlurStyle.outer, 6),
@@ -650,7 +650,7 @@ class _BubblePainter extends CustomPainter {
     canvas.drawPath(
       path,
       Paint()
-        ..color = isOut ? kCyan.withOpacity(0.6) : kGray.withOpacity(0.4)
+        ..color = isOut ? kCyan.withValues(alpha: 0.6) : kGray.withValues(alpha: 0.4)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.0,
     );
@@ -670,14 +670,14 @@ class _DateDivider extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 12),
       child: Row(
         children: [
-          Expanded(child: Container(height: 1, color: kGray.withOpacity(0.3))),
+          Expanded(child: Container(height: 1, color: kGray.withValues(alpha: 0.3))),
           const SizedBox(width: 12),
           Text(
             '${date.day.toString().padLeft(2, '0')}.${date.month.toString().padLeft(2, '0')}.${date.year}',
             style: GoogleFonts.spaceMono(fontSize: 10, color: kGrayText),
           ),
           const SizedBox(width: 12),
-          Expanded(child: Container(height: 1, color: kGray.withOpacity(0.3))),
+          Expanded(child: Container(height: 1, color: kGray.withValues(alpha: 0.3))),
         ],
       ),
     );

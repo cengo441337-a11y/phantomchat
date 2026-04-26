@@ -61,7 +61,7 @@ const int kTypingTtlSecs = 5;
 
 // ── Event envelope shipped to the UI ────────────────────────────────────────
 
-/// One decoded relay event. `kind` mirrors the Tauri `app.emit("<kind>",
+/// One decoded relay event. `kind` mirrors the Tauri `app.emit("&lt;kind&gt;",
 /// ...)` channel names so a future shared widget layer can dispatch on the
 /// same string vocab without translation.
 class RelayEvent {

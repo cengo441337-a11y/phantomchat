@@ -80,7 +80,7 @@ class _CutBorderPainter extends CustomPainter {
       canvas.drawPath(
         path,
         Paint()
-          ..color = borderColor.withOpacity(0.25)
+          ..color = borderColor.withValues(alpha: 0.25)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 6
           ..maskFilter = const MaskFilter.blur(BlurStyle.outer, 8),
@@ -90,7 +90,7 @@ class _CutBorderPainter extends CustomPainter {
     canvas.drawPath(
       path,
       Paint()
-        ..color = borderColor.withOpacity(0.5)
+        ..color = borderColor.withValues(alpha: 0.5)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.0,
     );
@@ -104,7 +104,7 @@ class _CutBorderPainter extends CustomPainter {
     canvas.drawCircle(
       Offset(0, size.height - cut),
       2,
-      Paint()..color = borderColor.withOpacity(0.4),
+      Paint()..color = borderColor.withValues(alpha: 0.4),
     );
   }
 
@@ -201,7 +201,7 @@ class _BlinkCursorState extends State<BlinkCursor>
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _ctrl,
-      builder: (_, __) => Opacity(
+      builder: (_, _) => Opacity(
         opacity: _ctrl.value > 0.5 ? 1 : 0,
         child: Container(
           width: 8,
@@ -268,12 +268,12 @@ class _PulseRingState extends State<PulseRing>
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: widget.color.withOpacity(0.15 + _anim.value * 0.1),
+                  color: widget.color.withValues(alpha: 0.15 + _anim.value * 0.1),
                   width: 1,
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: widget.color.withOpacity(0.1 + _anim.value * 0.15),
+                    color: widget.color.withValues(alpha: 0.1 + _anim.value * 0.15),
                     blurRadius: 16 + _anim.value * 8,
                     spreadRadius: 2,
                   ),
@@ -286,14 +286,14 @@ class _PulseRingState extends State<PulseRing>
               height: widget.size * 0.72,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: widget.color.withOpacity(0.06),
+                color: widget.color.withValues(alpha: 0.06),
                 border: Border.all(
-                  color: widget.color.withOpacity(0.4 + _anim.value * 0.3),
+                  color: widget.color.withValues(alpha: 0.4 + _anim.value * 0.3),
                   width: 1.5,
                 ),
               ),
             ),
-            if (child != null) child,
+            ?child,
           ],
         ),
       ),

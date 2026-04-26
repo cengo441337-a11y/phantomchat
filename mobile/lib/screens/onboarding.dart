@@ -30,7 +30,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   late AnimationController _bootCtrl;
 
   // Boot sequence
-  List<String> _bootLines = [];
+  final List<String> _bootLines = [];
   Timer? _bootTimer;
   int _bootIndex = 0;
   bool _bootDone = false;
@@ -110,21 +110,21 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     // calls onUnlocked once it's stored in secure storage.
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
-        pageBuilder: (_, __, ___) => LockScreen(
+        pageBuilder: (_, _, _) => LockScreen(
           setupMode: true,
           onUnlocked: () {
             Navigator.of(context).pushReplacement(
               PageRouteBuilder(
-                pageBuilder: (_, __, ___) => const HomeScreen(),
+                pageBuilder: (_, _, _) => const HomeScreen(),
                 transitionDuration: const Duration(milliseconds: 400),
-                transitionsBuilder: (_, anim, __, child) =>
+                transitionsBuilder: (_, anim, _, child) =>
                     FadeTransition(opacity: anim, child: child),
               ),
             );
           },
         ),
         transitionDuration: const Duration(milliseconds: 400),
-        transitionsBuilder: (_, anim, __, child) =>
+        transitionsBuilder: (_, anim, _, child) =>
             FadeTransition(opacity: anim, child: child),
       ),
     );
@@ -182,8 +182,8 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                     color: kWhite,
                     letterSpacing: 6,
                     shadows: [
-                      Shadow(color: kCyan.withOpacity(0.8), blurRadius: 20),
-                      Shadow(color: kCyan.withOpacity(0.3), blurRadius: 40),
+                      Shadow(color: kCyan.withValues(alpha: 0.8), blurRadius: 20),
+                      Shadow(color: kCyan.withValues(alpha: 0.3), blurRadius: 40),
                     ],
                   ),
                 ),
@@ -290,7 +290,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               color: kWhite,
               letterSpacing: 2,
               height: 1.1,
-              shadows: [Shadow(color: kCyan.withOpacity(0.5), blurRadius: 16)],
+              shadows: [Shadow(color: kCyan.withValues(alpha: 0.5), blurRadius: 16)],
             ),
           ),
           const SizedBox(height: 6),
@@ -376,7 +376,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                 color: kWhite,
                 letterSpacing: 3,
                 height: 1.3,
-                shadows: [Shadow(color: kMagenta.withOpacity(0.6), blurRadius: 20)],
+                shadows: [Shadow(color: kMagenta.withValues(alpha: 0.6), blurRadius: 20)],
               ),
             ),
             const SizedBox(height: 24),
@@ -434,7 +434,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               color: kWhite,
               height: 1.1,
               letterSpacing: 2,
-              shadows: [Shadow(color: kCyan.withOpacity(0.4), blurRadius: 12)],
+              shadows: [Shadow(color: kCyan.withValues(alpha: 0.4), blurRadius: 12)],
             ),
           ),
 
@@ -469,7 +469,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                     fontWeight: FontWeight.w900,
                     color: kWhite,
                     letterSpacing: 3,
-                    shadows: [Shadow(color: kCyan.withOpacity(0.6), blurRadius: 12)],
+                    shadows: [Shadow(color: kCyan.withValues(alpha: 0.6), blurRadius: 12)],
                   ),
                 ),
                 const SizedBox(height: 14),
@@ -557,8 +557,8 @@ class _Pill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        border: Border.all(color: color.withOpacity(0.4)),
-        color: color.withOpacity(0.06),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+        color: color.withValues(alpha: 0.06),
       ),
       child: Text(
         label,
@@ -598,11 +598,11 @@ class _CyberButton extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
         decoration: BoxDecoration(
           border: Border.all(color: active ? color : kGray, width: 1.5),
-          color: active ? color.withOpacity(0.07) : Colors.transparent,
+          color: active ? color.withValues(alpha: 0.07) : Colors.transparent,
           boxShadow: (active && glow)
               ? [
-                  BoxShadow(color: color.withOpacity(0.3), blurRadius: 16, spreadRadius: 0),
-                  BoxShadow(color: color.withOpacity(0.1), blurRadius: 32, spreadRadius: 4),
+                  BoxShadow(color: color.withValues(alpha: 0.3), blurRadius: 16, spreadRadius: 0),
+                  BoxShadow(color: color.withValues(alpha: 0.1), blurRadius: 32, spreadRadius: 4),
                 ]
               : null,
         ),
@@ -662,7 +662,7 @@ class _ScrambleBarState extends State<_ScrambleBar> {
       children: [
         Text(
           _hex,
-          style: GoogleFonts.spaceMono(fontSize: 12, color: kCyan.withOpacity(0.6), letterSpacing: 2),
+          style: GoogleFonts.spaceMono(fontSize: 12, color: kCyan.withValues(alpha: 0.6), letterSpacing: 2),
         ),
         const SizedBox(height: 16),
         Container(

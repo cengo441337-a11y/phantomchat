@@ -14,7 +14,6 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -201,7 +200,7 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(height: 1, color: kCyan.withOpacity(0.4)),
+            Container(height: 1, color: kCyan.withValues(alpha: 0.4)),
             const SizedBox(height: 16),
             Text(
               'ADD_MEMBER //',
@@ -353,7 +352,7 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
           child: Column(
             children: [
               _buildAppBar(),
-              Container(height: 1, color: kCyan.withOpacity(0.12)),
+              Container(height: 1, color: kCyan.withValues(alpha: 0.12)),
               if (_initialising)
                 const Padding(
                   padding: EdgeInsets.all(24),
@@ -391,7 +390,7 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
             child: Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                border: Border.all(color: kGray.withOpacity(0.5)),
+                border: Border.all(color: kGray.withValues(alpha: 0.5)),
                 color: kBgCard,
               ),
               child: const Icon(Icons.arrow_back_ios_new,
@@ -409,7 +408,7 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
-              border: Border.all(color: kGrayText.withOpacity(0.3)),
+              border: Border.all(color: kGrayText.withValues(alpha: 0.3)),
               color: kBgCard,
             ),
             child: Text(
@@ -447,7 +446,7 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                  border: Border.all(color: kCyan.withOpacity(0.4))),
+                  border: Border.all(color: kCyan.withValues(alpha: 0.4))),
               child: Text(
                 'KP: ${_myKpBase64!.substring(0, 24.clamp(0, _myKpBase64!.length))}…',
                 style: GoogleFonts.spaceMono(fontSize: 10, color: kCyan),
@@ -494,7 +493,7 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
       ),
       decoration: BoxDecoration(
         color: kBgCard,
-        border: Border(top: BorderSide(color: kCyan.withOpacity(0.12))),
+        border: Border(top: BorderSide(color: kCyan.withValues(alpha: 0.12))),
       ),
       child: Row(
         children: [
@@ -508,7 +507,7 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
                     GoogleFonts.spaceMono(color: kGrayText, fontSize: 11),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(4),
-                  borderSide: BorderSide(color: kGray.withOpacity(0.5)),
+                  borderSide: BorderSide(color: kGray.withValues(alpha: 0.5)),
                 ),
                 contentPadding: const EdgeInsets.symmetric(
                     horizontal: 12, vertical: 10),
@@ -559,7 +558,7 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
                   GoogleFonts.spaceMono(color: kGrayText, fontSize: 11),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(2),
-                borderSide: BorderSide(color: kGray.withOpacity(0.4)),
+                borderSide: BorderSide(color: kGray.withValues(alpha: 0.4)),
               ),
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -678,7 +677,7 @@ class _GroupRow {
         return _bubble(
           align: Alignment.centerLeft,
           color: const Color(0xFF0D1520),
-          border: kGray.withOpacity(0.4),
+          border: kGray.withValues(alpha: 0.4),
           fg: kWhite,
           text: text,
           ts: ts,
@@ -776,8 +775,8 @@ class _ChipButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          border: Border.all(color: kGreen.withOpacity(0.6)),
-          color: kGreen.withOpacity(0.06),
+          border: Border.all(color: kGreen.withValues(alpha: 0.6)),
+          color: kGreen.withValues(alpha: 0.06),
         ),
         child: Text(
           'COPY $label',
