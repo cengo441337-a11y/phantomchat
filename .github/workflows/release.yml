@@ -61,7 +61,7 @@ jobs:
         run: cargo tauri build --bundles msi
 
       - name: Upload MSI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: phantomchat-msi
           path: |
@@ -115,7 +115,7 @@ jobs:
         run: bash scripts/build-android.sh release apk
 
       - name: Upload APK artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: phantomchat-apk
           path: |
@@ -181,7 +181,7 @@ jobs:
              "staging/phantomchat_cli-${{ matrix.label }}${{ matrix.ext }}"
 
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: phantomchat-cli-${{ matrix.label }}
           path: staging/*
