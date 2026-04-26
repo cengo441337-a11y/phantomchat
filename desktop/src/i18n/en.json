@@ -355,7 +355,56 @@
     "open_folder_button": "Open folder",
     "saved_to": "Saved to {{path}}",
     "bind_button": "bind",
-    "bind_button_title": "Bind {{label}} to a contact"
+    "bind_button_title": "Bind {{label}} to a contact",
+    "image_open_title": "Open {{filename}} in your default image viewer",
+    "image_tampered_caption": "tampered image — DO NOT OPEN",
+    "image_caption_received": "{{filename}} ({{size}})"
+  },
+  "messages": {
+    "pin": {
+      "pin_button": "Pin",
+      "unpin_button": "Unpin",
+      "pin_title": "Pin this message",
+      "unpin_title": "Unpin this message",
+      "pinned_badge_title": "Pinned message",
+      "header_button": "Pinned ({{count}})",
+      "drawer_title": "Pinned messages",
+      "drawer_empty": "(no pinned messages in this conversation)",
+      "jump_title": "Jump to message"
+    },
+    "star": {
+      "star_button": "Star",
+      "unstar_button": "Unstar",
+      "star_title": "Star this message",
+      "unstar_title": "Unstar this message",
+      "starred_badge_title": "Starred message",
+      "header_button": "Starred ({{count}})",
+      "drawer_title": "Starred messages",
+      "drawer_empty": "(no starred messages yet)",
+      "jump_title": "Switch to conversation and jump"
+    }
+  },
+  "conversation": {
+    "archive": {
+      "archive_button": "Archive",
+      "unarchive_button": "Unarchive",
+      "archive_title": "Move conversation to Archive",
+      "unarchive_title": "Move conversation back to the contact list",
+      "section_header": "Archive ({{count}})",
+      "section_empty": "(no archived conversations)",
+      "pin_button": "Pin to top",
+      "unpin_button": "Unpin",
+      "menu_aria": "Conversation menu"
+    }
+  },
+  "settings_archive": {
+    "title": "Archive",
+    "description": "Conversations you archived from the contact list. Click a label to restore it.",
+    "empty": "(no archived conversations)",
+    "clear_all_button": "Empty archive",
+    "clear_all_confirm": "Permanently remove all archived conversations from the contact book? This cannot be undone.",
+    "clear_all_done": "archive emptied",
+    "clear_all_failed": "empty archive failed: {{error}}"
   },
   "input_bar": {
     "attach_title": "Attach a file to send to {{label}} (max 5 MiB)",

@@ -7,6 +7,12 @@ import type {
   ConnectionEvent,
   ConnectionStatus,
   Contact,
+  ConversationState,
+  ConversationStateChangedEvent,
+  FileReceivedEvent,
+  FileSendResult,
+  IncomingMessage,
+  MessageStateChangedEvent,
   DisappearingTtlChangedEvent,
   FileReceivedEvent,
   FileSendResult,
@@ -67,6 +73,8 @@ function msgLineToWire(m: MsgLine): IncomingMessage {
     file_meta: m.file_meta,
     msg_id: m.msg_id,
     delivery_state: m.delivery_state,
+    pinned: m.pinned ?? false,
+    starred: m.starred ?? false,
     reply_to: m.reply_to,
     reactions: m.reactions,
     expires_at: m.expires_at,
@@ -91,6 +99,8 @@ function wireToMsgLine(m: IncomingMessage): MsgLine {
     file_meta: m.file_meta,
     msg_id: m.msg_id,
     delivery_state: m.delivery_state,
+    pinned: m.pinned ?? false,
+    starred: m.starred ?? false,
     reply_to: m.reply_to,
     reactions: m.reactions,
     expires_at: m.expires_at,
@@ -151,6 +161,13 @@ export default function App() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [activeLabel, setActiveLabel] = useState<string | null>(null);
   const [messages, setMessages] = useState<MsgLine[]>([]);
+  /// Wave 8G — `conversation_state.json` map, keyed by contact label.
+  /// Hydrated on cold start via `get_conversation_state`, then patched
+  /// in-place from `conversation_state_changed` events. Drives the
+  /// archive/pin layout in ContactsPane + the SettingsPanel archive view.
+  const [conversationState, setConversationState] = useState<
+    Record<string, ConversationState>
+  >({});
   const [showAddContact, setShowAddContact] = useState(false);
   const [showBindModal, setShowBindModal] = useState(false);
   /// Hex pubkey of the most-recent unbound sealed-sender, mirroring
@@ -297,6 +314,7 @@ export default function App() {
           saved_path: payload.saved_path,
           sha256_hex: payload.sha256_hex,
           sha256_ok: payload.sha256_ok,
+          mime: payload.mime,
         },
       },
     ]);
@@ -320,6 +338,7 @@ export default function App() {
           // unset; the row's "open folder" affordance is hidden when path
           // is missing.
           saved_path: null,
+          mime: result.mime,
         },
       },
     ]);
@@ -421,6 +440,18 @@ export default function App() {
         if (cs.length > 0) setActiveLabel(cs[0].label);
       } catch (e) {
         pushSystem(t("app.system.load_contacts_failed", { error: String(e) }));
+      }
+
+      // Wave 8G — hydrate per-conversation pin/archive map. Errors are
+      // silent + fall back to an empty map so a missing/malformed
+      // `conversation_state.json` doesn't block the chat UI.
+      try {
+        const cs = await invoke<Record<string, ConversationState>>(
+          "get_conversation_state",
+        );
+        setConversationState(cs ?? {});
+      } catch (e) {
+        console.warn("get_conversation_state failed:", e);
       }
 
       // Pick up any cached connection status the backend already knows.
@@ -588,6 +619,15 @@ export default function App() {
       }, ttl_secs * 1000 + 50);
     }).then(u => unlisteners.push(u));
 
+    // ── Wave 8G: per-message pin/star state-change events ───────────────
+    // Backend emits this whenever pin_message/unpin_message/star_message/
+    // unstar_message succeeds. We patch the matching row in `messages`
+    // by msg_id so the visual badge + tint flips without a reload.
+    listen<MessageStateChangedEvent>("message_state_changed", e => {
+      const { msg_id, pinned, starred } = e.payload;
+      setMessages(prev =>
+        prev.map(m =>
+          m.msg_id === msg_id ? { ...m, pinned, starred } : m,
     // ── Reaction events ────────────────────────────────────────────────
     // Backend has already merged the `add`/`remove` action into the on-disk
     // history row's `reactions` array; we just patch in-memory state with
@@ -601,6 +641,23 @@ export default function App() {
       );
     }).then(u => unlisteners.push(u));
 
+    // ── Wave 8G: per-conversation archive/pin/mute state-change events ──
+    listen<ConversationStateChangedEvent>(
+      "conversation_state_changed",
+      e => {
+        const { contact_label, state } = e.payload;
+        setConversationState(prev => ({
+          ...prev,
+          [contact_label]: state,
+        }));
+        // If the user just archived the active conversation, drop the
+        // selection so MessageStream doesn't keep showing rows from a
+        // contact that is no longer in the live list.
+        if (state.archived) {
+          setActiveLabel(prev => (prev === contact_label ? null : prev));
+        }
+      },
+    ).then(u => unlisteners.push(u));
     // ── Auto-purge: drop any row the backend just removed ──────────────
     // The 60s sweep on the Rust side mutates messages.json and emits this
     // with the dropped msg_ids. We mirror the change in React so the
@@ -1016,6 +1073,7 @@ export default function App() {
               onAddClick={() => setShowAddContact(true)}
               hasUnboundSender={pendingUnboundPub !== null}
               onBindClick={() => setShowBindModal(true)}
+              conversationState={conversationState}
             />
           </div>
         ) : (
@@ -1058,6 +1116,7 @@ export default function App() {
             onOpenFolder={handleOpenDownloadsFolder}
             highlightedIdx={searchHighlightIdx}
             onMarkRead={handleMarkRead}
+            onSwitchConversation={setActiveLabel}
             knownMentionLabels={[
               myLabel,
               ...(mlsStatus?.members.map(m => m.label) ?? []),

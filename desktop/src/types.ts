@@ -47,6 +47,13 @@ export interface IncomingMessage {
   ///   "read"      -> double cyber-cyan check
   /// Only meaningful on outgoing rows; incoming rows leave it undefined.
   delivery_state?: "sent" | "delivered" | "read";
+  /// Per-message "pinned" flag. Persisted on the row itself so a reload
+  /// preserves user intent. Default `false` is omitted from the on-disk
+  /// JSON for backwards-compat with pre-feature persisted rows.
+  pinned?: boolean;
+  /// Per-message "starred" / favourite flag. Same persistence + back-
+  /// compat strategy as `pinned`.
+  starred?: boolean;
   /// Reply-thread metadata, populated when this row was sent via the
   /// REPL-1: envelope. The MessageStream renders an inline magenta
   /// "↪ <quoted_preview>" header that scrolls to the quoted row on click.
@@ -106,6 +113,12 @@ export interface MsgLine {
   /// this monotonically as `receipt` events arrive (sent → delivered →
   /// read). Undefined / absent on incoming + system rows.
   delivery_state?: "sent" | "delivered" | "read";
+  /// Pin / star flags — mirror the backend `IncomingMessage` fields.
+  /// Toggled via the hover-toolbar's [Pin] / [Star] buttons, which fire
+  /// the matching `pin_message` / `star_message` Tauri commands and
+  /// listen for `message_state_changed` events.
+  pinned?: boolean;
+  starred?: boolean;
   /// Reply-thread metadata. Populated for rows that quote an earlier
   /// message; the stream renders the quote block above the body and
   /// scrolls-to-quoted on click.
@@ -131,6 +144,10 @@ export interface FileMeta {
   /// `true` if the receiver re-hashed the bytes and matched. `false` for
   /// a tampered transfer. `undefined` for outgoing rows (no verify needed).
   sha256_ok?: boolean;
+  /// MIME guess from the wire manifest (e.g. `image/png`). Drives the
+  /// inline-image-vs-📎-link branch in `MessageStream.tsx`. Optional —
+  /// legacy persisted rows pre-feature don't carry it.
+  mime?: string;
 }
 
 /// Backend `file_received` event payload. Mirrors the Rust struct of the
@@ -144,6 +161,10 @@ export interface FileReceivedEvent {
   sha256_hex: string;
   ts: string;
   sender_pub_hex?: string | null;
+  /// MIME hint copied from the wire manifest. Lets MessageStream branch
+  /// to inline image-rendering for `image/*` payloads without inspecting
+  /// the filename extension on the JS side.
+  mime?: string;
 }
 
 /// Result returned by the `send_file` Tauri command. Used by the frontend
@@ -152,6 +173,7 @@ export interface FileSendResult {
   filename: string;
   size: number;
   sha256_hex: string;
+  mime?: string;
 }
 
 /// Relay/listener connection state for the StatusFooter pill. Emitted by the
@@ -356,6 +378,35 @@ export interface UpdateInfo {
   release_notes?: string | null;
 }
 
+// ── Wave 8G: Pin / Star (per-message) + Archive (per-conversation) ──────────
+//
+// Mirrors the Rust `ConversationState` struct in
+// `desktop/src-tauri/src/lib.rs`. Persisted under `conversation_state.json`
+// keyed by contact label.
+
+export interface ConversationState {
+  archived?: boolean;
+  pinned?: boolean;
+  muted?: boolean;
+}
+
+/// Emitted by `pin_message` / `unpin_message` / `star_message` /
+/// `unstar_message` so the React reducer can patch the in-memory
+/// `messages` array without reloading history.
+export interface MessageStateChangedEvent {
+  msg_id: string;
+  pinned: boolean;
+  starred: boolean;
+}
+
+/// Emitted by the conversation-level mutations
+/// (`archive_conversation` / `unarchive_conversation` /
+/// `pin_conversation` / `unpin_conversation`). The frontend hydrates
+/// the contact-state map from `get_conversation_state` on cold start
+/// and patches in-place from this event.
+export interface ConversationStateChangedEvent {
+  contact_label: string;
+  state: ConversationState;
 // ── Reply / reactions / disappearing-messages event payloads ────────────────
 //
 // All three are emitted by the Rust listener path that decodes the matching
