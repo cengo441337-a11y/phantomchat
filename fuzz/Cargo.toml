@@ -1,0 +1,97 @@
+[package]
+name = "phantomchat-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# This crate is intentionally outside the workspace at the repo root —
+# cargo-fuzz's nightly-only `-Zbuild-std` interactions don't play nicely
+# with stable-pinned workspace members.
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+# We pull only the crypto-only / wire-only feature set of phantomchat_core
+# so the fuzz harnesses can build on bare hosts without SQLCipher/OpenSSL
+# headers. `mls` is on so MLS-WLC2 / MLS-APP1 harnesses compile.
+phantomchat_core = { path = "../core", default-features = false, features = ["net", "mls"] }
+
+[workspace]
+# Standalone — keep separate from the main workspace so cargo-fuzz can
+# manage its own feature flags + nightly toolchain.
+members = ["."]
+
+[profile.release]
+debug = 1
+
+# ── Fuzz targets ────────────────────────────────────────────────────────
+# Each [[bin]] points to a single-shot harness in fuzz_targets/. Adding
+# a new wire-format parser? Add a target here + the matching .rs file.
+
+[[bin]]
+name = "envelope_parse"
+path = "fuzz_targets/envelope_parse.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "mls_welcome_v2"
+path = "fuzz_targets/mls_welcome_v2.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "mls_app_v1"
+path = "fuzz_targets/mls_app_v1.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "file_v1"
+path = "fuzz_targets/file_v1.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "receipt_v1"
+path = "fuzz_targets/receipt_v1.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "typing_v1"
+path = "fuzz_targets/typing_v1.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "reply_v1"
+path = "fuzz_targets/reply_v1.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "reaction_v1"
+path = "fuzz_targets/reaction_v1.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "disappearing_v1"
+path = "fuzz_targets/disappearing_v1.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "phantomaddress_parse"
+path = "fuzz_targets/phantomaddress_parse.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "nostr_event_extract"
+path = "fuzz_targets/nostr_event_extract.rs"
+test = false
+doc = false

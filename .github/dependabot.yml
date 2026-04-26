@@ -1,0 +1,65 @@
+version: 2
+updates:
+  # ── Cargo: workspace root pulls all member crates' deps in one Cargo.lock
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(cargo)"
+      include: scope
+    labels:
+      - dependencies
+      - rust
+
+  # ── Cargo: fuzz workspace lives outside the main workspace
+  - package-ecosystem: cargo
+    directory: "/fuzz"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(fuzz)"
+      include: scope
+    labels:
+      - dependencies
+      - fuzz
+
+  # ── npm: Tauri desktop frontend
+  - package-ecosystem: npm
+    directory: "/desktop"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(npm)"
+      include: scope
+    labels:
+      - dependencies
+      - desktop
+
+  # ── GitHub Actions: keep workflow action versions current
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(actions)"
+      include: scope
+    labels:
+      - dependencies
+      - github-actions

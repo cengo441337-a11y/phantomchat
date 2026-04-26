@@ -1,0 +1,247 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to (re)build, e.g. v3.0.1"
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ── Tauri MSI for Windows ────────────────────────────────────────────────
+  build-msi-windows:
+    name: build MSI (windows)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install WiX (chocolatey)
+        run: choco install wixtoolset --no-progress -y
+        shell: pwsh
+
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: npm ci
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: desktop
+        run: npm run build
+
+      - name: cargo tauri build --bundles msi
+        working-directory: desktop
+        run: cargo tauri build --bundles msi
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: phantomchat-msi
+          path: |
+            desktop/src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
+
+  # ── Flutter APK split-per-abi ───────────────────────────────────────────
+  build-apk-linux:
+    name: build APK (linux)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK r26+
+        run: |
+          sdkmanager --install "ndk;26.3.11579264"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> $GITHUB_ENV
+
+      - name: Install cargo-ndk + flutter_rust_bridge_codegen
+        run: |
+          cargo install cargo-ndk --locked
+          cargo install flutter_rust_bridge_codegen --version 2.12.0 --locked
+
+      - name: Add Android Rust targets
+        run: |
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+
+      - name: Build APK (release split-per-abi)
+        run: bash scripts/build-android.sh release apk
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: phantomchat-apk
+          path: |
+            mobile/build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+
+  # ── CLI cross-compile matrix ────────────────────────────────────────────
+  cli-cross-compile:
+    name: cli ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            ext: ""
+          - label: linux-aarch64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            ext: ""
+            cross: true
+          - label: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: ".exe"
+          - label: macos-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            ext: ""
+          - label: macos-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            ext: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-linker (linux-aarch64)
+        if: matrix.cross == true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          mkdir -p .cargo
+          {
+            echo "[target.aarch64-unknown-linux-gnu]"
+            echo "linker = \"aarch64-linux-gnu-gcc\""
+          } >> .cargo/config.toml
+
+      - name: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release -p phantomchat_cli --target ${{ matrix.target }}
+
+      - name: Stage binary
+        shell: bash
+        run: |
+          mkdir -p staging
+          cp "target/${{ matrix.target }}/release/phantomchat_cli${{ matrix.ext }}" \
+             "staging/phantomchat_cli-${{ matrix.label }}${{ matrix.ext }}"
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: phantomchat-cli-${{ matrix.label }}
+          path: staging/*
+          if-no-files-found: error
+
+  # ── Aggregate, checksum, and create the GitHub Release ──────────────────
+  release-create:
+    name: create GitHub Release
+    needs: [build-msi-windows, build-apk-linux, cli-cross-compile]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifacts + compute SHA-256
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find dist -type f \( -name "*.msi" -o -name "*.apk" -o -name "phantomchat_cli-*" \) -print0 \
+            | while IFS= read -r -d '' f; do
+                cp "$f" release/
+              done
+          (cd release && sha256sum * | tee SHA256SUMS.txt)
+
+      - name: Generate changelog from previous tag
+        id: changelog
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          prev=$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)
+          {
+            echo "## Changes"
+            echo
+            if [ -n "$prev" ]; then
+              echo "Since \`${prev}\`:"
+              echo
+              git log --pretty=format:"- %s (%h)" "${prev}..${tag}" || \
+                git log --pretty=format:"- %s (%h)" "${prev}..HEAD"
+            else
+              echo "Initial tagged release."
+              git log --pretty=format:"- %s (%h)" -n 50
+            fi
+          } > CHANGELOG_RELEASE.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: CHANGELOG_RELEASE.md
+          draft: false
+          prerelease: false
+          files: |
+            release/*
+            release/SHA256SUMS.txt

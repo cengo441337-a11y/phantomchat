@@ -1,0 +1,181 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same branch to save minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  cargo-build:
+    name: cargo build (cli) + selftest 30/30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-cli-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-cli-
+
+      - name: Build CLI (release)
+        run: cargo build --release -p phantomchat_cli
+
+      - name: Run selftest, require "30/30"
+        run: |
+          out="$(./target/release/phantomchat_cli selftest 2>&1 || true)"
+          echo "$out"
+          if ! echo "$out" | grep -E -q '\b30/30\b'; then
+            echo "::error::selftest did not print expected '30/30' marker"
+            exit 1
+          fi
+
+  cargo-test-core:
+    name: cargo test (core, mls)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+
+      # Use --no-default-features to avoid the SQLCipher / OpenSSL header
+      # requirement of the default `ffi` feature on bare ubuntu-latest, while
+      # still pulling in the `net` + `mls` test-coverage we care about.
+      - name: cargo test --features mls
+        run: cargo test -p phantomchat_core --no-default-features --features net,mls --lib
+
+  cargo-clippy-warnings-zero:
+    name: cargo clippy (deny warnings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-clippy-
+
+      - name: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  desktop-frontend:
+    name: desktop frontend (TS + Vite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: npm ci
+        working-directory: desktop
+        run: npm ci
+
+      - name: npm run build
+        working-directory: desktop
+        run: npm run build
+
+  flutter-analyze:
+    name: flutter analyze (touched dirs only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: flutter pub get
+        working-directory: mobile
+        run: flutter pub get
+
+      # Only analyze the dirs we own in this PR-stack — `lib/src/ui/` carries
+      # 147 baseline errors that are tracked separately and tolerated for now.
+      - name: flutter analyze (services + screens + bridge bindings)
+        working-directory: mobile
+        run: flutter analyze lib/services/ lib/screens/ lib/src/rust/
+
+  fuzz-smoke:
+    name: cargo-fuzz smoke (30s per target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly + cargo-fuzz
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo registry + fuzz target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            fuzz/target
+          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('fuzz/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-fuzz-
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Build all fuzz targets
+        run: cargo +nightly fuzz build
+        working-directory: fuzz
+
+      - name: Smoke fuzz each target (30s)
+        working-directory: fuzz
+        run: |
+          for tgt in $(cargo +nightly fuzz list); do
+            echo "::group::fuzz $tgt"
+            cargo +nightly fuzz run "$tgt" -- -max_total_time=30 -timeout=10 \
+              || { echo "::error::fuzz target $tgt found a crash"; exit 1; }
+            echo "::endgroup::"
+          done
