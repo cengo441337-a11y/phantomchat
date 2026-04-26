@@ -336,34 +336,46 @@ class _HomeScreenState extends State<HomeScreen> {
             child: const Icon(Icons.shield_outlined, color: kCyan, size: 18),
           ),
           const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              GlitchText(
-                text: 'PHANTOM',
-                interval: const Duration(milliseconds: 200),
-                style: GoogleFonts.orbitron(
-                  fontSize: 18, fontWeight: FontWeight.w900,
-                  color: kWhite, letterSpacing: 3,
-                  shadows: [Shadow(color: kCyan.withValues(alpha: 0.5), blurRadius: 8)],
-                ),
-              ),
-              Row(
-                children: [
-                  Container(
-                    width: 6, height: 6,
-                    decoration: const BoxDecoration(
-                      color: kGreen, shape: BoxShape.circle,
-                      boxShadow: [BoxShadow(color: kGreen, blurRadius: 6)],
-                    ),
+          // Wrap the title block in Expanded so on narrower devices it
+          // shrinks instead of pushing the trailing icon row off-screen.
+          // Without this the header overflows ~20 px on a 392 dp viewport
+          // (Pixel 4-class) once all four trailing buttons are present.
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                GlitchText(
+                  text: 'PHANTOM',
+                  interval: const Duration(milliseconds: 200),
+                  style: GoogleFonts.orbitron(
+                    fontSize: 18, fontWeight: FontWeight.w900,
+                    color: kWhite, letterSpacing: 3,
+                    shadows: [Shadow(color: kCyan.withValues(alpha: 0.5), blurRadius: 8)],
                   ),
-                  const SizedBox(width: 5),
-                  Text('SECURE · ONLINE', style: GoogleFonts.spaceMono(fontSize: 9, color: kGreen, letterSpacing: 1)),
-                ],
-              ),
-            ],
+                ),
+                Row(
+                  children: [
+                    Container(
+                      width: 6, height: 6,
+                      decoration: const BoxDecoration(
+                        color: kGreen, shape: BoxShape.circle,
+                        boxShadow: [BoxShadow(color: kGreen, blurRadius: 6)],
+                      ),
+                    ),
+                    const SizedBox(width: 5),
+                    Flexible(
+                      child: Text(
+                        'SECURE · ONLINE',
+                        style: GoogleFonts.spaceMono(fontSize: 9, color: kGreen, letterSpacing: 1),
+                        overflow: TextOverflow.fade,
+                        softWrap: false,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-          const Spacer(),
           if (_contacts.isNotEmpty)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),

@@ -170,12 +170,29 @@ class _OnboardingScreenState extends State<OnboardingScreen>
 
   // ── STEP 0: Welcome ─────────────────────────────────────────────────────────
   Widget _buildWelcome() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 48),
+    // The pulse ring + 46 dp GlitchText + boot-log card + feature pills +
+    // CTA add up to ~820 dp of intrinsic height, which overflows by ~45 px
+    // on shorter viewports (Pixel 4-class, ~777 dp usable). Use
+    // `mainAxisAlignment: spaceBetween` between a top group and a bottom
+    // group inside a scroll-aware ConstrainedBox: on a tall viewport the
+    // CTA still sits at the bottom (the Column expands to fill); on a
+    // short viewport the SingleChildScrollView lets the user scroll to
+    // reach it. Avoids the Spacer-inside-IntrinsicHeight contradiction
+    // that left a residual 34 px overflow.
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        physics: const ClampingScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 48),
 
           // Logo + Title
           Center(
@@ -248,120 +265,144 @@ class _OnboardingScreenState extends State<OnboardingScreen>
               ],
             ),
           ),
+                  const SizedBox(height: 24),
+                ],
+              ),
 
-          const Spacer(),
-
-          // Feature pills
-          Row(
-            children: [
-              _Pill(label: 'X25519', color: kCyan),
-              const SizedBox(width: 8),
-              _Pill(label: 'ChaCha20', color: kCyan),
-              const SizedBox(width: 8),
-              _Pill(label: 'ZERO-LOG', color: kMagenta),
-              const SizedBox(width: 8),
-              _Pill(label: 'NO-SERVER', color: kMagenta),
+              // ── bottom group ─────────────────────────────────────────
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Feature pills
+                  Row(
+                    children: [
+                      _Pill(label: 'X25519', color: kCyan),
+                      const SizedBox(width: 8),
+                      _Pill(label: 'ChaCha20', color: kCyan),
+                      const SizedBox(width: 8),
+                      _Pill(label: 'ZERO-LOG', color: kMagenta),
+                      const SizedBox(width: 8),
+                      _Pill(label: 'NO-SERVER', color: kMagenta),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  // CTA
+                  _CyberButton(
+                    label: 'INITIALIZE IDENTITY',
+                    onTap: _bootDone ? () => _stepTo(1) : null,
+                    width: double.infinity,
+                  ),
+                  const SizedBox(height: 12),
+                  Center(
+                    child: Text(
+                      'NO ACCOUNT · NO EMAIL · CRYPTOGRAPHY ONLY',
+                      style: GoogleFonts.spaceMono(fontSize: 9, color: kGrayText, letterSpacing: 1.5),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                ],
+              ),
             ],
           ),
-
-          const SizedBox(height: 24),
-
-          // CTA
-          _CyberButton(
-            label: 'INITIALIZE IDENTITY',
-            onTap: _bootDone ? () => _stepTo(1) : null,
-            width: double.infinity,
-          ),
-
-          const SizedBox(height: 12),
-          Center(
-            child: Text(
-              'NO ACCOUNT · NO EMAIL · CRYPTOGRAPHY ONLY',
-              style: GoogleFonts.spaceMono(fontSize: 9, color: kGrayText, letterSpacing: 1.5),
-            ),
-          ),
-          const SizedBox(height: 24),
-        ],
+        ),
       ),
     );
   }
 
   // ── STEP 1: Name input ───────────────────────────────────────────────────────
   Widget _buildNameInput() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 52),
-
-          Text(
-            '> ASSIGN\nCODENAME',
-            style: GoogleFonts.orbitron(
-              fontSize: 36,
-              fontWeight: FontWeight.w900,
-              color: kWhite,
-              letterSpacing: 2,
-              height: 1.1,
-              shadows: [Shadow(color: kCyan.withValues(alpha: 0.5), blurRadius: 16)],
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '// STORED LOCALLY — NEVER TRANSMITTED',
-            style: GoogleFonts.spaceMono(fontSize: 10, color: kGrayText),
-          ),
-          const SizedBox(height: 40),
-
-          // Input inside CyberCard frame
-          CyberCard(
-            borderColor: kCyan,
-            glow: true,
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'CODENAME_INPUT:',
-                  style: GoogleFonts.spaceMono(fontSize: 10, color: kCyan, letterSpacing: 1),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: _nameCtrl,
-                  autofocus: true,
-                  style: GoogleFonts.orbitron(color: kWhite, fontSize: 18, letterSpacing: 2),
-                  decoration: InputDecoration(
-                    border: InputBorder.none,
-                    enabledBorder: InputBorder.none,
-                    focusedBorder: InputBorder.none,
-                    hintText: 'GHOST · CIPHER · NEXUS',
-                    hintStyle: GoogleFonts.orbitron(fontSize: 14, color: kGray, letterSpacing: 2),
-                    filled: false,
-                    contentPadding: EdgeInsets.zero,
+    // Same scroll-aware spaceBetween pattern as `_buildWelcome`. The
+    // autofocused TextField raises the keyboard, which on 5-6" devices
+    // leaves <500 dp of usable height — without this the heading + input
+    // card + buttons (~580 dp) would overflow by ~45 px.
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        physics: const ClampingScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 52),
+                  Text(
+                    '> ASSIGN\nCODENAME',
+                    style: GoogleFonts.orbitron(
+                      fontSize: 36,
+                      fontWeight: FontWeight.w900,
+                      color: kWhite,
+                      letterSpacing: 2,
+                      height: 1.1,
+                      shadows: [Shadow(color: kCyan.withValues(alpha: 0.5), blurRadius: 16)],
+                    ),
                   ),
-                  onSubmitted: (_) => _generateIdentity(),
-                ),
-              ],
-            ),
-          ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '// STORED LOCALLY — NEVER TRANSMITTED',
+                    style: GoogleFonts.spaceMono(fontSize: 10, color: kGrayText),
+                  ),
+                  const SizedBox(height: 40),
+                  // Input inside CyberCard frame
+                  CyberCard(
+                    borderColor: kCyan,
+                    glow: true,
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'CODENAME_INPUT:',
+                          style: GoogleFonts.spaceMono(fontSize: 10, color: kCyan, letterSpacing: 1),
+                        ),
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: _nameCtrl,
+                          autofocus: true,
+                          style: GoogleFonts.orbitron(color: kWhite, fontSize: 18, letterSpacing: 2),
+                          decoration: InputDecoration(
+                            border: InputBorder.none,
+                            enabledBorder: InputBorder.none,
+                            focusedBorder: InputBorder.none,
+                            hintText: 'GHOST · CIPHER · NEXUS',
+                            hintStyle: GoogleFonts.orbitron(fontSize: 14, color: kGray, letterSpacing: 2),
+                            filled: false,
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                          onSubmitted: (_) => _generateIdentity(),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
 
-          const Spacer(),
-
-          _CyberButton(
-            label: 'GENERATE KEYS',
-            onTap: _generateIdentity,
-            width: double.infinity,
-            color: kCyan,
+              // ── bottom group ─────────────────────────────────────────
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _CyberButton(
+                    label: 'GENERATE KEYS',
+                    onTap: _generateIdentity,
+                    width: double.infinity,
+                    color: kCyan,
+                  ),
+                  const SizedBox(height: 10),
+                  _CyberButton(
+                    label: '← BACK',
+                    onTap: () => _stepTo(0),
+                    width: double.infinity,
+                    color: kGrayText,
+                  ),
+                  const SizedBox(height: 24),
+                ],
+              ),
+            ],
           ),
-          const SizedBox(height: 10),
-          _CyberButton(
-            label: '← BACK',
-            onTap: () => _stepTo(0),
-            width: double.infinity,
-            color: kGrayText,
-          ),
-          const SizedBox(height: 24),
-        ],
+        ),
       ),
     );
   }
@@ -406,12 +447,23 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     final shortId = identity.id.substring(0, 16);
     final formatted = '${shortId.substring(0,4)} ${shortId.substring(4,8)} ${shortId.substring(8,12)} ${shortId.substring(12,16)}';
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 48),
+    // Same scroll-aware spaceBetween pattern as the other onboarding steps —
+    // the WELCOME headline + Phantom-ID card + warning card + ENTER button
+    // can exceed ~777 dp on shorter viewports (Pixel 4-class).
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        physics: const ClampingScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 48),
 
           // Status badge
           Row(
@@ -542,17 +594,26 @@ class _OnboardingScreenState extends State<OnboardingScreen>
             ),
           ),
 
-          const Spacer(),
+                ],
+              ),
 
-          _CyberButton(
-            label: '[ ENTER PHANTOM ]',
-            onTap: _finish,
-            width: double.infinity,
-            color: kCyan,
-            glow: true,
+              // ── bottom group ─────────────────────────────────────────
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _CyberButton(
+                    label: '[ ENTER PHANTOM ]',
+                    onTap: _finish,
+                    width: double.infinity,
+                    color: kCyan,
+                    glow: true,
+                  ),
+                  const SizedBox(height: 24),
+                ],
+              ),
+            ],
           ),
-          const SizedBox(height: 24),
-        ],
+        ),
       ),
     );
   }
