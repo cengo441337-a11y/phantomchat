@@ -2,7 +2,7 @@
 
 use phantomchat_core::{
     address::PhantomAddress,
-    envelope::{Envelope, Payload, PAYLOAD_PAD_BLOCK},
+    envelope::{Payload, PAYLOAD_PAD_BLOCK},
     keys::{HybridKeyPair, PhantomSigningKey, SpendKey, ViewKey},
     session::SessionStore,
 };
@@ -22,7 +22,6 @@ fn new_id() -> Id {
 
 #[test]
 fn sealed_sender_roundtrip_and_signature_verifies() {
-    let alice = new_id();
     let bob = new_id();
     let alice_sign = PhantomSigningKey::generate();
 

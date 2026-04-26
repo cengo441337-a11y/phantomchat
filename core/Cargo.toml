@@ -82,7 +82,6 @@ ffi-mobile = ["net", "dep:flutter_rust_bridge"]
 # Crypto-only build for WASM / embedded: no native runtime, no FFI.
 # `cargo check --target wasm32-unknown-unknown --no-default-features --features wasm`
 wasm = ["dep:wasm-bindgen", "dep:serde-wasm-bindgen"]
-pqc = []
 # Full RFC 9420 MLS group messaging via openmls. When on, `mls.rs` exposes
 # `PhantomMlsGroup` — TreeKEM-based groups that scale to large memberships
 # with O(log n) key exchange on each membership change, superseding the

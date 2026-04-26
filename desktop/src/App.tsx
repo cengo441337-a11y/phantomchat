@@ -181,6 +181,15 @@ export default function App() {
   const [decrypted, setDecrypted] = useState(0);
   const [connection, setConnection] = useState<ConnectionStatus>("connecting");
 
+  // ── History persistence error banner ────────────────────────────────────
+  // Set when a `save_history` round-trip rejects (disk full, permission
+  // denied, locked file). Surfaces a sticky red banner under the header
+  // so the user notices BEFORE losing transcript on quit. Cleared on the
+  // next successful save.
+  const [historyPersistError, setHistoryPersistError] = useState<
+    string | null
+  >(null);
+
   // ── Reply-to compose state ─────────────────────────────────────────────
   // Set when the user clicks Reply on a row in MessageStream. InputBar
   // reads it to render the quote block above the input + route sends
@@ -361,11 +370,21 @@ export default function App() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       const wire = messagesRef.current.map(msgLineToWire);
-      invoke("save_history", { messages: wire }).catch(e => {
-        // Swallow — a transient save failure shouldn't pop a system message
-        // every keystroke. The next save attempt will retry.
-        console.warn("save_history failed:", e);
-      });
+      invoke("save_history", { messages: wire })
+        .then(() => {
+          // Auto-clear the persistent banner on the first successful
+          // save AFTER an error — disk space recovered / permissions
+          // fixed → drop the warning.
+          setHistoryPersistError(prev => (prev !== null ? null : prev));
+        })
+        .catch(e => {
+          // Surface persistently — silently swallowing this risks the
+          // user closing the app and losing transcript when the disk
+          // is full or the file is locked. Banner sticks until the
+          // next save succeeds.
+          console.warn("save_history failed:", e);
+          setHistoryPersistError(String(e));
+        });
     }, HISTORY_DEBOUNCE_MS);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -947,40 +966,42 @@ export default function App() {
 
   const handleBindToContact = useCallback(
     async (contactLabel: string) => {
-      try {
-        await invoke("bind_last_unbound_sender", { contactLabel });
-        // Re-pull contacts so the unbound badge clears + signing_pub fills in.
-        const cs = await invoke<Contact[]>("list_contacts");
-        setContacts(cs);
-        // Re-tag any in-memory ?<hex> rows whose pubkey matches the now-bound
-        // contact's signing_pub. Future incoming messages will already arrive
-        // with the contact label — this just patches up history.
-        setMessages(prev =>
-          prev.map(m => {
-            if (
-              m.kind === "incoming" &&
-              m.label.startsWith("?") &&
-              m.sender_pub_hex &&
-              cs.some(
-                c =>
-                  c.label === contactLabel &&
-                  c.signing_pub?.toLowerCase() ===
-                    (m.sender_pub_hex ?? "").toLowerCase(),
-              )
-            ) {
-              return { ...m, label: contactLabel };
-            }
-            return m;
-          }),
-        );
-        setPendingUnboundPub(null);
-        setShowBindModal(false);
-        pushSystem(t("app.system.bound_sealed_sender", { label: contactLabel }));
-      } catch (e) {
-        pushSystem(t("app.system.bind_failed", { error: String(e) }));
-      }
+      // Let exceptions bubble so BindContactModal can render the error
+      // inline (mirrors the recent handleAddContact fix). The previous
+      // behaviour of swallowing them into pushSystem surfaced the
+      // failure in the chat-stream area (which the user couldn't see
+      // while focused on the modal), making the bind appear to "do
+      // nothing" on backend rejection.
+      await invoke("bind_last_unbound_sender", { contactLabel });
+      // Re-pull contacts so the unbound badge clears + signing_pub fills in.
+      const cs = await invoke<Contact[]>("list_contacts");
+      setContacts(cs);
+      // Re-tag any in-memory ?<hex> rows whose pubkey matches the now-bound
+      // contact's signing_pub. Future incoming messages will already arrive
+      // with the contact label — this just patches up history.
+      setMessages(prev =>
+        prev.map(m => {
+          if (
+            m.kind === "incoming" &&
+            m.label.startsWith("?") &&
+            m.sender_pub_hex &&
+            cs.some(
+              c =>
+                c.label === contactLabel &&
+                c.signing_pub?.toLowerCase() ===
+                  (m.sender_pub_hex ?? "").toLowerCase(),
+            )
+          ) {
+            return { ...m, label: contactLabel };
+          }
+          return m;
+        }),
+      );
+      setPendingUnboundPub(null);
+      setShowBindModal(false);
+      pushSystem(t("app.system.bound_sealed_sender", { label: contactLabel }));
     },
-    [],
+    [t],
   );
 
   async function handleGenerateIdentity() {
@@ -1028,6 +1049,18 @@ export default function App() {
       {updateAvailable?.available && (
         <div className="px-4 py-1.5 text-xs text-cyber-cyan bg-cyber-cyan/10 border-b border-cyber-cyan/40 text-center font-display">
           {t("app.update_banner")}
+        </div>
+      )}
+      {/* History-persistence failure banner — sticks until the next
+          successful `save_history`. Mentioning the on-disk path lets a
+          user diagnose disk-full / permission errors at a glance. */}
+      {historyPersistError && (
+        <div className="px-4 py-1.5 text-xs text-red-300 bg-red-900/40 border-b border-red-500/60">
+          {t("app.history_persist_error", {
+            error: historyPersistError,
+            defaultValue:
+              "⚠️ History persistence failing — your messages may be lost on quit. Check disk space / permissions in <app_data>/messages.json. ({{error}})",
+          })}
         </div>
       )}
       {/* Header */}

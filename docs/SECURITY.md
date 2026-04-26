@@ -71,8 +71,14 @@ Rechenaufwand auferlegt — Sybil- und Spam-Angriffe werden teurer.
 
 ### Lokale Verschlüsselung
 
-SQLCipher (AES-256-CBC) sichert Nachrichten und Schlüssel auf dem Gerät.
-Kein Schlüsselmaterial im Klartext.
+- **Desktop (Wave 8H + 8C):** OS-Keystore (DPAPI / Keychain / libsecret) für
+  Identitäts- und Signing-Keys. Plaintext-`keys.json` ist auf neuen Installationen
+  Geschichte. Backups via Argon2id + XChaCha20-Poly1305 mit Passphrase
+  (`docs/RELAY-SELFHOSTING.md` enthält das Restore-Verfahren).
+- **Mobile:** PBKDF2 (600k iters) + Biometrie + Panic-Wipe nach 10 Fehlversuchen.
+- **CLI / Legacy:** SQLCipher (AES-256-CBC) für die ältere Mobile-Storage-Schicht.
+
+Kein Schlüsselmaterial im Klartext auf dem Gerät.
 
 ---
 
@@ -80,10 +86,10 @@ Kein Schlüsselmaterial im Klartext.
 
 | Feature | Status |
 |---------|--------|
-| Post-Quanten-Hybrid (ML-KEM/Kyber) | Dependency vorhanden (`pqcrypto-mlkem`), nicht vollständig integriert |
-| Double-Ratchet vollständig | Envelope-Layer fertig, Ratchet-State-Verwaltung im Aufbau |
-| Gerätekompromittierung | App-Lock mit PIN/Biometrie geplant, Panic-Wipe implementiert |
-| Extern auditierter Krypto-Code | Erforderlich vor Produktion |
+| PQXDH (ML-KEM-1024) Hybrid | **Geliefert in 2.3.0** — auditiert: offen |
+| Double-Ratchet vollständig | **Geliefert in 2.4.0** |
+| App-Lock (PIN / Biometrie) | **Geliefert** — Wave 8H Desktop + Mobile PIN-Flow |
+| Externer Krypto-Audit | **Offen** — Wave 9 Transparency-Bundle (RFC 9116 + Hall of Fame) ist der no-budget-Ersatz, bis Audit-Budget steht |
 
 ---
 
@@ -122,19 +128,19 @@ mit Begründung + neuer Schätzung.
 
 **In Scope:**
 - Krypto-Implementierungen in `core/` (Envelope, Ratchet, Sealed-Sender, MLS, Stealth-Tags)
-- Wire-Format-Schwächen (`MLS-WLC2`, `MLS-APP1`, `FILE1:01`, `RCPT-1:`, `TYPN-1:`, `RACT-1:`, `REPL-1:`, `DISA-1:`)
+- Wire-Format-Schwächen (`MLS-WLC2`, `MLS-APP1`, `FILE1:01`, `RCPT-1:`, `TYPN-1:`, `RACT-1:`, `REPL-1:`, `DISA-1:`, `VOICE-1:`)
 - Tauri-Desktop-Backend (`desktop/src-tauri`) — IPC/command-handler-Bugs, sandbox-Escapes, file-system-Zugriffe
 - Auto-Updater (`updates.dc-infosec.de`) — Signaturprüfung, Downgrade-Angriffe
 - Cover-Traffic / Dandelion++ / Stealth-Mode — Statistical Disclosure / Timing-Korrelation
 - Reproducible-Build-Pipeline — Supply-Chain (CI/CD, Release-Signaturen, Checksum-Veröffentlichung)
 - Frontend (React + Tailwind in `desktop/src/`) — XSS, prototype-pollution, sensitive-data-in-DOM
+- **AI-Bridge Angriffsfläche** (Wave 11) — Provider-Credential-Leakage, Watcher-Confused-Deputy, Allow-list-Bypass, whisper.cpp-Parser-Bugs (siehe [`docs/AI-BRIDGE.md`](AI-BRIDGE.md) § Security model)
 
 **Out of Scope** (bekannt oder akzeptiert):
-- Fehlende Post-Quanten-Hybridisierung (siehe „Offene Punkte" oben — getrackt)
 - DoS gegen Public-Relays (Hashcash mildert, eliminiert nicht)
-- Lokale-Geräte-Kompromittierung jenseits des Panic-Wipe-Threats (App-Lock geplant)
 - Social-Engineering, Phishing, physischer Zutritt
-- Abhängigkeiten von Drittanbietern (`tauri`, `openmls`, `libp2p`) — bitte direkt beim Upstream melden, wir tracken aber CVE-Updates
+- Abhängigkeiten von Drittanbietern (`tauri`, `openmls`, `libp2p`, `whisper.cpp`) — bitte direkt beim Upstream melden, wir tracken aber CVE-Updates
+- Allow-listed-Watcher-Befehle die als Bridge-Prozessuser ausgeführt werden — das ist by-design (siehe AI-BRIDGE.md § Watcher security model). Findings müssen einen Kontroll-Bypass über das Allow-list/Audit-Gate hinaus zeigen.
 
 ### Safe Harbor
 

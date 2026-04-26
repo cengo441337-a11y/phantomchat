@@ -3,12 +3,11 @@ use libp2p::{
     gossipsub,
     kad,
     swarm::{NetworkBehaviour, SwarmEvent},
-    PeerId, Swarm,
+    Swarm,
 };
 use crate::dandelion::{DandelionRouter, Phase};
 use crate::frb_generated::StreamSink;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use tokio::sync::mpsc;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

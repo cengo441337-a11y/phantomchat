@@ -61,6 +61,12 @@ export default function InputBar({
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
+  /// Inline send-error state. Surfaced below the input bar in
+  /// neon-magenta when `onSend` / `onSendReply` rejects so the user sees
+  /// the failure where they're already looking instead of in a chat-stream
+  /// system row that may be off-screen. Cleared on the next successful
+  /// send or as soon as the user starts typing again.
+  const [error, setError] = useState<string | null>(null);
   // Track focus locally so we can dim the blinking cursor when the input
   // is unfocused, per spec. We don't lift this state — it's purely cosmetic.
   const [focused, setFocused] = useState(false);
@@ -174,7 +180,13 @@ export default function InputBar({
   async function fire() {
     const body = text.trim();
     if (!body || sending) return;
+    // Stash the original text BEFORE clearing so a rejected send can
+    // restore it. Previously we cleared `text` before awaiting `onSend`,
+    // which meant a network/relay/bridge failure silently lost the
+    // user's typed message — they had to re-type from memory.
+    const original = text;
     setSending(true);
+    setError(null);
     try {
       // When reply mode is active, route through the REPL-1: handler so
       // the peer's incoming row carries the quote inline. Falls back to
@@ -184,7 +196,12 @@ export default function InputBar({
       } else {
         await onSend(body);
       }
+      // Only clear AFTER the resolve so a rejection above leaves `text`
+      // intact for the user to retry / edit.
       setText("");
+    } catch (e) {
+      setError(String(e));
+      setText(original);
     } finally {
       setSending(false);
     }
@@ -335,6 +352,9 @@ export default function InputBar({
           onChange={e => {
             const value = e.target.value;
             setText(value);
+            // Editing dismisses any inline send-error so the magenta
+            // banner doesn't linger after the user starts retrying.
+            if (error) setError(null);
             const caret = e.target.selectionStart ?? value.length;
             recomputeMentionState(value, caret);
             // Leading-edge throttled typing-ping. Only fires when text
@@ -399,6 +419,15 @@ export default function InputBar({
         {sending ? t("input_bar.sealing_button") : t("input_bar.send_button")}
       </button>
       </div>
+      {/* Inline send-error banner — surfaces failed `onSend` /
+          `onSendReply` rejections right where the user is looking
+          instead of in a chat-stream system row that may be off-screen.
+          Original text is preserved in the input so retry is one click. */}
+      {error && (
+        <div className="px-4 pb-2 text-xs text-neon-magenta">
+          ! {t("input_bar.send_error", { error, defaultValue: "Send failed: {{error}}" })}
+        </div>
+      )}
     </div>
   );
 }

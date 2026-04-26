@@ -6,6 +6,12 @@ class PhantomContact {
   final String publicViewKey;
   final String publicSpendKey;
   final DateTime addedAt;
+  /// Optional ML-KEM (Kyber-768) public key, base64. Present when the
+  /// contact was imported from a `phantomx:` (PQXDH-hybrid) address; null
+  /// for legacy classic-only `phantom:` contacts. Persisted in toJson /
+  /// fromJson so the mobile send-path can reconstruct the hybrid address
+  /// for `sendSealedV3` and avoid silently downgrading to X25519-only.
+  String? mlkemPubB64;
   String? lastMessage;
   DateTime? lastMessageAt;
 
@@ -15,6 +21,7 @@ class PhantomContact {
     required this.publicViewKey,
     required this.publicSpendKey,
     required this.addedAt,
+    this.mlkemPubB64,
     this.lastMessage,
     this.lastMessageAt,
   });
@@ -36,19 +43,27 @@ class PhantomContact {
     final trimmed = phantomId.trim();
 
     // Hybrid `phantomx:` — strip prefix, treat first two colon-separated
-    // parts as view/spend hex, ignore the mlkem segment for now.
+    // parts as view/spend hex. The optional 3rd segment is the ML-KEM
+    // (Kyber-768) public key in base64 — keep it so the send-path can
+    // build a `phantomx:` recipient address for PQXDH-hybrid sealed-
+    // sender. Without this we silently downgrade to classic X25519.
     if (trimmed.startsWith('phantomx:')) {
       final rest = trimmed.substring('phantomx:'.length);
       final parts = rest.split(':');
       if (parts.length >= 2 &&
           _isHex(parts[0], 64) &&
           _isHex(parts[1], 64)) {
+        String? mlkem;
+        if (parts.length >= 3 && parts[2].isNotEmpty) {
+          mlkem = parts[2];
+        }
         return PhantomContact(
           id: parts[1],
           nickname: nickname,
           publicViewKey: parts[0],
           publicSpendKey: parts[1],
           addedAt: DateTime.now(),
+          mlkemPubB64: mlkem,
         );
       }
       return null;
@@ -109,6 +124,7 @@ class PhantomContact {
     'publicViewKey': publicViewKey,
     'publicSpendKey': publicSpendKey,
     'addedAt': addedAt.toIso8601String(),
+    'mlkemPubB64': mlkemPubB64,
     'lastMessage': lastMessage,
     'lastMessageAt': lastMessageAt?.toIso8601String(),
   };
@@ -119,6 +135,7 @@ class PhantomContact {
     publicViewKey: j['publicViewKey'],
     publicSpendKey: j['publicSpendKey'],
     addedAt: DateTime.parse(j['addedAt']),
+    mlkemPubB64: j['mlkemPubB64'] as String?,
     lastMessage: j['lastMessage'],
     lastMessageAt: j['lastMessageAt'] != null ? DateTime.parse(j['lastMessageAt']) : null,
   );

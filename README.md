@@ -3,7 +3,7 @@
 > **Sovereign internal-comms messenger.** Quantum-safe E2E. Metadata-blind via Monero-style stealth-addressing. MLS group chat. Multi-relay redundant. Tor-mode. Tauri 2 desktop (Windows MSI), cyberpunk TUI, headless CLI. Built and offered by **DC INFOSEC** (`dc-infosec.de`) as the Slack/Email-replacement for German SMEs and law firms with hard secrecy obligations.
 
 [![CI](https://github.com/cengo441337-a11y/phantomchat/actions/workflows/ci.yml/badge.svg)](https://github.com/cengo441337-a11y/phantomchat/actions/workflows/ci.yml)
-![Status](https://img.shields.io/badge/Status-v3.0.0-brightgreen)
+![Status](https://img.shields.io/badge/Status-v3.0.2-brightgreen)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![Crypto](https://img.shields.io/badge/Crypto-PQXDH_%2B_XChaCha20--Poly1305-red)
 ![PQ](https://img.shields.io/badge/Post--Quantum-ML--KEM--1024-blueviolet)
@@ -24,7 +24,7 @@
 # Build
 cargo build --release -p phantomchat_cli
 
-# Pipeline self-test — exercises all 9 cryptographic phases in one process,
+# Pipeline self-test — 30 checks across 9 phases in one process,
 # no network required
 ./target/release/phantomchat_cli selftest
 
@@ -168,12 +168,15 @@ SQLCipher AES-256    Lokale Datenbankversclüsselung
 | Hashcash Proof-of-Work | ✓ |
 | SQLCipher lokale Verschlüsselung | ✓ |
 | Panic Wipe | ✓ |
-| Flutter Mobile App (Android / iOS) | ✓ |
+| Flutter Mobile App (Android — iOS deferred) | ✓ |
+| Mobile App-Lock (PIN PBKDF2 600k + Biometrie + Panic-Wipe) | ✓ |
+| Mobile Voice-Messages (Wave 11B — record + send + playback) | ✓ |
+| Mobile In-App APK Auto-Update (Wave 11G — signed manifest + banner) | ✓ |
 | Cyberpunk CLI | ✓ |
 | Post-Quantum Hybrid vollständig (ML-KEM / Kyber im Envelope-Flow) | ✓ |
 | App-Lock PIN (PBKDF2) + Biometrie + Panic-Wipe | ✓ |
 | Core integration-test suite (64 tests) | ✓ |
-| CLI selftest (6 phases, 20 checks) | ✓ |
+| CLI selftest (30 Checks · 9 Phasen) | ✓ |
 | Tor SOCKS5 Stealth-Routing live | ✓ |
 | Systemd Dauer-Listener | ✓ |
 | **Sealed Sender** (Ed25519 identity-level message attribution) | ✓ |
@@ -202,6 +205,8 @@ SQLCipher AES-256    Lokale Datenbankversclüsselung
 | **File Transfer 1:1** (FILE1:01 prefix · 5 MiB cap · sha256-verify · paperclip + drag-drop) | ✓ |
 | **Message Search** (Ctrl+F · debounced · sender filter · scroll-to-row pulse) | ✓ |
 | **Visual Polish** (CRT scanlines · Pane glow · Glitch on tampered · Orbitron headers) | ✓ |
+| **AI Bridge** (Wave 11A/C/D/E/F — Home-LLM als virtueller Kontakt, ClaudeCli/Ollama/Anthropic/OpenAI, on-device whisper.cpp STT, proaktive Cron-Watchers) | ✓ |
+| **Signed Windows MSI** (Wave 10 — Authenticode + RFC 3161 timestamp via `scripts/sign-windows.cmd`) | ✓ |
 | Externer Krypto-Audit | Vor Produktion |
 
 ---
@@ -265,39 +270,6 @@ cargo run -p phantomchat_cli -- status
 
 ---
 
-## Workspace
-
-```
-phantomchat/
-├── core/              Rust-Kernbibliothek
-│   └── src/
-│       ├── envelope.rs        Envelope-Format · AEAD · Stealth-Tags
-│       ├── keys.rs            Identity / View / Spend / PQXDH-Keys
-│       ├── scanner.rs         ViewKey Stealth-Scanner
-│       ├── dandelion.rs       Dandelion++ Router
-│       ├── cover_traffic.rs   Cover Traffic Generator
-│       ├── privacy.rs         PrivacyMode · ProxyConfig
-│       ├── network.rs         libp2p GossipSub
-│       ├── pow.rs             Hashcash PoW
-│       └── api.rs             Flutter-Bridge API (FRB)
-├── relays/            Nostr Relay Adapter
-│   └── src/
-│       ├── lib.rs             NostrRelay · StealthNostrRelay · Factory
-│       └── nostr.rs           NIP-01 Event-Typen · Schnorr-Signierung
-├── cli/               Cyberpunk Terminal Interface
-├── mobile/            Flutter App (Android)
-│   └── lib/                   screens · services · widgets · src/rust (FRB)
-├── docs/              SECURITY.md · PRIVACY.md · HALL-OF-FAME.md ·
-│                      REPRODUCIBLE-BUILDS.md · RELAY-SELFHOSTING.md
-├── keys/              security.asc (PGP, RFC 9116 disclosure key)
-├── .well-known/       security.txt (RFC 9116)
-├── spec/              SPEC.md Protokollspezifikation
-├── infra/             docker-compose.yml (Relay-Infrastruktur)
-└── CHANGELOG.md
-```
-
----
-
 ## Bedrohungsmodell
 
 PhantomChat verteidigt gegen:
@@ -340,15 +312,34 @@ phantomchat/
 │   │   ├── wasm.rs        wasm-bindgen JS surface (`wasm` feature)
 │   │   ├── dandelion.rs   Dandelion++ router (native `net` feature)
 │   │   ├── cover_traffic.rs  Light + Aggressive generators
+│   │   ├── privacy.rs     PrivacyMode · ProxyConfig
+│   │   ├── pow.rs         Hashcash PoW
+│   │   ├── api.rs         Flutter-Bridge API (FRB · `ffi` feature)
 │   │   └── network.rs     libp2p GossipSub bindings
 │   └── tests/             9 integration-test suites, 64 tests
-├── cli/               phantom — the cyberpunk CLI
-├── relays/            Nostr + SOCKS5 relay adapters
-├── mobile/            Flutter App (Android) via flutter_rust_bridge
-├── docs/              SPEC.md, PRIVACY.md, SECURITY.md, HALL-OF-FAME.md, REPRODUCIBLE-BUILDS.md
-├── keys/              security.asc (PGP disclosure key)
-├── .well-known/       security.txt (RFC 9116)
-├── infra/             docker-compose for hosting your own Nostr relay
+├── cli/               phantom — the cyberpunk CLI + TUI (`phantom chat`)
+├── relays/            Nostr + SOCKS5 relay adapters (`MultiRelay` fan-out)
+├── desktop/           Tauri 2 + React + Tailwind frontend
+│   └── src-tauri/
+│       └── src/
+│           ├── lib.rs             Tauri commands + listener wiring
+│           ├── ai_bridge.rs       Wave 11A/F — provider + per-contact routing
+│           ├── ai_bridge_stt.rs   Wave 11D — whisper.cpp on-device transcription
+│           └── ai_bridge_watchers.rs  Wave 11E — proactive cron watchers
+├── mobile/            Flutter App (Android) via flutter_rust_bridge —
+│                      voice messages (Wave 11B), in-app APK auto-update (Wave 11G)
+├── tools/             Org MSI templater + automation helpers (Wave 7C)
+├── fuzz/              `cargo-fuzz` harnesses for every wire-format parser
+├── scripts/           build-android.sh · build-windows.cmd · sign-windows.cmd ·
+│                      verify-release.sh · publish-android-update-manifest.sh
+├── docs/              SECURITY.md · PRIVACY.md · AI-BRIDGE.md · WINDOWS-BUILD.md ·
+│                      RELAY-SELFHOSTING.md · REPRODUCIBLE-BUILDS.md ·
+│                      HALL-OF-FAME.md · archive/
+├── keys/              security.asc (PGP disclosure key) ·
+│                      phantomchat-pilot-cert.cer (Authenticode pilot, self-signed)
+├── .well-known/       security.txt (RFC 9116, PGP-signed)
+├── spec/              SPEC.md Protokollspezifikation
+├── infra/             docker-compose.yml + systemd unit files
 └── CHANGELOG.md
 ```
 

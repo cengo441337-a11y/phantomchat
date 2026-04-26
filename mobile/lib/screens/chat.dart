@@ -12,7 +12,6 @@ import '../models/contact.dart';
 import '../models/identity.dart';
 import '../models/message.dart';
 import '../services/contact_directory.dart';
-import '../services/crypto_service.dart';
 import '../services/i18n.dart';
 import '../services/relay_service.dart';
 import '../services/storage_service.dart';
@@ -189,8 +188,11 @@ class _ChatScreenState extends State<ChatScreen> {
     _msgCtrl.clear();
 
     String ciphertextHex = '';
-    String ephemeralHex = '';
-    String nonceHex = '';
+    // Legacy `CryptoService.encrypt` columns are no longer populated —
+    // we removed the silent fallback that wrote to them. Kept as empty
+    // strings for the existing PhantomMessage shape.
+    const String ephemeralHex = '';
+    const String nonceHex = '';
     bool relayDelivered = false;
     try {
       // v3 path — sealed-sender 1:1 via the wrapper Rust crate. Returns the
@@ -198,9 +200,17 @@ class _ChatScreenState extends State<ChatScreen> {
       // Nostr relay (Wave 7B2 publish path). The Rust call is the slow
       // bit; the relay fan-out is parallel + bounded by `publish`'s
       // 5-second ack timeout.
+      //
+      // When the contact carries an ML-KEM public key (imported from a
+      // `phantomx:` address) we build a `phantomx:` recipient string so
+      // the Rust wrapper picks the PQXDH-hybrid path; otherwise we fall
+      // back to the classic `phantom:` form.
+      final mlkem = widget.contact.mlkemPubB64;
+      final recipientAddress = (mlkem != null && mlkem.isNotEmpty)
+          ? 'phantomx:${widget.contact.publicViewKey}:${widget.contact.publicSpendKey}:$mlkem'
+          : 'phantom:${widget.contact.publicViewKey}:${widget.contact.publicSpendKey}';
       final wire = await rust.sendSealedV3(
-        recipientAddress:
-            'phantom:${widget.contact.publicViewKey}:${widget.contact.publicSpendKey}',
+        recipientAddress: recipientAddress,
         plaintext: utf8.encode(text),
       );
       // Telemetry: we keep the wire bytes only as a debug-friendly hex
@@ -209,21 +219,22 @@ class _ChatScreenState extends State<ChatScreen> {
       ciphertextHex =
           wire.take(32).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
       relayDelivered = await RelayService.instance.publish(wire);
-    } catch (_) {
-      // Fall back to the legacy demo crypto so first-launch (no v3
-      // identity loaded yet) doesn't hard-fail. The demo is intentionally
-      // NOT wire-compatible with Desktop — it's there to keep the UI
-      // smoke-testable.
-      try {
-        final encrypted =
-            await CryptoService.encrypt(text, widget.contact.publicSpendKey);
-        ciphertextHex = encrypted['ciphertext']!;
-        ephemeralHex = encrypted['ephemeralKey']!;
-        nonceHex = encrypted['nonce']!;
-      } catch (_) {
-        setState(() => _sending = false);
-        return;
-      }
+    } catch (e) {
+      // No silent fallback to legacy `CryptoService.encrypt` — that path
+      // is NOT wire-compatible with Desktop, so falling back would mark
+      // the row as "sent" while the recipient can't decode it. Surface
+      // the v3 failure to the user and abort the send. The textfield
+      // restore lets them retry/edit without retyping.
+      if (!mounted) return;
+      _msgCtrl.text = text;
+      setState(() => _sending = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(I18n.tf('chat.errors.sendFailed', {'err': '$e'})),
+          duration: const Duration(seconds: 5),
+        ),
+      );
+      return;
     }
 
     final msg = PhantomMessage(
@@ -250,10 +261,10 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     _scrollToBottom();
     // Surface a visible failure if no relay accepted within the publish
-    // timeout. Only triggered when the v3 path itself succeeded (so the
-    // CryptoService fallback shouldn't show this banner — that path
-    // doesn't run a relay publish).
-    if (!relayDelivered && ciphertextHex.isNotEmpty && ephemeralHex.isEmpty) {
+    // timeout. The v3 path is now the only path here (legacy fallback
+    // removed) so a non-empty ciphertextHex means the wire bytes were
+    // built but the relays didn't ack.
+    if (!relayDelivered && ciphertextHex.isNotEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -435,10 +446,15 @@ class _ChatScreenState extends State<ChatScreen> {
           await File(path).delete();
         } catch (_) {}
       }
-      // Hand the wire envelope to the sealed-sender layer.
+      // Hand the wire envelope to the sealed-sender layer. Same
+      // phantomx-vs-phantom address selection as `_send` — keeps PQXDH
+      // hybrid alive for voice clips when the contact has an mlkem key.
+      final mlkem = widget.contact.mlkemPubB64;
+      final recipientAddress = (mlkem != null && mlkem.isNotEmpty)
+          ? 'phantomx:${widget.contact.publicViewKey}:${widget.contact.publicSpendKey}:$mlkem'
+          : 'phantom:${widget.contact.publicViewKey}:${widget.contact.publicSpendKey}';
       final wire = await rust.sendSealedV3(
-        recipientAddress:
-            'phantom:${widget.contact.publicViewKey}:${widget.contact.publicSpendKey}',
+        recipientAddress: recipientAddress,
         plaintext: wireEnv,
       );
       wireFingerprint = wire
@@ -481,7 +497,10 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       setState(() => _sending = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('! VOICE SEND FAIL: $e')),
+        SnackBar(
+          content: Text(I18n.tf('chat.errors.voiceSendFailed', {'err': '$e'})),
+          duration: const Duration(seconds: 5),
+        ),
       );
     }
   }

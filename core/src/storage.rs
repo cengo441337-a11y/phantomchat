@@ -71,17 +71,6 @@ pub fn save_message(peer_id: &str, content: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn save_group_message(group_id: &str, sender_id: &str, content: &str) -> Result<()> {
-    let db = DB_CONN.lock().unwrap();
-    if let Some(conn) = db.as_ref() {
-        conn.execute(
-            "INSERT INTO group_messages (group_id, sender_id, content) VALUES (?1, ?2, ?3)",
-            params![group_id, sender_id, content],
-        )?;
-    }
-    Ok(())
-}
-
 pub fn panic_wipe(path: PathBuf) {
     {
         let mut db = DB_CONN.lock().unwrap();

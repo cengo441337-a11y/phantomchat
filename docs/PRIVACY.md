@@ -80,15 +80,114 @@ kryptografisch ununterscheidbar von echten Envelopes. Empfänger verwerfen
 sie beim HMAC-Scan stillschweigend. Dummies maskieren reale Traffic-Muster
 gegen Timing-Analysen.
 
-## Keine Telemetrie
+## Keine Telemetrie (per Default)
 
-PhantomChat sammelt keinerlei Diagnosedaten, Nutzungsstatistiken oder
-Telemetrie. Alle Logs verbleiben lokal.
+PhantomChat sammelt by default keinerlei Diagnosedaten, Nutzungsstatistiken
+oder Telemetrie. Alle Logs verbleiben lokal.
+
+**Wave 8J — opt-in Crash-Reporting:** Über *Settings → Diagnose* lässt sich
+ein anonymer Crash-Report-Upload aktivieren (Stack-Trace + Build-ID, keine
+Nachrichteninhalte, keine Kontaktdaten). Der Upload-Endpunkt ist konfigurierbar
+und steht standardmäßig auf `updates.dc-infosec.de`; selbsthostende
+Organisationen zeigen ihn auf ihren eigenen Collector
+(siehe [`RELAY-SELFHOSTING.md`](RELAY-SELFHOSTING.md)).
 
 ## Lokale Datenspeicherung
 
-Schlüssel und Nachrichten werden mit SQLCipher (AES-256) verschlüsselt
-gespeichert. Kein Schlüsselmaterial liegt im Klartext auf dem Gerät.
+- **Desktop (Wave 8H):** Identitäts- und Signing-Keys liegen im **OS-Keystore**
+  (DPAPI / Keychain / libsecret), nicht mehr in `keys.json`. Memory-Zeroing auf
+  allen privaten Schlüsseltypen plus anti-forensisches Pre-Delete-Overwrite
+  bei "Wipe All Data".
+- **Desktop-Backups (Wave 8C):** Backup-Archiv mit Argon2id-abgeleitetem Schlüssel +
+  XChaCha20-Poly1305. Passphrase trägt der Nutzer; ohne sie ist das Archiv
+  kryptografisch nutzlos.
+- **Mobile:** PBKDF2 (600k iters) für PIN-abgeleiteten DB-Key + Biometrie-Quick-
+  Unlock + Panic-Wipe nach 10 Fehlversuchen.
+- **CLI / Legacy Mobile:** SQLCipher (AES-256-CBC) für die ältere
+  Mobile-Storage-Schicht (Migrationspfad existiert).
+
+Kein Schlüsselmaterial liegt im Klartext auf dem Gerät.
+
+---
+
+## Wave 11 — KI-Bridge / Voice / Watchers / On-device STT
+
+Wave 11 fügt PhantomChat eine optionale **AI-Bridge** hinzu, die ein lokales oder
+cloud-gehostetes LLM als virtuellen Kontakt einbindet. Die Privacy-Eigenschaften
+sind je nach Provider-Wahl unterschiedlich — die Architektur ist transparent:
+
+### Datenfluss zum LLM
+
+```
+Allow-listed Kontakt sendet Klartext
+        │
+        ▼
+Desktop entschlüsselt (Sealed-Sender + Double-Ratchet)
+        │
+        ▼
+ai_bridge::complete(provider) — Klartext oder Transkript
+        │
+        ├── ClaudeCli   ──► Subprozess `claude` lokal — bleibt im Prozess /
+        │                    OAuth-Tokens in `~/.claude/`
+        ├── Ollama      ──► HTTP `localhost:11434` — verlässt das Gerät NICHT
+        ├── ClaudeApi   ──► HTTPS `api.anthropic.com` — Anthropic sieht Klartext
+        └── OpenAiCompat──► HTTPS Provider-Endpoint — Provider sieht Klartext
+```
+
+**Einordnung:** mit `ClaudeCli` oder `Ollama` verlässt der Klartext das Heim-Gerät
+nicht. Mit `ClaudeApi` / `OpenAiCompat` bekommt der Provider die Botschaft im
+Klartext zu sehen — gleiche Vertrauensbasis wie Direkt-Kontakt mit dem Provider.
+Vollständiges Threat-Model: [`docs/AI-BRIDGE.md`](AI-BRIDGE.md) § Security model.
+
+### Voice-Messages (Wave 11B)
+
+Eingehende Sprachnachrichten landen unter
+`<app_data>/voice/<msg_id>.<ext>` als die ursprünglich gesendeten Bytes (Opus
+oder AAC). Sie werden **nie wieder hochgeladen** — die Datei ist read-only nach
+Empfang, der Player lädt sie ausschließlich lokal.
+
+### On-device STT — whisper.cpp (Wave 11D)
+
+Wenn STT aktiviert ist, läuft folgende Pipeline **vollständig in-process** auf
+dem Desktop:
+
+```
+voice/<msg_id>.<ext>
+   ▼
+audio decode (symphonia + ffi-frei)
+   ▼
+16 kHz f32 PCM resample (in RAM, nie auf Disk)
+   ▼
+whisper.cpp inference (lokales Modell aus <app_data>/whisper/)
+   ▼
+Transkript (Text)
+   ▼
+ai_bridge::complete(...) wie eine getippte Nachricht
+```
+
+Die Audio-Bytes verlassen das Gerät nicht — selbst mit einem Cloud-LLM
+konfiguriert sieht der Provider nur den **Text**, nie das Audio. Whisper-Modelle
+werden einmalig von Hugging Face heruntergeladen und liegen lokal vor.
+
+### Watcher / Shell-Exec (Wave 11E)
+
+Watchers sind Cron-/Intervall-getriggerte Shell-Kommandos, die unter dem
+**Bridge-Prozess-User** laufen und ihre Stdout an einen vordefinierten
+allow-listed-Kontakt schicken.
+
+- Stdout wird auf 8000 Zeichen gekürzt, bevor sie versendet wird.
+- Jeder Watcher-Lifecycle-Event (`watcher_added` / `watcher_updated` /
+  `watcher_removed` / `watcher_fired` / `watcher_failed`) landet im
+  `audit.log` unter Kategorie `ai_bridge` — Compliance-Audit-fähig.
+- Per-Watcher-Concurrency-Lock (3.0.2) verhindert, dass eine zweite Instanz
+  startet, während die erste noch läuft.
+- 5 min wall-clock-Timeout pro Befehl gegen runaway-Prozesse.
+
+Wer den Watcher konfigurieren kann, kann beliebigen Code als Bridge-User
+ausführen — selbe Vertrauensstufe wie ein Shell-Login. Daher: nur
+allow-listed Targets, Audit-Log lesen, keine fremden Configs importieren.
+
+---
 
 ## Hinweis zur Implementierung
 

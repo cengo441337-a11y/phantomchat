@@ -29,6 +29,7 @@
 #![cfg(feature = "stt")]
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{anyhow, Context, Result};
 use symphonia::core::audio::{AudioBufferRef, Signal};
@@ -39,6 +40,21 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+
+/// Cached whisper context, keyed by the loaded model path. Hazard: the
+/// previous code rebuilt `WhisperContext::new_with_params` (a 100-300 ms
+/// mmap + GGML init) on every transcription. We cache the most recently
+/// loaded model and evict + reload only when the configured `model_path`
+/// changes between calls.
+struct CachedWhisper {
+    model_path: PathBuf,
+    ctx: Arc<WhisperContext>,
+}
+
+fn whisper_cache() -> &'static Mutex<Option<CachedWhisper>> {
+    static CACHE: OnceLock<Mutex<Option<CachedWhisper>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
 
 /// Whisper expects 16 kHz mono f32. Hard-coded — every model variant
 /// (tiny → large) ingests at this rate, so there's no reason to thread
@@ -302,12 +318,33 @@ pub fn transcribe(cfg: &WhisperConfig, audio_path: &Path) -> Result<String> {
 
     let pcm = decode_to_pcm_f32_16k(audio_path)?;
 
-    let ctx_params = WhisperContextParameters::default();
-    let ctx = WhisperContext::new_with_params(
-        cfg.model_path.to_string_lossy().as_ref(),
-        ctx_params,
-    )
-    .with_context(|| format!("loading whisper model {}", cfg.model_path.display()))?;
+    // Hazard: previously called `WhisperContext::new_with_params` per
+    // transcription (100-300 ms mmap + GGML init). Hold a cached Arc'd
+    // context keyed by model path; release the mutex before inference so
+    // parallel transcribes against the same model can run concurrently.
+    // Evict + reload only when the configured model_path changes.
+    let ctx: Arc<WhisperContext> = {
+        let mut cache = whisper_cache()
+            .lock()
+            .map_err(|_| anyhow!("whisper cache mutex poisoned"))?;
+        if cache
+            .as_ref()
+            .map(|c| c.model_path != cfg.model_path)
+            .unwrap_or(true)
+        {
+            let ctx_params = WhisperContextParameters::default();
+            let new_ctx = WhisperContext::new_with_params(
+                cfg.model_path.to_string_lossy().as_ref(),
+                ctx_params,
+            )
+            .with_context(|| format!("loading whisper model {}", cfg.model_path.display()))?;
+            *cache = Some(CachedWhisper {
+                model_path: cfg.model_path.clone(),
+                ctx: Arc::new(new_ctx),
+            });
+        }
+        Arc::clone(&cache.as_ref().expect("just populated above").ctx)
+    };
     let mut state = ctx
         .create_state()
         .with_context(|| "creating whisper state")?;

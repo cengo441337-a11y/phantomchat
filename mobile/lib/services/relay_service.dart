@@ -58,6 +58,21 @@ final Uint8List kRcptPrefixV1 = Uint8List.fromList(utf8.encode('RCPT-1:'));
 /// 7-byte ASCII tag prefixed to typing-indicator envelopes.
 final Uint8List kTypnPrefixV1 = Uint8List.fromList(utf8.encode('TYPN-1:'));
 
+/// 7-byte ASCII tag prefixed to reply envelopes (`REPL-1:`). Desktop's
+/// `handle_reply_envelope` decodes these as quoted-thread messages; the
+/// mobile build doesn't yet ship a reply UI, so we swallow them as a
+/// regular incoming `message` event with a `↪ <preview>` header so the
+/// raw `REPL-1:` bytes never leak into a chat bubble.
+final Uint8List kReplPrefixV1 = Uint8List.fromList(utf8.encode('REPL-1:'));
+
+/// 7-byte ASCII tag prefixed to reaction envelopes (`RACT-1:`). No mobile
+/// UI yet; surfaces as a `system` event.
+final Uint8List kRactPrefixV1 = Uint8List.fromList(utf8.encode('RACT-1:'));
+
+/// 7-byte ASCII tag prefixed to disappearing-message TTL envelopes
+/// (`DISA-1:`). No mobile UI yet; surfaces as a `system` event.
+final Uint8List kDisaPrefixV1 = Uint8List.fromList(utf8.encode('DISA-1:'));
+
 const int kTypingTtlSecs = 5;
 
 // ── Event envelope shipped to the UI ────────────────────────────────────────
@@ -197,7 +212,7 @@ class RelayService {
       }
     }
 
-    // ── 7-byte prefixes (RCPT / TYPN) ────────────────────────────────────────
+    // ── 7-byte prefixes (RCPT / TYPN / REPL / RACT / DISA) ──────────────────
     if (plaintext.length >= kRcptPrefixV1.length) {
       final prefix7 = plaintext.sublist(0, kRcptPrefixV1.length);
       if (_eq(prefix7, kRcptPrefixV1)) {
@@ -208,6 +223,34 @@ class RelayService {
       if (_eq(prefix7, kTypnPrefixV1)) {
         _handleTypingV1(plaintext.sublist(kTypnPrefixV1.length), senderPubHex,
             sigOk);
+        return;
+      }
+      // REPL-1 / RACT-1 / DISA-1: full UX wave is bigger than 11G; for
+      // now we just stop the raw "REPL-1:..." text from leaking into a
+      // chat bubble. REPL-1 surfaces as a quoted-preview text bubble;
+      // RACT-1 / DISA-1 surface as system rows.
+      if (_eq(prefix7, kReplPrefixV1)) {
+        await _handleReplyV1Swallow(
+          plaintext.sublist(kReplPrefixV1.length),
+          senderPubHex,
+          sigOk,
+        );
+        return;
+      }
+      if (_eq(prefix7, kRactPrefixV1)) {
+        _handleReactionV1Swallow(
+          plaintext.sublist(kRactPrefixV1.length),
+          senderPubHex,
+          sigOk,
+        );
+        return;
+      }
+      if (_eq(prefix7, kDisaPrefixV1)) {
+        _handleDisappearingV1Swallow(
+          plaintext.sublist(kDisaPrefixV1.length),
+          senderPubHex,
+          sigOk,
+        );
         return;
       }
     }
@@ -474,6 +517,108 @@ class RelayService {
     _controller.add(RelayEvent('typing', {
       'fromPubHex': senderPubHex,
       'ttlSecs': ttl,
+    }));
+  }
+
+  /// REPL-1 swallow path. Decodes `{in_reply_to_msg_id, quoted_preview}`
+  /// + the trailing plaintext body and surfaces a normal `message`
+  /// event with a `↪ <preview>\n<body>` text. Mobile doesn't ship a
+  /// dedicated reply UI yet (Wave 11G+); this stops the raw
+  /// `REPL-1:...` bytes from rendering verbatim in a chat bubble.
+  Future<void> _handleReplyV1Swallow(
+    Uint8List body,
+    String? senderPubHex,
+    bool sigOk,
+  ) async {
+    final decoded = decodeUleb128PrefixedJson(body);
+    if (decoded == null) {
+      _controller.add(RelayEvent('error', {'detail': 'REPL-1: malformed body'}));
+      return;
+    }
+    Map<String, dynamic> meta;
+    try {
+      meta = jsonDecode(utf8.decode(decoded.$1)) as Map<String, dynamic>;
+    } catch (e) {
+      _controller.add(RelayEvent('error', {'detail': 'REPL-1: meta JSON: $e'}));
+      return;
+    }
+    final preview = (meta['quoted_preview'] as String?) ?? '';
+    final replyBody = utf8.decode(decoded.$2, allowMalformed: true);
+    final senderLabel = await _resolveSenderLabel(senderPubHex, sigOk);
+    final composed = preview.isEmpty
+        ? replyBody
+        : '↪ $preview\n$replyBody';
+    _controller.add(RelayEvent('message', {
+      'plaintext': composed,
+      'timestamp': _now(),
+      'senderLabel': senderLabel.label,
+      'sigOk': sigOk,
+      'senderPubHex': senderPubHex,
+      'msgId': computeMsgId(decoded.$2),
+      'isUnbound': senderLabel.isUnbound,
+    }));
+  }
+
+  /// RACT-1 swallow path. Mobile has no reaction-merge state yet, so we
+  /// just emit a `system` row noting which message got reacted-to. Stops
+  /// raw `RACT-1:...` bytes from leaking into a bubble.
+  void _handleReactionV1Swallow(
+    Uint8List body,
+    String? senderPubHex,
+    bool sigOk,
+  ) {
+    final decoded = decodeUleb128PrefixedJson(body);
+    String detail = 'reaction event';
+    if (decoded != null) {
+      try {
+        final meta = jsonDecode(utf8.decode(decoded.$1)) as Map<String, dynamic>;
+        final emoji = (meta['emoji'] as String?) ?? '?';
+        final action = (meta['action'] as String?) ?? 'add';
+        detail = action == 'remove'
+            ? 'removed reaction $emoji'
+            : 'reacted with $emoji';
+      } catch (_) {}
+    }
+    final fromHint = senderPubHex == null
+        ? 'INBOX'
+        : (!sigOk
+            ? 'INBOX!'
+            : '?${senderPubHex.substring(0, 8.clamp(0, senderPubHex.length))}');
+    _controller.add(RelayEvent('system', {
+      'plaintext':
+          '[$fromHint $detail — view on desktop]',
+      'timestamp': _now(),
+      'senderLabel': fromHint,
+    }));
+  }
+
+  /// DISA-1 swallow path. Mobile doesn't auto-purge yet; the user gets
+  /// a system row so they know the desktop peer changed the TTL.
+  void _handleDisappearingV1Swallow(
+    Uint8List body,
+    String? senderPubHex,
+    bool sigOk,
+  ) {
+    final decoded = decodeUleb128PrefixedJson(body);
+    String detail = 'disappearing-message TTL update';
+    if (decoded != null) {
+      try {
+        final meta = jsonDecode(utf8.decode(decoded.$1)) as Map<String, dynamic>;
+        final ttl = (meta['ttl_secs'] as num?)?.toInt();
+        detail = ttl == null
+            ? 'disappearing-messages disabled'
+            : 'disappearing-messages set to ${ttl}s';
+      } catch (_) {}
+    }
+    final fromHint = senderPubHex == null
+        ? 'INBOX'
+        : (!sigOk
+            ? 'INBOX!'
+            : '?${senderPubHex.substring(0, 8.clamp(0, senderPubHex.length))}');
+    _controller.add(RelayEvent('system', {
+      'plaintext': '[$fromHint $detail — view on desktop]',
+      'timestamp': _now(),
+      'senderLabel': fromHint,
     }));
   }
 
@@ -1133,11 +1278,19 @@ Uint8List encodeReceipt({required String msgId, required String kind}) {
   });
 }
 
-/// `TYPN-1: || ULEB128(len) || {"ttl_secs": <int>}`. Default TTL is
-/// [kTypingTtlSecs] so a brief tap of the keyboard surfaces as a 5-second
-/// `is typing…` indicator on the receiver.
-Uint8List encodeTyping({int ttlSecs = kTypingTtlSecs}) {
+/// `TYPN-1: || ULEB128(len) || {"contact_label": <str>, "ttl_secs": <int>}`.
+/// `contactLabel` is the recipient nickname so the desktop side can
+/// scope the indicator to the right thread (Desktop's `TypingMetaV1`
+/// requires both fields — sending only `ttl_secs` causes the desktop
+/// to silently drop the envelope with `missing field 'contact_label'`).
+/// Default TTL is [kTypingTtlSecs] so a brief tap of the keyboard
+/// surfaces as a 5-second `is typing…` indicator on the receiver.
+Uint8List encodeTyping({
+  required String contactLabel,
+  int ttlSecs = kTypingTtlSecs,
+}) {
   return encodePrefixedJson(kTypnPrefixV1, <String, dynamic>{
+    'contact_label': contactLabel,
     'ttl_secs': ttlSecs,
   });
 }

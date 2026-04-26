@@ -657,7 +657,22 @@ export default function SettingsPanel({ onClose }: Props) {
       await invoke("set_relays", { urls: cleaned });
       setRelays(cleaned);
       setRelaysOriginal(cleaned);
-      setRelaysMsg(t("settings.relays.msg_saved"));
+      // Restart the listener so the new relay set actually takes effect
+      // — without this the persisted set sits on disk but the running
+      // listener keeps using the old subscriptions until next launch.
+      // Mirrors the savePrivacy() restart path.
+      try {
+        await invoke("restart_listener");
+        setRelaysMsg(t("settings.relays.msg_saved"));
+      } catch (e) {
+        setRelaysMsg(
+          t("settings.relays.msg_saved_restart_failed", {
+            error: String(e),
+            defaultValue:
+              "Saved — listener restart failed: {{error}} (restart the app to apply)",
+          }),
+        );
+      }
     } catch (e) {
       setRelaysMsg(t("settings.relays.msg_save_failed", { error: String(e) }));
     } finally {
@@ -722,8 +737,24 @@ export default function SettingsPanel({ onClose }: Props) {
     setUpdateMsg(null);
     try {
       await invoke("install_update");
-      // On Windows + macOS the installer takes over and exits the app.
-      // On Linux (AppImage) the user must manually relaunch.
+      // Platform-specific success message. On Windows/macOS the
+      // installer takes over and exits the app shortly. On Linux
+      // (AppImage / .deb side-load) the user must manually relaunch.
+      // We detect via `navigator.platform` rather than pulling in the
+      // os plugin for a single string-branch.
+      const plat = (navigator.platform ?? "").toLowerCase();
+      const isLinux = plat.includes("linux");
+      setUpdateMsg(
+        isLinux
+          ? t("settings.about.update_installed_linux", {
+              defaultValue:
+                "Update installed — relaunch PhantomChat to use it.",
+            })
+          : t("settings.about.update_installed_winmac", {
+              defaultValue:
+                "App will close and re-open with the new version.",
+            }),
+      );
     } catch (e) {
       setUpdateMsg(t("settings.about.update_failed", { error: String(e) }));
     } finally {
@@ -1505,6 +1536,15 @@ export default function SettingsPanel({ onClose }: Props) {
                       className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full font-mono"
                       placeholder="--model claude-sonnet-4-6"
                     />
+                  </div>
+                  {/* Bright-yellow caution banner — flagged because the
+                      Rust default for `claude_cli_skip_permissions`
+                      flipped from true to false. The user MUST
+                      understand that ticking this box gives an
+                      allowlisted contact full unconfirmed shell / file
+                      / MCP access before they enable it. */}
+                  <div className="border border-yellow-400/60 bg-yellow-400/10 text-yellow-400 text-xs px-2 py-1.5 leading-snug">
+                    {t("settings.ai_bridge.claude_cli_skip_permissions_warning")}
                   </div>
                   <label className="flex items-center gap-2 text-xs text-cyber-cyan cursor-pointer pt-1">
                     <input

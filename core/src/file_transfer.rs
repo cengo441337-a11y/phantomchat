@@ -24,7 +24,7 @@
 
 use crate::{group::{GroupError, PhantomGroup}, keys::PhantomSigningKey};
 use sha2::{Digest, Sha256};
-use std::io::{Read, Write};
+use std::io::Write;
 
 /// Default chunk size — chosen to keep each encrypted chunk below the
 /// envelope padding's 1 KiB block while leaving room for AEAD overhead.
@@ -194,34 +194,6 @@ pub fn unpack_into(group: &mut PhantomGroup, archive: &[u8]) -> Result<(ArchiveH
         return Err(FileTransferError::HashMismatch);
     }
     Ok((hdr, body))
-}
-
-/// Streaming `Read` → `Write` variant.
-pub fn pack_stream<R: Read, W: Write>(
-    group: &mut PhantomGroup,
-    signing: &PhantomSigningKey,
-    filename: &str,
-    input: &mut R,
-    output: &mut W,
-    chunk_size: usize,
-) -> Result<u64, FileTransferError> {
-    let mut buf = Vec::new();
-    input.read_to_end(&mut buf)?;
-    let archive = pack(group, signing, filename, &buf, chunk_size)?;
-    output.write_all(&archive)?;
-    Ok(archive.len() as u64)
-}
-
-pub fn unpack_stream<R: Read, W: Write>(
-    group: &mut PhantomGroup,
-    input: &mut R,
-    output: &mut W,
-) -> Result<ArchiveHeader, FileTransferError> {
-    let mut archive = Vec::new();
-    input.read_to_end(&mut archive)?;
-    let (hdr, plain) = unpack_into(group, &archive)?;
-    output.write_all(&plain)?;
-    Ok(hdr)
 }
 
 #[cfg(test)]

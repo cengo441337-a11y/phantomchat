@@ -38,9 +38,10 @@
 //! anyone hits it; the obvious fix is a `tokio::sync::Mutex` per watcher
 //! id stashed in a process-global `HashMap<String, Arc<Mutex<()>>>`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -580,11 +581,13 @@ pub fn start_scheduler(app: AppHandle, send_message_inner: SendDispatcher) {
         return;
     }
 
-    // Coarse global "is anything running" mutex so a single watcher with a
-    // very long-running command can't completely starve other watchers'
-    // tick visibility — fires happen serially within a tick, but the tick
-    // loop itself stays responsive.
-    let in_flight: Arc<AsyncMutex<()>> = Arc::new(AsyncMutex::new(()));
+    // Per-watcher concurrency lock. If a watcher's command runtime
+    // exceeds its schedule interval, the next tick used to spawn a
+    // parallel invocation; with this map a duplicate fire just no-ops
+    // until the previous instance returns. Keys are watcher IDs;
+    // `try_lock` keeps the tick loop non-blocking.
+    let per_watcher_locks: Arc<StdMutex<HashMap<String, Arc<AsyncMutex<()>>>>> =
+        Arc::new(StdMutex::new(HashMap::new()));
 
     // `tauri::async_runtime::spawn` (rather than `tokio::spawn`) because
     // `start_scheduler` is invoked from `Builder::setup`, which runs
@@ -607,12 +610,26 @@ pub fn start_scheduler(app: AppHandle, send_message_inner: SendDispatcher) {
                 if !watcher_is_due(&w, now) {
                     continue;
                 }
+                // Get-or-create the per-watcher mutex.
+                let watcher_lock: Arc<AsyncMutex<()>> = {
+                    let mut map = match per_watcher_locks.lock() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    map.entry(w.id.clone())
+                        .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+                        .clone()
+                };
+                // Skip if the prior invocation is still running.
+                let guard = match watcher_lock.try_lock_owned() {
+                    Ok(g) => g,
+                    Err(_) => continue,
+                };
                 let app_inner = app.clone();
                 let app_data_inner = app_data_dir.clone();
                 let send_inner = send_message_inner.clone();
-                let lock = in_flight.clone();
                 tokio::spawn(async move {
-                    let _guard = lock.lock().await;
+                    let _hold = guard;
                     let send_box: SendFn = Box::new(move |a, l, b| send_inner(a, l, b));
                     let outcome = run_watcher_once(&app_inner, &w, send_box).await;
                     record_run_and_audit(&app_inner, &app_data_inner, &w, &outcome);

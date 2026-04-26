@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:local_auth/local_auth.dart';
@@ -8,6 +9,33 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'security_service.dart';
 import 'storage_service.dart';
+
+/// Argument bundle for the off-isolate PBKDF2 worker. Must be a top-level
+/// type because `compute(...)` ships its arguments across an isolate
+/// boundary and the closure / receiver itself can't capture state.
+class _Pbkdf2Args {
+  final String pin;
+  final List<int> salt;
+  final int iterations;
+  const _Pbkdf2Args(this.pin, this.salt, this.iterations);
+}
+
+/// Top-level so it can run inside a background isolate via `compute(...)`.
+/// The pure-Dart PBKDF2 from `cryptography` is the bottleneck (5-15 s on
+/// mid-range Android at 600k iters); offloading it keeps the UI thread
+/// responsive during PIN setup / verification.
+Future<Uint8List> _pbkdf2Inner(_Pbkdf2Args args) async {
+  final pbkdf2 = Pbkdf2(
+    macAlgorithm: Hmac.sha256(),
+    iterations: args.iterations,
+    bits: 256,
+  );
+  final key = await pbkdf2.deriveKey(
+    secretKey: SecretKey(utf8.encode(args.pin)),
+    nonce: args.salt,
+  );
+  return Uint8List.fromList(await key.extractBytes());
+}
 
 /// PhantomChat app-lock service.
 ///
@@ -31,6 +59,11 @@ class AppLockService {
   // Secure-storage keys
   static const _kPinHash       = 'phantom_pin_hash';
   static const _kPinSalt       = 'phantom_pin_salt';
+  // PBKDF2 iteration count used to derive the stored hash. Stored alongside
+  // the salt so we can bump the global default (OWASP 2023 → 600k) without
+  // locking out users whose PIN was set under the legacy 100k-iter regime.
+  // Absent value = legacy install → falls back to [_legacyPbkdf2Iters].
+  static const _kPinIters      = 'phantom_pin_iters';
   static const _kBioEnable     = 'phantom_biometric_enabled';
   static const _kAutoLock      = 'phantom_autolock_seconds';
   static const _kFailCount     = 'phantom_pin_fail_count';
@@ -45,6 +78,16 @@ class AppLockService {
 
   /// Default inactivity timeout in seconds. User-configurable at runtime.
   static const int defaultAutoLockSeconds = 60;
+
+  /// PBKDF2 iteration count for newly-set PINs. OWASP 2023 baseline for
+  /// PBKDF2-HMAC-SHA256. Stored per-user in `_kPinIters` so this constant
+  /// can move forward without invalidating existing hashes.
+  static const int currentPbkdf2Iters = 600000;
+
+  /// Iteration count used by builds before the iter-count was persisted.
+  /// Verification falls back to this when `_kPinIters` is absent so
+  /// pre-migration installs still unlock with their original PIN.
+  static const int _legacyPbkdf2Iters = 100000;
 
   static final LocalAuthentication _auth = LocalAuthentication();
 
@@ -62,14 +105,19 @@ class AppLockService {
 
   /// Configure a new PIN. Overwrites any existing PIN.
   /// Minimum length is 4 digits; caller is responsible for UI-level validation.
+  ///
+  /// Always derives at [currentPbkdf2Iters] (OWASP 2023). The chosen iter
+  /// count is persisted in `_kPinIters` so a future bump can roll forward
+  /// without breaking already-set PINs.
   static Future<void> setPin(String pin) async {
     if (pin.length < 4) {
       throw ArgumentError('PIN must be at least 4 digits');
     }
     final salt = _randomBytes(16);
-    final hash = await _derivePinHash(pin, salt);
+    final hash = await _derivePinHash(pin, salt, currentPbkdf2Iters);
     await _storage.write(key: _kPinSalt, value: base64Encode(salt));
     await _storage.write(key: _kPinHash, value: base64Encode(hash));
+    await _storage.write(key: _kPinIters, value: '$currentPbkdf2Iters');
     await _storage.write(key: _kFailCount, value: '0');
     _unlockedAt = DateTime.now();
   }
@@ -83,9 +131,16 @@ class AppLockService {
     final hashB64 = await _storage.read(key: _kPinHash);
     if (saltB64 == null || hashB64 == null) return false;
 
+    // Read the per-hash iter count; pre-migration installs don't have one,
+    // so fall back to the legacy 100k baseline. The stored hash was
+    // produced with whatever iter count was in effect at setPin time, so
+    // we MUST re-derive with that same number to match.
+    final itersRaw = await _storage.read(key: _kPinIters);
+    final iters = int.tryParse(itersRaw ?? '') ?? _legacyPbkdf2Iters;
+
     final salt   = base64Decode(saltB64);
     final stored = base64Decode(hashB64);
-    final fresh  = await _derivePinHash(candidate, salt);
+    final fresh  = await _derivePinHash(candidate, salt, iters);
 
     if (_constantTimeEq(fresh, stored)) {
       await _storage.write(key: _kFailCount, value: '0');
@@ -237,18 +292,20 @@ class AppLockService {
 
   // ── Crypto primitives ──────────────────────────────────────────────────────
 
-  /// PBKDF2-HMAC-SHA256, 100 000 iterations, 32-byte output.
-  static Future<Uint8List> _derivePinHash(String pin, List<int> salt) async {
-    final pbkdf2 = Pbkdf2(
-      macAlgorithm: Hmac.sha256(),
-      iterations: 100000,
-      bits: 256,
-    );
-    final key = await pbkdf2.deriveKey(
-      secretKey: SecretKey(utf8.encode(pin)),
-      nonce: salt,
-    );
-    return Uint8List.fromList(await key.extractBytes());
+  /// PBKDF2-HMAC-SHA256, 32-byte output. Iteration count is configurable
+  /// to support migration: hashes set under the legacy 100k baseline still
+  /// verify by re-deriving with `iterations=100000`, while new hashes are
+  /// produced at [currentPbkdf2Iters] (600k, OWASP 2023).
+  ///
+  /// Runs on a background isolate via `compute(...)` — pure-Dart PBKDF2 at
+  /// 600k iters takes 5-15 s on mid-range Android, which would otherwise
+  /// freeze the UI thread on PIN setup / verification.
+  static Future<Uint8List> _derivePinHash(
+    String pin,
+    List<int> salt,
+    int iterations,
+  ) async {
+    return compute(_pbkdf2Inner, _Pbkdf2Args(pin, salt, iterations));
   }
 
   /// Constant-time byte comparison (mitigates timing side-channels on the

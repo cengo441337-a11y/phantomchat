@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Contact } from "../types";
 
@@ -9,6 +10,8 @@ interface Props {
   contacts: Contact[];
   onClose: () => void;
   /// Caller invokes `bind_last_unbound_sender` and updates contact list.
+  /// Errors must bubble (no swallow into a chat-stream system row) so
+  /// this modal can render them inline where the user is looking.
   onBind: (contactLabel: string) => Promise<void> | void;
 }
 
@@ -19,6 +22,25 @@ export default function BindContactModal({
   onBind,
 }: Props) {
   const { t } = useTranslation();
+  // Modal-local error + busy state — mirrors the AddContactModal fix.
+  // Previously, bind failures were swallowed into a chat-stream system
+  // row that the user couldn't see while focused on the modal, making
+  // the modal appear to "do nothing" on backend rejection.
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function fire(contactLabel: string) {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onBind(contactLabel);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <div
       className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 pc-modal-backdrop"
@@ -57,10 +79,13 @@ export default function BindContactModal({
             return (
               <li
                 key={c.label}
-                onClick={() => void onBind(c.label)}
+                onClick={() => void fire(c.label)}
+                aria-disabled={busy}
                 className={
-                  "cursor-pointer px-3 py-2 border-b border-dim-green/20 last:border-b-0 transition-colors " +
-                  "hover:bg-neon-magenta/10"
+                  "px-3 py-2 border-b border-dim-green/20 last:border-b-0 transition-colors " +
+                  (busy
+                    ? "cursor-wait opacity-60"
+                    : "cursor-pointer hover:bg-neon-magenta/10")
                 }
                 title={
                   alreadyBound
@@ -83,6 +108,10 @@ export default function BindContactModal({
             );
           })}
         </ul>
+
+        {error && (
+          <div className="mt-3 text-xs text-neon-magenta">! {error}</div>
+        )}
 
         <div className="flex justify-end gap-2 mt-5">
           <button

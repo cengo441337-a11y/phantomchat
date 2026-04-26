@@ -887,31 +887,3 @@ impl BridgeProvider for MultiRelay {
 
 // ── Stealth Cover Traffic Consumer ───────────────────────────────────────────
 
-/// Startet einen Background-Task der Cover-Traffic-Dummies aus dem Core-Kanal
-/// liest und über den `StealthNostrRelay` publiziert.
-///
-/// Muss nach `start_network_node()` aufgerufen werden wenn MaximumStealth
-/// aktiv ist. Ist der Channel nicht vorhanden (DailyUse-Modus oder schon
-/// abgeholt), passiert nichts.
-///
-/// Nur verfügbar in Builds mit aktivem `ffi` Feature — der Stealth-Cover-
-/// Channel lebt in `phantomchat_core::api`, das hinter demselben Flag steht.
-#[cfg(feature = "ffi")]
-pub fn start_stealth_cover_consumer(relay_url: &str, proxy_addr: &str) {
-    let mut rx = match phantomchat_core::api::take_stealth_cover_rx() {
-        Some(r) => r,
-        None => return,
-    };
-
-    let relay = StealthNostrRelay::new(relay_url, proxy_addr);
-
-    tokio::spawn(async move {
-        while let Some(raw_bytes) = rx.recv().await {
-            if let Some(env) = Envelope::from_bytes(&raw_bytes) {
-                if let Err(e) = relay.publish(env).await {
-                    tracing::debug!("Stealth cover traffic publish error: {}", e);
-                }
-            }
-        }
-    });
-}

@@ -16,7 +16,6 @@
       "file_send_failed": "Dateiversand fehlgeschlagen: {{error}}",
       "open_folder_failed": "Ordner konnte nicht geöffnet werden: {{error}}",
       "added_contact": "Kontakt '{{label}}' hinzugefügt",
-      "add_contact_failed": "Kontakt hinzufügen fehlgeschlagen: {{error}}",
       "bound_sealed_sender": "Sealed-Sender-Schlüssel an '{{label}}' gebunden",
       "bind_failed": "Bindung fehlgeschlagen: {{error}}",
       "identity_generated": "Identität erzeugt",
@@ -25,7 +24,8 @@
       "relay_disconnected": "Relay getrennt: {{detail}}",
       "error_prefix": "Fehler: {{message}}"
     },
-    "update_banner": "Eine Aktualisierung ist verfügbar. Öffnen Sie Einstellungen → Über zur Installation."
+    "update_banner": "Eine Aktualisierung ist verfügbar. Öffnen Sie Einstellungen → Über zur Installation.",
+    "history_persist_error": "⚠️ Verlauf-Persistenz schlägt fehl — Nachrichten könnten beim Beenden verloren gehen. Speicherplatz / Berechtigungen unter <app_data>/messages.json prüfen. ({{error}})"
   },
   "identity_gate": {
     "title_a": "PHANTOM",
@@ -131,7 +131,6 @@
       "import_meta_count": "Einträge",
       "import_passphrase_label": "Passphrase",
       "import_continue_button": "Prüfen",
-      "import_restore_button": "Jetzt wiederherstellen",
       "import_cancel_button": "Abbrechen",
       "import_warning": "⚠ Ihre aktuelle Identität, Kontakte und Nachrichten werden mit dem Inhalt der Sicherung ÜBERSCHRIEBEN. Dies kann nicht rückgängig gemacht werden.",
       "import_in_progress": "Wird entschlüsselt und in den Live-Bestand übernommen…",
@@ -152,7 +151,6 @@
       "strength_hint": "Empfehlung: mindestens 16 Zeichen ODER eine Diceware-Passphrase mit 6 Wörtern. HINWEIS: Verlieren Sie die Passphrase, ist die Sicherung nicht wiederherstellbar.",
       "modal_create_title": "Verschlüsselte Sicherung erstellen",
       "modal_create_confirm": "Sicherung erstellen",
-      "modal_restore_confirm_title": "Wiederherstellung bestätigen",
       "modal_restore_confirm": "Ja, meine Daten überschreiben"
     },
     "language": {
@@ -198,6 +196,7 @@
       "discard": "Verwerfen",
       "msg_saved": "Gespeichert · Empfänger zur Übernahme neu starten",
       "msg_save_failed": "Speichern fehlgeschlagen: {{error}}",
+      "msg_saved_restart_failed": "Gespeichert — Neustart des Empfängers fehlgeschlagen: {{error}} (App neu starten zur Übernahme)",
       "msg_discarded": "Verworfen",
       "msg_load_failed": "Relays konnten nicht geladen werden: {{error}}"
     },
@@ -216,6 +215,7 @@
       "claude_cli_path": "Pfad zu `claude` CLI",
       "claude_cli_extra_args": "Extra-Args (z.B. --model claude-sonnet-4-6)",
       "claude_cli_skip_permissions": "Tool-Permissions automatisch genehmigen",
+      "claude_cli_skip_permissions_warning": "ACHTUNG: Mit dieser Option kann ein freigegebener Kontakt Bash-Befehle, Datei-Edits und MCP-Tools auf dieser Maschine ausführen ohne Bestätigung. Nur aktivieren wenn alle Allowlist-Kontakte vertrauenswürdig sind im Sinn von 'darf eine Shell auf diesem Rechner haben'.",
       "claude_cli_skip_permissions_hint": "Erforderlich für eine headless Bridge — sonst hängt Claude an einem interaktiven Tool-Approval-Prompt. Claude kann dann Bash-Kommandos / Datei-Edits / MCP-Tools ohne nachzufragen ausführen. Disable nur für reine Chat-Bridges ohne Tool-Use.",
       "openai_endpoint": "Endpoint (Basis-URL ohne /chat/completions)",
       "openai_model": "Modell",
@@ -244,15 +244,12 @@
         "enable_label": "STT für Sprachnachrichten aktivieren",
         "model_label": "Whisper-Modell",
         "model_recommended": "(empfohlen)",
-        "model_downloaded": "heruntergeladen",
-        "model_not_downloaded": "nicht heruntergeladen",
         "download_button": "Modell herunterladen",
         "downloading": "Lädt… {{percent}}%",
         "download_failed": "Download fehlgeschlagen: {{error}}",
         "download_success": "Heruntergeladen ✓",
         "language_label": "Sprache",
         "language_auto": "automatisch erkennen",
-        "build_disabled": "Dieser Build wurde ohne STT-Support kompiliert — Sprachnachrichten werden von der Bridge unabhängig von diesem Toggle übersprungen. Mit `--features stt` neu bauen, um zu aktivieren.",
         "model_missing": "Kein Modell ausgewählt — oben wählen und auf Download klicken."
       },
       "watchers": {
@@ -283,11 +280,13 @@
         "save_button": "Speichern",
         "cancel_button": "Abbrechen",
         "last_run_label": "Letzter Lauf",
-        "last_status_label": "Status",
         "never_ran": "(nie)",
         "enabled_label": "Aktiviert",
         "fired_just_now": "Gefeuert — exit {{code}}, gesendet: {{sent}}",
-        "fire_failed": "Lauf fehlgeschlagen: {{error}}"
+        "fire_failed": "Lauf fehlgeschlagen: {{error}}",
+        "running": "läuft…",
+        "delete_failed": "Löschen fehlgeschlagen: {{error}}",
+        "toggle_failed": "Umschalten fehlgeschlagen: {{error}}"
       }
     },
     "about": {
@@ -300,7 +299,9 @@
       "update_available": "Aktualisierung verfügbar: v{{version}}",
       "install_update_button": "Aktualisierung installieren",
       "installing_update": "Wird installiert…",
-      "update_failed": "Aktualisierung fehlgeschlagen: {{error}}"
+      "update_failed": "Aktualisierung fehlgeschlagen: {{error}}",
+      "update_installed_linux": "Aktualisierung installiert — PhantomChat neu starten, um sie zu nutzen",
+      "update_installed_winmac": "Die App wird geschlossen und mit der neuen Version neu gestartet"
     },
     "audit": {
       "title": "Audit-Protokoll",
@@ -331,7 +332,6 @@
       "sending": "Wird gesendet…",
       "sent": "gesendet",
       "send_failed": "Senden fehlgeschlagen: {{error}}",
-      "delete_row_button": "Löschen",
       "clear_all_button": "Alle löschen",
       "clear_failed": "Löschen fehlgeschlagen: {{error}}",
       "load_failed": "Crash-Reports konnten nicht geladen werden: {{error}}",
@@ -437,8 +437,6 @@
     "log": {
       "title": "Gruppennachrichten",
       "empty": "(noch keine MLS-Aktivität)",
-      "joined": "Gruppe von {{label}} beigetreten · {{count}} Mitglied(er)",
-      "epoch_advanced": "Epoche fortgeschritten · {{count}} Mitglied(er)",
       "status_error": "Statusfehler: {{error}}"
     },
     "copy": {
@@ -466,8 +464,6 @@
   },
   "messages": {
     "pin": {
-      "pin_button": "Anheften",
-      "unpin_button": "Lösen",
       "pin_title": "Diese Nachricht anheften",
       "unpin_title": "Diese Nachricht lösen",
       "pinned_badge_title": "Angeheftete Nachricht",
@@ -477,8 +473,6 @@
       "jump_title": "Zur Nachricht springen"
     },
     "star": {
-      "star_button": "Markieren",
-      "unstar_button": "Markierung entfernen",
       "star_title": "Diese Nachricht markieren",
       "unstar_title": "Markierung dieser Nachricht entfernen",
       "starred_badge_title": "Markierte Nachricht",
@@ -518,10 +512,7 @@
     "archive": {
       "archive_button": "Archivieren",
       "unarchive_button": "Aus Archiv holen",
-      "archive_title": "Unterhaltung ins Archiv verschieben",
-      "unarchive_title": "Unterhaltung zurück in die Kontaktliste verschieben",
       "section_header": "Archiv ({{count}})",
-      "section_empty": "(keine archivierten Unterhaltungen)",
       "pin_button": "Nach oben heften",
       "unpin_button": "Lösen",
       "menu_aria": "Menü zur Unterhaltung"
@@ -548,10 +539,10 @@
     "file_picker_title": "Datei an {{label}} senden",
     "typing_pill": "{{label}} schreibt…",
     "mic_coming_soon": "Sprachaufnahme am Desktop — bald verfügbar. (Aktuell nimmt nur die Mobile-App auf; der Desktop spielt nur ab.)",
-    "mic_aria": "Sprachnachricht aufnehmen (bald verfügbar)"
+    "mic_aria": "Sprachnachricht aufnehmen (bald verfügbar)",
+    "send_error": "Senden fehlgeschlagen: {{error}}"
   },
   "voice": {
-    "voice_message": "Sprachnachricht",
     "play": "Abspielen",
     "pause": "Pause",
     "load_error": "Audio konnte nicht geladen werden"
@@ -595,7 +586,6 @@
   "mention": {
     "header": "Mitglied erwähnen",
     "empty": "(keine passenden Mitglieder)",
-    "aria_label": "Ein Gruppenmitglied erwähnen",
-    "notify_title": "Erwähnt von {{label}}"
+    "aria_label": "Ein Gruppenmitglied erwähnen"
   }
 }

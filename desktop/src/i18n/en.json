@@ -16,7 +16,6 @@
       "file_send_failed": "file send failed: {{error}}",
       "open_folder_failed": "open folder failed: {{error}}",
       "added_contact": "added contact '{{label}}'",
-      "add_contact_failed": "add contact failed: {{error}}",
       "bound_sealed_sender": "bound sealed-sender pubkey to '{{label}}'",
       "bind_failed": "bind failed: {{error}}",
       "identity_generated": "identity generated",
@@ -25,7 +24,8 @@
       "relay_disconnected": "relay disconnected: {{detail}}",
       "error_prefix": "error: {{message}}"
     },
-    "update_banner": "An update is available. Open Settings → About to install."
+    "update_banner": "An update is available. Open Settings → About to install.",
+    "history_persist_error": "⚠️ History persistence failing — your messages may be lost on quit. Check disk space / permissions in <app_data>/messages.json. ({{error}})"
   },
   "identity_gate": {
     "title_a": "PHANTOM",
@@ -131,7 +131,6 @@
       "import_meta_count": "items",
       "import_passphrase_label": "passphrase",
       "import_continue_button": "verify",
-      "import_restore_button": "restore now",
       "import_cancel_button": "cancel",
       "import_warning": "⚠ Your current identity, contacts and messages will be OVERWRITTEN with the backup contents. This cannot be undone.",
       "import_in_progress": "decrypting and swapping live data…",
@@ -152,7 +151,6 @@
       "strength_hint": "Recommendation: at least 16 characters OR a 6-word diceware passphrase. NOTE: if you lose the passphrase, the backup is unrecoverable.",
       "modal_create_title": "Create encrypted backup",
       "modal_create_confirm": "create backup",
-      "modal_restore_confirm_title": "Confirm restore",
       "modal_restore_confirm": "yes, overwrite my data"
     },
     "language": {
@@ -198,6 +196,7 @@
       "discard": "discard",
       "msg_saved": "saved · restart listener to apply",
       "msg_save_failed": "save failed: {{error}}",
+      "msg_saved_restart_failed": "saved — listener restart failed: {{error}} (restart the app to apply)",
       "msg_discarded": "discarded",
       "msg_load_failed": "failed to load relays: {{error}}"
     },
@@ -216,6 +215,7 @@
       "claude_cli_path": "Path to `claude` CLI",
       "claude_cli_extra_args": "Extra args (e.g. --model claude-sonnet-4-6)",
       "claude_cli_skip_permissions": "Auto-approve tool permissions",
+      "claude_cli_skip_permissions_warning": "WARNING: enabling this lets an allowlisted contact run Bash commands, file edits and MCP tools on this machine without confirmation. Only enable if every allowlist contact is trusted in the sense of 'allowed to have a shell on this computer'.",
       "claude_cli_skip_permissions_hint": "Required for a headless bridge — otherwise Claude stalls on the interactive tool-approval prompt. Claude can then run Bash / file edits / MCP tools without asking. Disable only for chat-only bridges with no tool use.",
       "openai_endpoint": "Endpoint (base URL without /chat/completions)",
       "openai_model": "Model",
@@ -244,15 +244,12 @@
         "enable_label": "Enable STT for voice messages",
         "model_label": "Whisper model",
         "model_recommended": "(recommended)",
-        "model_downloaded": "downloaded",
-        "model_not_downloaded": "not downloaded",
         "download_button": "Download model",
         "downloading": "Downloading… {{percent}}%",
         "download_failed": "Download failed: {{error}}",
         "download_success": "Downloaded ✓",
         "language_label": "Language",
         "language_auto": "auto-detect",
-        "build_disabled": "This build was compiled without STT support — voice messages will be skipped by the bridge regardless of this toggle. Rebuild with `--features stt` to enable.",
         "model_missing": "No model selected — pick one above and click Download."
       },
       "watchers": {
@@ -283,11 +280,13 @@
         "save_button": "Save",
         "cancel_button": "Cancel",
         "last_run_label": "Last run",
-        "last_status_label": "Status",
         "never_ran": "(never)",
         "enabled_label": "Enabled",
         "fired_just_now": "Fired — exit {{code}}, sent: {{sent}}",
-        "fire_failed": "Run failed: {{error}}"
+        "fire_failed": "Run failed: {{error}}",
+        "running": "running…",
+        "delete_failed": "delete failed: {{error}}",
+        "toggle_failed": "toggle failed: {{error}}"
       }
     },
     "about": {
@@ -300,7 +299,9 @@
       "update_available": "Update available: v{{version}}",
       "install_update_button": "install update",
       "installing_update": "installing…",
-      "update_failed": "update failed: {{error}}"
+      "update_failed": "update failed: {{error}}",
+      "update_installed_linux": "Update installed — relaunch PhantomChat to use it",
+      "update_installed_winmac": "App will close and re-open with the new version"
     },
     "audit": {
       "title": "audit log",
@@ -331,7 +332,6 @@
       "sending": "sending…",
       "sent": "sent",
       "send_failed": "send failed: {{error}}",
-      "delete_row_button": "delete",
       "clear_all_button": "delete all",
       "clear_failed": "delete failed: {{error}}",
       "load_failed": "failed to load crash reports: {{error}}",
@@ -437,8 +437,6 @@
     "log": {
       "title": "group messages",
       "empty": "(no MLS activity yet)",
-      "joined": "joined group from {{label}} · {{count}} member(s)",
-      "epoch_advanced": "epoch advanced · {{count}} member(s)",
       "status_error": "status error: {{error}}"
     },
     "copy": {
@@ -466,8 +464,6 @@
   },
   "messages": {
     "pin": {
-      "pin_button": "Pin",
-      "unpin_button": "Unpin",
       "pin_title": "Pin this message",
       "unpin_title": "Unpin this message",
       "pinned_badge_title": "Pinned message",
@@ -477,8 +473,6 @@
       "jump_title": "Jump to message"
     },
     "star": {
-      "star_button": "Star",
-      "unstar_button": "Unstar",
       "star_title": "Star this message",
       "unstar_title": "Unstar this message",
       "starred_badge_title": "Starred message",
@@ -518,10 +512,7 @@
     "archive": {
       "archive_button": "Archive",
       "unarchive_button": "Unarchive",
-      "archive_title": "Move conversation to Archive",
-      "unarchive_title": "Move conversation back to the contact list",
       "section_header": "Archive ({{count}})",
-      "section_empty": "(no archived conversations)",
       "pin_button": "Pin to top",
       "unpin_button": "Unpin",
       "menu_aria": "Conversation menu"
@@ -548,10 +539,10 @@
     "file_picker_title": "Send file to {{label}}",
     "typing_pill": "{{label}} is typing…",
     "mic_coming_soon": "Voice recording on desktop — coming soon. (Currently only the mobile app records; the desktop plays back.)",
-    "mic_aria": "Record voice message (coming soon)"
+    "mic_aria": "Record voice message (coming soon)",
+    "send_error": "Send failed: {{error}}"
   },
   "voice": {
-    "voice_message": "Voice message",
     "play": "Play",
     "pause": "Pause",
     "load_error": "Couldn't load audio"
@@ -595,7 +586,6 @@
   "mention": {
     "header": "mention member",
     "empty": "(no matching members)",
-    "aria_label": "Mention a group member",
-    "notify_title": "Mentioned by {{label}}"
+    "aria_label": "Mention a group member"
   }
 }

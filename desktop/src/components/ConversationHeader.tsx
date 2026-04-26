@@ -52,16 +52,26 @@ export default function ConversationHeader({ activeLabel, onTtlChanged }: Props)
 
   async function handleChange(value: number | null) {
     if (!activeLabel || pending) return;
+    // Stash the current value so we can revert the dropdown on error —
+    // otherwise the UI sits desynced from the backend (the user sees
+    // their picked value as "selected" even though the backend kept
+    // the old setting).
+    const previous = ttl;
     setPending(true);
+    // Optimistic mutation so the dropdown reflects the user's pick
+    // immediately. Rolled back below if the backend rejects.
+    setTtl(value);
     try {
       await invoke("set_disappearing_ttl", {
         contactLabel: activeLabel,
         ttlSecs: value,
       });
-      setTtl(value);
       onTtlChanged?.(value);
     } catch (e) {
       console.warn("set_disappearing_ttl failed:", e);
+      // Revert the dropdown to the previously-confirmed value so the
+      // visible state matches what the backend actually persists.
+      setTtl(previous);
     } finally {
       setPending(false);
     }

@@ -121,6 +121,49 @@ jobs:
         working-directory: desktop
         run: npm run build
 
+  tauri-windows-smoke:
+    # Smoke build of the Tauri desktop on a Windows runner — catches Tauri
+    # startup panics + bundle config drift on every PR. Skips signing
+    # (no PFX in CI) and STT (no LLVM/cmake on the runner) so it stays in
+    # the same minute budget as the linux jobs. Production releases still
+    # go through scripts/release-windows.sh from nexus.
+    name: tauri build (windows smoke)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-tauri-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-tauri-
+
+      - name: Install tauri-cli (^2)
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: npm ci (desktop frontend)
+        working-directory: desktop
+        run: npm ci
+
+      - name: cargo tauri build (no signing, no STT)
+        working-directory: desktop
+        run: cargo tauri build --no-default-features --features custom-protocol
+
   flutter-analyze:
     name: flutter analyze (touched dirs only)
     runs-on: ubuntu-latest

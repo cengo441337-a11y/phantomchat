@@ -58,6 +58,15 @@ export default function WatchersSettings({ allowlist }: Props) {
     msg: string;
   } | null>(null);
   const [fireResults, setFireResults] = useState<Record<string, string>>({});
+  /// Per-watcher in-flight set for the "Run now" button. Without this,
+  /// rapid clicks would launch parallel subprocesses for the same
+  /// watcher (10 clicks = 10 concurrent shell runs of the same command).
+  const [runningSet, setRunningSet] = useState<Set<string>>(() => new Set());
+  /// Per-row inline error map for delete + toggle failures. Previously
+  /// these were `console.warn`-only, so a backend rejection (file lock,
+  /// permission denied, missing watcher id after a race) silently
+  /// dropped — the UI just appeared to "do nothing".
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
 
   async function reload() {
     try {
@@ -147,17 +156,37 @@ export default function WatchersSettings({ allowlist }: Props) {
     }
   }
 
+  function clearRowError(id: string) {
+    setRowErrors(prev => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }
+
   async function deleteWatcher(w: Watcher) {
     if (!confirm(t("settings.ai_bridge.watchers.delete_confirm", { name: w.name }))) return;
+    clearRowError(w.id);
     try {
       await invoke("ai_bridge_remove_watcher", { id: w.id });
       void reload();
     } catch (e) {
-      console.warn("ai_bridge_remove_watcher failed:", e);
+      // Surface inline so the user notices a delete-rejection (file
+      // lock, missing id race) instead of having it silently dropped
+      // into the dev console.
+      setRowErrors(prev => ({
+        ...prev,
+        [w.id]: t("settings.ai_bridge.watchers.delete_failed", {
+          error: String(e),
+          defaultValue: "delete failed: {{error}}",
+        }),
+      }));
     }
   }
 
   async function toggleEnabled(w: Watcher) {
+    clearRowError(w.id);
     try {
       await invoke("ai_bridge_set_watcher_enabled", {
         id: w.id,
@@ -165,11 +194,27 @@ export default function WatchersSettings({ allowlist }: Props) {
       });
       void reload();
     } catch (e) {
-      console.warn("ai_bridge_set_watcher_enabled failed:", e);
+      setRowErrors(prev => ({
+        ...prev,
+        [w.id]: t("settings.ai_bridge.watchers.toggle_failed", {
+          error: String(e),
+          defaultValue: "toggle failed: {{error}}",
+        }),
+      }));
     }
   }
 
   async function runNow(w: Watcher) {
+    // Per-row busy gate. Prior to this, rapid clicks on the "Run now"
+    // button could launch one subprocess per click for the same watcher
+    // — 10 clicks → 10 concurrent shell runs. The set is keyed by
+    // watcher id so different watchers can still run in parallel.
+    if (runningSet.has(w.id)) return;
+    setRunningSet(prev => {
+      const next = new Set(prev);
+      next.add(w.id);
+      return next;
+    });
     try {
       const r = await invoke<WatcherFireResult>("ai_bridge_run_watcher_now", {
         id: w.id,
@@ -187,6 +232,12 @@ export default function WatchersSettings({ allowlist }: Props) {
         ...prev,
         [w.id]: t("settings.ai_bridge.watchers.fire_failed", { error: String(e) }),
       }));
+    } finally {
+      setRunningSet(prev => {
+        const next = new Set(prev);
+        next.delete(w.id);
+        return next;
+      });
     }
   }
 
@@ -254,12 +305,22 @@ export default function WatchersSettings({ allowlist }: Props) {
                 {fireResults[w.id]}
               </div>
             )}
+            {rowErrors[w.id] && (
+              <div className="text-[10px] text-neon-magenta">
+                ! {rowErrors[w.id]}
+              </div>
+            )}
             <div className="flex gap-2">
               <button
                 onClick={() => void runNow(w)}
-                className="neon-button text-[10px]"
+                disabled={runningSet.has(w.id)}
+                className="neon-button text-[10px] disabled:opacity-40"
               >
-                {t("settings.ai_bridge.watchers.run_now_button")}
+                {runningSet.has(w.id)
+                  ? t("settings.ai_bridge.watchers.running", {
+                      defaultValue: "running…",
+                    })
+                  : t("settings.ai_bridge.watchers.run_now_button")}
               </button>
               <button
                 onClick={() => {

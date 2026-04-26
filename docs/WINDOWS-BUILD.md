@@ -4,11 +4,17 @@ How to produce a signed `.msi` (Windows Installer) and `.exe` (NSIS) on Windows.
 
 ## TL;DR
 
-```cmd
-set PHANTOMCHAT_SIGNTOOL=C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\signtool.exe
-set PHANTOMCHAT_PFX_PATH=E:\phantomchat-pilot-cert.pfx
-set PHANTOMCHAT_PFX_PASSWORD=phantomchat-pilot
-scripts\build-windows.cmd
+PowerShell, prompts for the PFX password so it never lands in shell
+history / `ConsoleHost_history.txt`:
+
+```powershell
+$env:PHANTOMCHAT_SIGNTOOL = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\signtool.exe"
+$env:PHANTOMCHAT_PFX_PATH = "E:\phantomchat-pilot-cert.pfx"
+$pwd = Read-Host "PFX password" -AsSecureString
+$bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($pwd)
+$env:PHANTOMCHAT_PFX_PASSWORD = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+.\scripts\build-windows.cmd
+Remove-Item Env:\PHANTOMCHAT_PFX_PASSWORD
 ```
 
 Output:
@@ -29,10 +35,12 @@ trust path.
 | Tool                  | Where (Nexus layout)                                                                 |
 |-----------------------|--------------------------------------------------------------------------------------|
 | Rust (stable, MSVC)   | `D:\rust\.cargo\bin\` (rustup home `D:\rust\.rustup\`)                              |
-| Cargo Tauri           | `D:\rust\.cargo\bin\cargo-tauri.exe` (`cargo install tauri-cli --version 2.10.1`)  |
+| Cargo Tauri           | `D:\rust\.cargo\bin\cargo-tauri.exe` (`cargo install tauri-cli --version "^2"` to match CI)  |
 | Node.js + npm         | `C:\Program Files\nodejs\` (LTS)                                                     |
 | Visual Studio 2019/22 BuildTools | `C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\` (cl.exe + linker) |
 | Windows 10/11 SDK     | `C:\Program Files (x86)\Windows Kits\10\` (signtool.exe; SDK 10.0.19041 or newer)    |
+| **CMake 4.x**         | `E:\cmake\` (winget install Kitware.CMake --location E:\cmake) — required by `whisper-rs` (Wave 11D) |
+| **LLVM / libclang**   | `E:\llvm\` (winget install LLVM.LLVM --location E:\llvm) — `bindgen` needs `libclang.dll`; set `LIBCLANG_PATH=E:\llvm\bin` |
 | WiX Toolset 3.14      | Tauri downloads automatically into `%LOCALAPPDATA%\tauri\WixTools314\` (~30 MB)      |
 | NSIS                  | Tauri downloads automatically into `%LOCALAPPDATA%\tauri\NSIS\` (~10 MB)             |
 
@@ -69,7 +77,7 @@ $cert = New-SelfSignedCertificate `
     -CertStoreLocation Cert:\CurrentUser\My `
     -KeyExportPolicy Exportable
 
-$pwd = ConvertTo-SecureString -String "phantomchat-pilot" -Force -AsPlainText
+$pwd = Read-Host "Pick a PFX password" -AsSecureString
 Export-PfxCertificate -Cert $cert -FilePath "E:\phantomchat-pilot-cert.pfx" -Password $pwd
 Export-Certificate    -Cert $cert -FilePath "E:\phantomchat-pilot-cert.cer"
 ```
@@ -96,7 +104,7 @@ upgrade to OV / EV.
 ## Verifying a signed artifact
 
 ```powershell
-Get-AuthenticodeSignature -FilePath PhantomChat_0.1.0_x64_en-US.msi |
+Get-AuthenticodeSignature -FilePath PhantomChat_3.0.2_x64_en-US.msi |
     Format-List Status, SignerCertificate, TimeStamperCertificate
 ```
 
@@ -112,13 +120,17 @@ trust-chain validation.
 ```json
 "bundle": {
   "windows": {
-    "signCommand": "\"%PHANTOMCHAT_SIGNTOOL%\" sign /f \"%PHANTOMCHAT_PFX_PATH%\" ..."
+    "signCommand": "cmd /C ..\\..\\scripts\\sign-windows.cmd %1"
   }
 }
 ```
 
-`%PHANTOMCHAT_*%` are Windows env-var expansions resolved by `cmd.exe`
-when Tauri spawns the signtool process. Tauri runs this command:
+The wrapper `scripts\sign-windows.cmd` is needed because Tauri's
+`signCommand` parser is shlex-style and does NOT pipe the command
+through `cmd.exe` — meaning `%PHANTOMCHAT_PFX_PATH%` and friends never
+get expanded if you put them directly in the JSON. The batch wrapper
+expands them via `cmd.exe`'s native env-var resolution, then calls
+signtool. Tauri runs this command:
 
 1. Once per **bundle target's patched exe** — Tauri patches
    `phantomchat_desktop.exe` with a per-bundle ID (`msi`, `nsis`, etc.)

@@ -5,6 +5,125 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [3.0.2] — 2026-04-26 — Security audit fixes
+
+### Critical
+- AI bridge: `claude_cli_skip_permissions` default flipped from true to false
+- AI bridge: Claude CLI history now uses fence-token-delimited turns instead of
+  flat-concat, closing a prompt-injection class
+- Mobile: silent legacy-crypto-fallback in `chat.dart` replaced with visible error
+- Desktop: `save_history` failures now surface as a persistent banner
+- Build: GitHub PAT removed from git remote URL
+
+### High
+- 9 async hazards eliminated: `SessionStore` save off the reactor, voice-bytes-scan
+  in `spawn_blocking`, whisper download via `tokio::fs`, `mutate_message_state`
+  via `AsyncMutex`, whisper context cached in `OnceLock`, `search_messages`
+  off-thread
+- Mobile↔Desktop wire compat: TYPN-1 schema unified, REPL-1/RACT-1/DISA-1 swallow
+  handlers added on mobile (no more raw-text rendering)
+- `phantomx` mlkem persisted in mobile contacts (no more silent X25519 downgrade)
+- `rustls-webpki` bumped to ≥0.103.13 (3 advisories)
+- `BindContactModal` silent-failure pattern fixed (mirrors `AddContactModal`)
+- `InputBar` restores user text on failed send
+- Watchers per-watcher concurrency lock (multi-click no longer fans out)
+- Relays save now `restart_listener` so new set takes effect
+
+### Medium
+- `MessageStream` virtualization (react-virtuoso) — 1000+ row scrolling smooth
+- PBKDF2 600k iters + `compute()` isolate (Mobile PIN-confirm 5–15 s freeze killed)
+- APK update: origin-pin + `version_code` check (downgrade-attack closed)
+- Mobile crash-report opt-in surface
+- Watcher run-now busy gate
+- `ConversationHeader` TTL reverts on error
+- Linux `install_update` success message clarified
+
+### Cleanup
+- Removed orphan `mobile/lib/screens/settings_background.dart`
+- Removed dead pub fns (`file_transfer pack/unpack_stream`,
+  `storage save_group_message`, `util to_hex`, `relays start_stealth_cover_consumer`)
+- Removed empty `pqc = []` core feature
+- Dropped 27 unused i18n keys
+- `brain.md` + `playbook.md` archived to `docs/archive/`
+
+---
+
+## [3.0.1] — 2026-04-26 — Add-contact mobile↔desktop format compat
+
+### Critical
+- Mobile↔Desktop address-format incompatibility fixed — mobile now emits and
+  parses the canonical `phantom:<view_hex>:<spend_hex>` form (was emitting
+  `phantom:base64-JSON`)
+- Both `AddContactModal` silent-failure UIs now surface inline errors
+
+### Build
+- Wave 11D STT enabled in MSI (`cmake` + LLVM/libclang on Nexus)
+- Mobile build pipeline unstuck: vendored `record_linux` stub, Jetifier on,
+  `desugar_jdk_libs` on
+
+---
+
+## [Wave 8 / 9 / 10 / 11 — 2026-04-26 mega-block]
+
+This block summarises the wave-stream that landed on 2026-04-26 between v3.0.0
+and v3.0.2. Individual semver entries above pick out the user-visible
+release-points; the per-wave breakdown below is the engineering history.
+
+### Wave 7 series — mobile catch-up + desktop UX bundle
+- **7A** (`304e628`) mDNS LAN auto-discovery + Join-LAN-Org wizard step
+- **7B** (`dbb8d4e`) Flutter app catch-up to v3.0.0 wire protocols
+- **7B2** (`d648e46`) Mobile→Desktop send path via pure-Dart Nostr relay client
+- **7B3** (`608a5d3`) Android Production-Keystore + Release-Signing pipeline
+- **7C** (`858f1db`) pre-seeded MSI templater for org bulk-deploy
+- **7D** (`0b72a79`) reply/quote + reactions + disappearing messages
+
+### Wave 8 series — desktop polish + mobile hardening + infra
+- **8A** (`00acb99`) Mobile APK polish + Android security hardening
+- **8B** (`db9a38a`) Android Foreground Service for persistent relay listening
+- **8C** (`1d7feaf`) encrypted backup/restore (Argon2id + XChaCha20-Poly1305)
+- **8D** (`1cdcb88`) theme system — Cyberpunk Dark + Soft Light + Corporate
+- **8E** (`398b6f2`) window-state persistence with multi-monitor awareness
+- **8F** (`8aa4670`) markdown + link auto-detect + @-mentions in MLS groups
+- **8G** (`56dd679`) image-inline-preview + Pin/Star/Archive
+- **8H** (`6421c48`) OS-keystore-backed key storage + memory-zeroing +
+  anti-forensic shred
+- **8I** (`82fed11`) CI/CD GitHub Actions + Reproducible-Builds + Fuzz harnesses
+- **8J** (`873c13d`) self-hosted-relay docs + opt-in crash-reporting
+
+### Wave 9 — transparency bundle (`2d95cf2`)
+- Disclosure policy + PGP key (`keys/security.asc`)
+- `docs/HALL-OF-FAME.md` template
+- `.well-known/security.txt` (RFC 9116, PGP-signed)
+
+### Wave 10 — signed Windows build pipeline
+- **10** (`8918ea5`) Wave 10 base — MSI + NSIS signing
+- (`bfe29b2`, `3949e35`, `b399e19`) `signCommand` wrapper iteration:
+  bare `signtool` + PATH prepend → `.cmd` wrapper → `cmd /C` invocation +
+  correct relative path
+- (`86a07b8`) Pilot self-signed cert shipped as `keys/phantomchat-pilot-cert.cer`
+- Wrapper script: `scripts/sign-windows.cmd`
+  reads `PHANTOMCHAT_PFX_PATH` + `PHANTOMCHAT_PFX_PASSWORD` env vars and signs
+  via `signtool` with SHA-256 + RFC 3161 timestamp
+
+### Wave 11 — AI Bridge series (`docs/AI-BRIDGE.md` is canonical)
+- **11A** (`c502a11`) Home-LLM Bridge — AI as virtual PhantomChat contact
+- **11B** (`43828d1`) voice messages (mobile record + desktop playback)
+- **11C** (`10bf022`) tool-using AI bridge + `docs/AI-BRIDGE.md` published
+- **11D** (`dac9deb`) voice → whisper.cpp STT → LLM (closes the voice-control loop)
+- **11E** + **11G** (`80fa6fe`) proactive watchers (cron) + mobile in-app APK
+  auto-update
+- **11F** (`a7acf45`) per-contact routing in AI Bridge
+
+### Post-wave-11 stabilisation (between 3.0.0 → 3.0.1 → 3.0.2)
+- (`3246d1f`) watchers startup panic — use `tauri::async_runtime::spawn` (no
+  tokio reactor in `setup()`)
+- (`b9c1a00`) purge startup panic — same pattern
+- (`5bda2b5`) Mobile PIN-Confirm silent hang — busy-state + `try/catch` + spinner
+- (`8febc15` / `dfa0a7e`) v3.0.1 — add-contact mobile↔desktop format compat
+- (`f49b9a7`) v3.0.2 build path — APK pipeline 4-fix bundle
+
+---
+
 ## [3.0.0] — 2026-04-25 — Tauri Desktop + B2B-ready stack
 
 Major surface expansion. PhantomChat is now a shippable B2B internal messenger,

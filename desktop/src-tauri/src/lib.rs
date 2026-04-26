@@ -820,7 +820,11 @@ pub struct AppState {
     pub connection_status: StdMutex<String>,
     /// Serializes concurrent `save_history` writes so we never half-write the
     /// `messages.json` file when the React debouncer fires twice in a row.
-    pub history_lock: StdMutex<()>,
+    /// AsyncMutex (Wave 11G fix): the previous StdMutex was being held
+    /// across an `fs::write` of the full history blob, blocking every other
+    /// listener task. AsyncMutex + spawn_blocking-the-write removes that
+    /// footgun without giving up cross-callsite serialization.
+    pub history_lock: AsyncMutex<()>,
     /// Control handle for the running relay-subscriber tokio task. `Some`
     /// once `start_listener` has spawned. `restart_listener` signals a
     /// graceful shutdown via the embedded oneshot, awaits the task with a
@@ -1822,10 +1826,27 @@ async fn send_sealed_to_address(
 
     let (_view, _spend, signing_key, _upgraded) = load_identity(app, &keys_path)?;
 
-    let mut store = SessionStore::load(&sessions_path)
-        .with_context(|| format!("loading sessions from {}", sessions_path.display()))?;
-
-    let envelope = store.send_sealed(&recipient, payload, &signing_key, POW_DIFFICULTY);
+    // Hazard: every send loaded + parsed `sessions.json` synchronously on
+    // the tokio reactor (multi-MB JSON is multi-ms blocking I/O). Offload
+    // the load + ratchet-update + save to a blocking thread; only the
+    // relay `publish` stays on the async path.
+    let sessions_path_for_load = sessions_path.clone();
+    let payload_owned = payload.to_vec();
+    let signing_for_blocking = signing_key.clone();
+    let recipient_for_blocking = recipient.clone();
+    let (envelope, store) = tokio::task::spawn_blocking(move || -> anyhow::Result<(_, SessionStore)> {
+        let mut store = SessionStore::load(&sessions_path_for_load)
+            .with_context(|| format!("loading sessions from {}", sessions_path_for_load.display()))?;
+        let envelope = store.send_sealed(
+            &recipient_for_blocking,
+            &payload_owned,
+            &signing_for_blocking,
+            POW_DIFFICULTY,
+        );
+        Ok((envelope, store))
+    })
+    .await
+    .map_err(|e| anyhow!("session load join: {}", e))??;
 
     // Fan publish out across the persisted relay set. `current_relay`
     // honours both `relays.json` and `privacy.json` — a single-URL
@@ -1838,9 +1859,15 @@ async fn send_sealed_to_address(
         .await
         .map_err(|e| anyhow!("relay publish: {}", e))?;
 
-    store
-        .save(&sessions_path)
-        .with_context(|| format!("saving sessions to {}", sessions_path.display()))?;
+    let sessions_path_for_save = sessions_path.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        store
+            .save(&sessions_path_for_save)
+            .with_context(|| format!("saving sessions to {}", sessions_path_for_save.display()))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| anyhow!("session save join: {}", e))??;
 
     Ok(())
 }
@@ -1943,8 +1970,19 @@ async fn spawn_listener_task(
             let mut guard = store.lock().await;
             match guard.receive_full(&env, &view, &spend, None) {
                 Ok(Some(msg)) => {
-                    let _ = guard.save(&save_path);
+                    // Hazard: holding an AsyncMutex across a sync `fs::write`
+                    // stalls every other listener task. Serialize the bytes
+                    // under the lock, drop the guard, then offload the disk
+                    // write to a blocking thread.
+                    let save_bytes = serde_json::to_vec_pretty(&*guard).ok();
                     drop(guard);
+                    if let Some(bytes) = save_bytes {
+                        let path = save_path.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            std::fs::write(&path, bytes)
+                        })
+                        .await;
+                    }
 
                     let (sender_pub, sig_ok) = match msg.sender {
                         Some((attr, ok)) => (Some(attr.sender_pub), ok),
@@ -2019,7 +2057,8 @@ async fn spawn_listener_task(
                                 sender_pub,
                                 sig_ok,
                                 &contacts_path,
-                            );
+                            )
+                            .await;
                             // Wave 11D: hand the FULL wire plaintext (prefix
                             // included) to the AI bridge so it can detect
                             // the VOICE-1 head, locate the just-saved audio
@@ -2087,7 +2126,8 @@ async fn spawn_listener_task(
                                 sender_pub,
                                 sig_ok,
                                 &contacts_path,
-                            );
+                            )
+                            .await;
                             return;
                         }
                         if prefix7 == &DISA_PREFIX_V1[..] {
@@ -3323,15 +3363,22 @@ fn messages_path(app: &AppHandle) -> anyhow::Result<PathBuf> {
 }
 
 #[tauri::command]
-fn save_history(
+async fn save_history(
     app: AppHandle,
     state: State<'_, AppState>,
     messages: Vec<IncomingMessage>,
 ) -> Result<(), String> {
-    let _guard = state.history_lock.lock().map_err(|e| e.to_string())?;
+    // Hazard: prior StdMutex was held across `fs::write` of the full
+    // history blob. AsyncMutex + spawn_blocking the write keeps the
+    // serialization guarantee without blocking the reactor.
+    let _guard = state.history_lock.lock().await;
     let path = messages_path(&app).map_err(|e| e.to_string())?;
     let buf = serde_json::to_vec_pretty(&messages).map_err(|e| e.to_string())?;
-    fs::write(&path, buf).map_err(|e| format!("write {}: {}", path.display(), e))?;
+    let write_path = path.clone();
+    tokio::task::spawn_blocking(move || std::fs::write(&write_path, buf))
+        .await
+        .map_err(|e| format!("save_history join: {e}"))?
+        .map_err(|e| format!("write {}: {}", path.display(), e))?;
     Ok(())
 }
 
@@ -3428,7 +3475,13 @@ async fn search_messages(
     let q_lower = q.to_ascii_lowercase();
     let cap = limit.unwrap_or(SEARCH_LIMIT_DEFAULT) as usize;
 
-    let history = load_history(app)?;
+    // Hazard: `load_history` reads the full `messages.json` synchronously.
+    // For 50k-row histories that's tens of ms of blocking I/O on the
+    // reactor; offload to a blocking thread instead.
+    let app_for_load = app.clone();
+    let history = tokio::task::spawn_blocking(move || load_history(app_for_load))
+        .await
+        .map_err(|e| format!("load_history join: {e}"))??;
     let mut hits: Vec<SearchHit> = Vec::new();
 
     // Iterate newest-first so we can early-exit at `cap`. Use enumerate
@@ -5312,7 +5365,7 @@ async fn ai_bridge_download_whisper_model(
     app: AppHandle,
     name: String,
 ) -> Result<String, String> {
-    use std::io::Write as _;
+    use tokio::io::AsyncWriteExt as _;
     if !ai_bridge::is_known_whisper_model(&name) {
         return Err(format!(
             "unknown whisper model '{}' — must be one of the published catalogue",
@@ -5321,6 +5374,8 @@ async fn ai_bridge_download_whisper_model(
     }
     let dir = app_data(&app).map_err(|e| e.to_string())?;
     let models_dir = ai_bridge::whisper_models_dir(&dir);
+    // Hazard: mkdir is sync but tiny (single syscall); not worth offload.
+    // The HEAVY work (1.5 GB write/sync/rename) below moves to tokio::fs.
     std::fs::create_dir_all(&models_dir)
         .map_err(|e| format!("mkdir {}: {}", models_dir.display(), e))?;
     let dest = ai_bridge::whisper_model_path(&dir, &name);
@@ -5350,8 +5405,12 @@ async fn ai_bridge_download_whisper_model(
     // Write to a temp file then rename — half-downloaded files would
     // confuse `is_file()` checks elsewhere into thinking we have a
     // valid model.
+    // Hazard: 1.5 GB downloads were syncing every chunk to disk via
+    // sync std::fs::File on the reactor. Switch to tokio::fs::File +
+    // AsyncWriteExt so the reactor stays unblocked between chunks.
     let tmp = dest.with_extension("bin.partial");
-    let mut file = std::fs::File::create(&tmp)
+    let mut file = tokio::fs::File::create(&tmp)
+        .await
         .map_err(|e| format!("create {}: {}", tmp.display(), e))?;
     let mut downloaded: u64 = 0;
     // Throttle progress emit to once every 256 KB so a 1 GB download
@@ -5363,6 +5422,7 @@ async fn ai_bridge_download_whisper_model(
         .map_err(|e| format!("chunk read: {e}"))?
     {
         file.write_all(&chunk)
+            .await
             .map_err(|e| format!("write {}: {}", tmp.display(), e))?;
         downloaded += chunk.len() as u64;
         if downloaded >= next_emit_at {
@@ -5378,9 +5438,11 @@ async fn ai_bridge_download_whisper_model(
         }
     }
     file.sync_all()
+        .await
         .map_err(|e| format!("sync {}: {}", tmp.display(), e))?;
     drop(file);
-    std::fs::rename(&tmp, &dest)
+    tokio::fs::rename(&tmp, &dest)
+        .await
         .map_err(|e| format!("rename {} → {}: {}", tmp.display(), dest.display(), e))?;
 
     // Final 100 % event so the UI snaps the bar to full.
@@ -5442,16 +5504,22 @@ async fn transcribe_voice_for_bridge(
     if !voice_dir.is_dir() {
         return Err(anyhow!("voice dir not found"));
     }
-    let audio_bytes = &body[9..];
-    let mut found: Option<PathBuf> = None;
-    if let Ok(rd) = std::fs::read_dir(&voice_dir) {
+    // Hazard: byte-comparing every blob in `voice/` synchronously blocks
+    // the tokio reactor for the duration of N reads of multi-MB files.
+    // Wrap the dir-walk + content-match in spawn_blocking so other tasks
+    // can keep making progress while we hunt for the matching file.
+    let audio_bytes_owned: Vec<u8> = body[9..].to_vec();
+    let voice_dir_for_blocking = voice_dir.clone();
+    let ext_owned = ext.to_string();
+    let found: Option<PathBuf> = tokio::task::spawn_blocking(move || -> Option<PathBuf> {
+        let rd = std::fs::read_dir(&voice_dir_for_blocking).ok()?;
         // Prefer newest first — STT runs right after the receive path
         // wrote the file, so the matching `<msg_id>.<ext>` is almost
         // always at the top of the dir listing.
         let mut entries: Vec<_> = rd
             .flatten()
             .filter(|e| {
-                e.path().extension().and_then(|s| s.to_str()) == Some(ext)
+                e.path().extension().and_then(|s| s.to_str()) == Some(ext_owned.as_str())
             })
             .collect();
         entries.sort_by_key(|e| {
@@ -5464,13 +5532,15 @@ async fn transcribe_voice_for_bridge(
         for e in entries {
             let p = e.path();
             if let Ok(disk_bytes) = std::fs::read(&p) {
-                if disk_bytes == audio_bytes {
-                    found = Some(p);
-                    break;
+                if disk_bytes == audio_bytes_owned {
+                    return Some(p);
                 }
             }
         }
-    }
+        None
+    })
+    .await
+    .map_err(|e| anyhow!("voice scan join: {e}"))?;
     let path = found.ok_or_else(|| {
         anyhow!("could not locate saved voice file in {}", voice_dir.display())
     })?;
@@ -6621,7 +6691,7 @@ fn resolve_sender_label_for_bridge(
 /// renderer. `full_plaintext` is the WHOLE wire plaintext (prefix
 /// included) so we can compute the same `msg_id` the rest of the listener
 /// loop would have computed for a text payload.
-fn handle_incoming_voice_v1(
+async fn handle_incoming_voice_v1(
     app: &AppHandle,
     body: &[u8],
     full_plaintext: &[u8],
@@ -6731,20 +6801,32 @@ fn handle_incoming_voice_v1(
         }
     };
     let voice_dir = app_data_dir.join("voice");
-    if let Err(e) = fs::create_dir_all(&voice_dir) {
-        let _ = app.emit(
-            "error",
-            format!("VOICE-1: mkdir -p {}: {}", voice_dir.display(), e),
-        );
-        return;
-    }
     let out_path = voice_dir.join(format!("{}.{}", msg_id, ext));
-    if let Err(e) = fs::write(&out_path, audio_bytes) {
-        let _ = app.emit(
-            "error",
-            format!("VOICE-1: write {}: {}", out_path.display(), e),
-        );
-        return;
+    // Hazard: multi-MB audio body was sync-written on the listener's
+    // tokio task. Offload mkdir + write to a blocking thread so the
+    // reactor can keep dispatching incoming envelopes.
+    let voice_dir_for_blocking = voice_dir.clone();
+    let out_path_for_blocking = out_path.clone();
+    let audio_owned = audio_bytes.to_vec();
+    let write_res = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        fs::create_dir_all(&voice_dir_for_blocking)?;
+        fs::write(&out_path_for_blocking, &audio_owned)?;
+        Ok(())
+    })
+    .await;
+    match write_res {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            let _ = app.emit(
+                "error",
+                format!("VOICE-1: write {}: {}", out_path.display(), e),
+            );
+            return;
+        }
+        Err(e) => {
+            let _ = app.emit("error", format!("VOICE-1: write join: {e}"));
+            return;
+        }
     }
 
     // 7. Per-contact disappearing TTL — voice messages disappear on the
@@ -7294,7 +7376,7 @@ pub struct ConversationStateChangedEvent {
 /// re-write `messages.json`, and emit the matching `message_state_changed`
 /// event. Returns `Err` if the row isn't found so the React side can show
 /// a clear "row no longer exists" message rather than failing silently.
-fn mutate_message_state<F>(
+async fn mutate_message_state<F>(
     app: &AppHandle,
     state: &AppState,
     msg_id: &str,
@@ -7303,14 +7385,23 @@ fn mutate_message_state<F>(
 where
     F: Fn(&mut IncomingMessage),
 {
-    let _guard = state.history_lock.lock().map_err(|e| e.to_string())?;
+    // Hazard: previously held a StdMutex while doing fs::read + fs::write
+    // of the full history JSON for every pin/star. Acquire the AsyncMutex
+    // first, then offload the I/O — read on a blocking thread, mutate
+    // in-memory, write back via spawn_blocking.
+    let _guard = state.history_lock.lock().await;
     let path = messages_path(app).map_err(|e| e.to_string())?;
-    let mut history: Vec<IncomingMessage> = if path.exists() {
-        let raw = fs::read(&path).map_err(|e| format!("read {}: {}", path.display(), e))?;
-        serde_json::from_slice(&raw).unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    let read_path = path.clone();
+    let mut history: Vec<IncomingMessage> = tokio::task::spawn_blocking(move || -> Result<Vec<IncomingMessage>, String> {
+        if !read_path.exists() {
+            return Ok(Vec::new());
+        }
+        let raw = fs::read(&read_path)
+            .map_err(|e| format!("read {}: {}", read_path.display(), e))?;
+        Ok(serde_json::from_slice(&raw).unwrap_or_default())
+    })
+    .await
+    .map_err(|e| format!("mutate_message_state read join: {e}"))??;
     let mut hit = None;
     for m in history.iter_mut() {
         if m.msg_id.as_deref() == Some(msg_id) {
@@ -7322,7 +7413,11 @@ where
     let (pinned, starred) =
         hit.ok_or_else(|| format!("msg_id '{msg_id}' not found in history"))?;
     let buf = serde_json::to_vec_pretty(&history).map_err(|e| e.to_string())?;
-    fs::write(&path, buf).map_err(|e| format!("write {}: {}", path.display(), e))?;
+    let write_path = path.clone();
+    tokio::task::spawn_blocking(move || std::fs::write(&write_path, buf))
+        .await
+        .map_err(|e| format!("mutate_message_state write join: {e}"))?
+        .map_err(|e| format!("write {}: {}", path.display(), e))?;
     drop(_guard);
     let _ = app.emit(
         "message_state_changed",
@@ -7590,7 +7685,7 @@ fn handle_incoming_reply_v1(
 /// `reactions` array (add or remove the matching `(sender_label, emoji)`
 /// entry), persists the file, and emits `reaction_updated` with the
 /// merged reactions so the React side can patch its in-memory state.
-fn handle_incoming_reaction_v1(
+async fn handle_incoming_reaction_v1(
     app: &AppHandle,
     body: &[u8],
     sender_pub: Option<[u8; 32]>,
@@ -7639,14 +7734,13 @@ fn handle_incoming_reaction_v1(
 
     // Mutate the on-disk history under the history lock so a concurrent
     // `save_history` from the frontend can't trample our update.
+    // Hazard: AsyncMutex (was StdMutex) + spawn_blocking the read so the
+    // listener task doesn't block the reactor on multi-MB history JSON.
     let state = match app.try_state::<AppState>() {
         Some(s) => s,
         None => return,
     };
-    let _guard = match state.history_lock.lock() {
-        Ok(g) => g,
-        Err(_) => return,
-    };
+    let _guard = state.history_lock.lock().await;
     let path = match messages_path(app) {
         Ok(p) => p,
         Err(e) => {
@@ -7654,17 +7748,26 @@ fn handle_incoming_reaction_v1(
             return;
         }
     };
-    let mut history: Vec<IncomingMessage> = if path.exists() {
-        let raw = match fs::read(&path) {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = app.emit("error", format!("RACT-1: read history: {e}"));
-                return;
-            }
-        };
-        serde_json::from_slice(&raw).unwrap_or_default()
-    } else {
-        Vec::new()
+    let read_path = path.clone();
+    let mut history: Vec<IncomingMessage> = match tokio::task::spawn_blocking(move || -> Result<Vec<IncomingMessage>, String> {
+        if !read_path.exists() {
+            return Ok(Vec::new());
+        }
+        let raw = fs::read(&read_path)
+            .map_err(|e| format!("read {}: {}", read_path.display(), e))?;
+        Ok(serde_json::from_slice(&raw).unwrap_or_default())
+    })
+    .await
+    {
+        Ok(Ok(h)) => h,
+        Ok(Err(e)) => {
+            let _ = app.emit("error", format!("RACT-1: read history: {e}"));
+            return;
+        }
+        Err(e) => {
+            let _ = app.emit("error", format!("RACT-1: read join: {e}"));
+            return;
+        }
     };
 
     let mut updated_reactions: Option<Vec<ReactionEntry>> = None;
@@ -7692,9 +7795,20 @@ fn handle_incoming_reaction_v1(
 
     if let Some(ref reactions) = updated_reactions {
         if let Ok(buf) = serde_json::to_vec_pretty(&history) {
-            if let Err(e) = fs::write(&path, buf) {
-                let _ = app.emit("error", format!("RACT-1: write history: {e}"));
-                return;
+            // Hazard: offload the JSON write to a blocking thread so the
+            // reactor doesn't stall on a multi-MB history serialise.
+            let write_path = path.clone();
+            let join = tokio::task::spawn_blocking(move || std::fs::write(&write_path, buf)).await;
+            match join {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    let _ = app.emit("error", format!("RACT-1: write history: {e}"));
+                    return;
+                }
+                Err(e) => {
+                    let _ = app.emit("error", format!("RACT-1: write join: {e}"));
+                    return;
+                }
             }
         }
         let _ = app.emit(
@@ -7714,7 +7828,7 @@ fn handle_incoming_reaction_v1(
 /// persist, and emit `conversation_state_changed`. Inserts a default
 /// `ConversationState` if the contact has no entry yet so a first-time
 /// archive/pin/mute lands cleanly.
-fn mutate_conversation_state<F>(
+async fn mutate_conversation_state<F>(
     app: &AppHandle,
     state: &AppState,
     contact_label: &str,
@@ -7723,7 +7837,10 @@ fn mutate_conversation_state<F>(
 where
     F: Fn(&mut ConversationState),
 {
-    let _guard = state.history_lock.lock().map_err(|e| e.to_string())?;
+    // Hazard: AsyncMutex (was StdMutex). The save_conversation_state call
+    // below still does a sync write, but it's a tiny per-contact JSON map
+    // (KB, not MB), so we keep it inline rather than offloading.
+    let _guard = state.history_lock.lock().await;
     let mut map = load_conversation_state(app);
     let entry = map.entry(contact_label.to_string()).or_default();
     mutator(entry);
@@ -7921,7 +8038,7 @@ async fn pin_message(
     state: State<'_, AppState>,
     msg_id: String,
 ) -> Result<(), String> {
-    mutate_message_state(&app, &state, &msg_id, |m| m.pinned = true)
+    mutate_message_state(&app, &state, &msg_id, |m| m.pinned = true).await
 }
 
 #[tauri::command]
@@ -7930,7 +8047,7 @@ async fn unpin_message(
     state: State<'_, AppState>,
     msg_id: String,
 ) -> Result<(), String> {
-    mutate_message_state(&app, &state, &msg_id, |m| m.pinned = false)
+    mutate_message_state(&app, &state, &msg_id, |m| m.pinned = false).await
 }
 
 #[tauri::command]
@@ -7939,7 +8056,7 @@ async fn star_message(
     state: State<'_, AppState>,
     msg_id: String,
 ) -> Result<(), String> {
-    mutate_message_state(&app, &state, &msg_id, |m| m.starred = true)
+    mutate_message_state(&app, &state, &msg_id, |m| m.starred = true).await
 }
 
 #[tauri::command]
@@ -7948,7 +8065,7 @@ async fn unstar_message(
     state: State<'_, AppState>,
     msg_id: String,
 ) -> Result<(), String> {
-    mutate_message_state(&app, &state, &msg_id, |m| m.starred = false)
+    mutate_message_state(&app, &state, &msg_id, |m| m.starred = false).await
 }
 
 #[tauri::command]
@@ -7957,7 +8074,7 @@ async fn archive_conversation(
     state: State<'_, AppState>,
     contact_label: String,
 ) -> Result<(), String> {
-    mutate_conversation_state(&app, &state, &contact_label, |s| s.archived = true)
+    mutate_conversation_state(&app, &state, &contact_label, |s| s.archived = true).await
 }
 
 #[tauri::command]
@@ -7966,7 +8083,7 @@ async fn unarchive_conversation(
     state: State<'_, AppState>,
     contact_label: String,
 ) -> Result<(), String> {
-    mutate_conversation_state(&app, &state, &contact_label, |s| s.archived = false)
+    mutate_conversation_state(&app, &state, &contact_label, |s| s.archived = false).await
 }
 
 #[tauri::command]
@@ -7975,7 +8092,7 @@ async fn pin_conversation(
     state: State<'_, AppState>,
     contact_label: String,
 ) -> Result<(), String> {
-    mutate_conversation_state(&app, &state, &contact_label, |s| s.pinned = true)
+    mutate_conversation_state(&app, &state, &contact_label, |s| s.pinned = true).await
 }
 
 #[tauri::command]
@@ -7984,7 +8101,7 @@ async fn unpin_conversation(
     state: State<'_, AppState>,
     contact_label: String,
 ) -> Result<(), String> {
-    mutate_conversation_state(&app, &state, &contact_label, |s| s.pinned = false)
+    mutate_conversation_state(&app, &state, &contact_label, |s| s.pinned = false).await
 }
 
 /// Snapshot of the entire `conversation_state.json` map. The frontend
@@ -8075,15 +8192,14 @@ fn outgoing_expires_at(
 /// dropped msg_ids so the React reducer can prune in lockstep. Held
 /// under the same `history_lock` `save_history` uses so we never
 /// race a concurrent save.
-fn run_purge_sweep(app: &AppHandle) {
+async fn run_purge_sweep(app: &AppHandle) {
     let state = match app.try_state::<AppState>() {
         Some(s) => s,
         None => return,
     };
-    let _guard = match state.history_lock.lock() {
-        Ok(g) => g,
-        Err(_) => return,
-    };
+    // Hazard: AsyncMutex (was StdMutex) + spawn_blocking the read/write so
+    // the periodic purge doesn't stall the reactor on big histories.
+    let _guard = state.history_lock.lock().await;
     let path = match messages_path(app) {
         Ok(p) => p,
         Err(_) => return,
@@ -8091,9 +8207,10 @@ fn run_purge_sweep(app: &AppHandle) {
     if !path.exists() {
         return;
     }
-    let raw = match fs::read(&path) {
-        Ok(r) => r,
-        Err(_) => return,
+    let read_path = path.clone();
+    let raw = match tokio::task::spawn_blocking(move || std::fs::read(&read_path)).await {
+        Ok(Ok(r)) => r,
+        _ => return,
     };
     let history: Vec<IncomingMessage> = match serde_json::from_slice(&raw) {
         Ok(h) => h,
@@ -8119,7 +8236,8 @@ fn run_purge_sweep(app: &AppHandle) {
         return;
     }
     if let Ok(buf) = serde_json::to_vec_pretty(&kept) {
-        let _ = fs::write(&path, buf);
+        let write_path = path.clone();
+        let _ = tokio::task::spawn_blocking(move || std::fs::write(&write_path, buf)).await;
     }
     let _ = app.emit(
         "messages_purged",
@@ -8163,7 +8281,7 @@ fn spawn_purge_task(app: &AppHandle) {
         interval.tick().await;
         loop {
             interval.tick().await;
-            run_purge_sweep(&app_for_task);
+            run_purge_sweep(&app_for_task).await;
         }
     });
 }
@@ -8813,6 +8931,10 @@ async fn import_backup(
     // Walk the stage dir, copy each file onto its live path. We use
     // `fs::rename` first (atomic on the same filesystem) and fall back
     // to copy + remove_file if rename fails (cross-device).
+    // Hazard: the recursive walk does N sync `read_dir`/`rename`/`copy`
+    // syscalls on the reactor right after the spawn_blocking decrypt.
+    // Move the whole swap into a second spawn_blocking so the reactor
+    // doesn't stall while we shuffle GB-scale backups into place.
     fn swap_into(src_root: &std::path::Path, dst_root: &std::path::Path) -> Result<(), String> {
         let entries = fs::read_dir(src_root)
             .map_err(|e| format!("read_dir {}: {}", src_root.display(), e))?;
@@ -8840,8 +8962,15 @@ async fn import_backup(
         }
         Ok(())
     }
-    let swap_result = swap_into(&stage_dir, &data_dir);
-    let _ = fs::remove_dir_all(&stage_dir);
+    let stage_dir_for_swap = stage_dir.clone();
+    let data_dir_for_swap = data_dir.clone();
+    let swap_result = tokio::task::spawn_blocking(move || {
+        let res = swap_into(&stage_dir_for_swap, &data_dir_for_swap);
+        let _ = fs::remove_dir_all(&stage_dir_for_swap);
+        res
+    })
+    .await
+    .map_err(|e| format!("swap join: {e}"))?;
     swap_result?;
 
     // ── Phase 4: restart the listener with the restored config ──────────

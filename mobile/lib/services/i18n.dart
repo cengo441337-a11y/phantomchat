@@ -37,6 +37,14 @@ class I18n {
       'voice.tapToPlay': 'TAP TO PLAY',
       'voice.permissionDenied': 'MIC PERMISSION DENIED',
       'voice.unavailable': '[VOICE CLIP UNAVAILABLE]',
+      // Wave 11G+ — chat send-path errors. Surfaced via SnackBar when
+      // sealed-sender encryption fails so the user can't mistake a
+      // legacy-fallback ghost-send for delivery (the fallback was
+      // removed in this wave because it is not wire-compatible with
+      // Desktop).
+      'chat.errors.sendFailed':
+          '! SEND FAILED — MESSAGE NOT DELIVERED. {err}',
+      'chat.errors.voiceSendFailed': '! VOICE SEND FAILED: {err}',
       // Wave 11G — APK auto-update.
       'update.banner': 'UPDATE AVAILABLE: v{version} — TAP TO DOWNLOAD',
       'update.dialog.title': 'NEW VERSION AVAILABLE',
@@ -61,6 +69,10 @@ class I18n {
       'voice.tapToPlay': 'ZUM ABSPIELEN TIPPEN',
       'voice.permissionDenied': 'MIKROFONZUGRIFF VERWEIGERT',
       'voice.unavailable': '[SPRACHCLIP NICHT VERFÜGBAR]',
+      'chat.errors.sendFailed':
+          '! SENDEN FEHLGESCHLAGEN — NACHRICHT NICHT ZUGESTELLT. {err}',
+      'chat.errors.voiceSendFailed':
+          '! SPRACHNACHRICHT FEHLGESCHLAGEN: {err}',
       // Wave 11G — APK auto-update.
       'update.banner': 'UPDATE VERFÜGBAR: v{version} — JETZT HERUNTERLADEN',
       'update.dialog.title': 'NEUE VERSION VERFÜGBAR',

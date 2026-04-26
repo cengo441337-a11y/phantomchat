@@ -95,7 +95,6 @@ fn alice_to_bob_multi_round_exchange() {
 
 #[test]
 fn envelope_for_someone_else_is_silently_ignored() {
-    let alice = new_identity();
     let bob = new_identity();
     let eve = new_identity();
 

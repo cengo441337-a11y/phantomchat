@@ -23,12 +23,12 @@ match these versions exactly.
 
 | Component         | Version                                                                 | Source of truth                  |
 |-------------------|-------------------------------------------------------------------------|----------------------------------|
-| Rust              | `stable` (whatever `dtolnay/rust-toolchain@stable` resolves on tag day) | `rust-toolchain.toml` if present, otherwise the CI run log |
+| Rust              | `stable` (whatever `dtolnay/rust-toolchain@stable` resolves on tag day) | CI run log of the tagged release |
 | Node.js           | `20.x`                                                                  | `desktop/.nvmrc`                 |
 | Flutter           | stable channel pinned to commit `cc0734ac71`                            | `mobile/flutter-version`         |
 | Android NDK       | r26 (`26.3.11579264`)                                                   | `.github/workflows/release.yml`  |
 | WiX Toolset       | latest from chocolatey at tag day                                       | `.github/workflows/release.yml`  |
-| Tauri CLI         | `^2`                                                                    | `desktop/package.json`           |
+| Tauri CLI         | `^2` (caret-pinned in CI; bumping to a hard `=2.X.Y` would be more reproducible — tracked) | `.github/workflows/release.yml` (`cargo install tauri-cli --version "^2" --locked`) |
 
 To force-pin tools locally:
 
@@ -85,17 +85,57 @@ sha256sum mobile/build/app/outputs/flutter-apk/*.apk
 
 ### Windows MSI (Windows build host or VM)
 
+The official Wave 10 signed-MSI flow expects two environment variables that
+point at an Authenticode signing certificate. The Tauri config
+(`desktop/src-tauri/tauri.conf.json`) routes signing through
+`scripts/sign-windows.cmd` which reads:
+
+| Env var                       | Purpose                              |
+|-------------------------------|--------------------------------------|
+| `PHANTOMCHAT_PFX_PATH`        | Absolute path to the `.pfx` cert file |
+| `PHANTOMCHAT_PFX_PASSWORD`    | Cert password (memory-only, do not write to disk) |
+
+The wrapper invokes `signtool sign /f $PFX /p $PWD /fd SHA256 /td SHA256
+/tr http://timestamp.digicert.com /d "PhantomChat" /du
+"https://dc-infosec.de/phantomchat" <file>` so every binary in the MSI
+bundle (and the MSI itself) gets timestamp-counter-signed.
+
 ```powershell
-# In an elevated PowerShell with WiX + Node + Rust installed:
+# In an elevated PowerShell with WiX + Node + Rust + Windows SDK installed:
 $env:SOURCE_DATE_EPOCH = (git log -1 --format=%ct)
+$env:PHANTOMCHAT_PFX_PATH     = "D:\secrets\phantomchat-pilot.pfx"
+$env:PHANTOMCHAT_PFX_PASSWORD = (Read-Host -AsSecureString | ConvertFrom-SecureString -AsPlainText)
 
 cd desktop
 npm ci
 npm run build
 cargo tauri build --bundles msi
 
-Get-FileHash -Algorithm SHA256 src-tauri/target/release/bundle/msi/*.msi
+Get-FileHash -Algorithm SHA256 src-tauri\target\release\bundle\msi\*.msi
 ```
+
+The `scripts/build-windows.cmd` companion prepends the Windows SDK directory
+to `PATH` so `signtool` resolves without an absolute path; you can use it
+instead of running `cargo tauri build` directly.
+
+#### Reproducing without the signing cert
+
+Customers who want to byte-compare the MSI **without access to the
+DC INFOSEC PFX** should:
+
+1. Skip the signing step — set `PHANTOMCHAT_PFX_PATH=` to empty and edit
+   `tauri.conf.json` locally to drop `bundle.windows.signCommand`.
+2. Build the unsigned MSI per the steps above.
+3. Strip the Authenticode signatures from the official MSI for comparison
+   (`osslsigncode remove-signature`).
+
+This produces a useful integrity check on the *contents* of the MSI even
+though you can't reproduce the exact bytes of the signed-and-timestamped
+release artifact.
+
+The full Windows-host build walkthrough — VS Build Tools, WiX, Rust target,
+optional Nexus dev box layout — lives in
+[`docs/WINDOWS-BUILD.md`](WINDOWS-BUILD.md).
 
 ---
 

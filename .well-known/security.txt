@@ -13,11 +13,11 @@ Acknowledgments: https://github.com/cengo441337-a11y/phantomchat/blob/main/docs/
 Policy: https://github.com/cengo441337-a11y/phantomchat/blob/main/docs/SECURITY.md
 Preferred-Languages: de, en
 Canonical: https://dc-infosec.de/.well-known/security.txt
-Expires: 2027-04-26T00:00:00.000Z
+Expires: 2027-10-26T00:00:00.000Z
 -----BEGIN PGP SIGNATURE-----
 
-iIoEARYKADIWIQQPjaJYG4oUKJ8PL9fvCG2CmRSg4wUCae3/FRQcYWRtaW5AZGMt
-aW5mb3NlYy5kZQAKCRDvCG2CmRSg49tiAP9noF6eEzPOrS6Ue5ZfIVGkrg6KaBMo
-/es2V+9pvHfAIgEA+4sJZob8Gn/IfUHwmkhczmQSPOB+VJAzJwL5GVEgJAI=
-=vMeO
+iIoEARYKADIWIQQPjaJYG4oUKJ8PL9fvCG2CmRSg4wUCae41UxQcYWRtaW5AZGMt
+aW5mb3NlYy5kZQAKCRDvCG2CmRSg4yxkAQDPPisG3+PSr1VgQmRU8GcTrxXfkxwF
+XRzoblmQiNcwgAD+NSKZQi8UEJVX7JLPUbw7o6HiHFwsVcvKtvjVUHfuTAM=
+=AGRT
 -----END PGP SIGNATURE-----

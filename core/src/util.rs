@@ -10,11 +10,6 @@ pub fn sha256(data: &[u8]) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
-/// Wandelt ein Bytearray in einen hexkodierten String um.
-pub fn to_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
-}
-
 /// Zählt die Anzahl der führenden Nullbits in einem Bytearray.
 pub fn leading_zero_bits(bytes: &[u8]) -> u32 {
     let mut count = 0;

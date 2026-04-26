@@ -144,14 +144,22 @@ await invoke("ai_bridge_clear_history", { contactLabel: "alice" });
   doesn't reply, not that it replies to a stranger.
 
 - **Allow-listed contacts can invoke tools.** When using `ClaudeCli`
-  with `claude_cli_skip_permissions`, an allow-listed contact who
-  sends "delete everything in /home/deniz" gets that exact behavior.
-  Don't allow-list contacts you don't trust to operate your machine.
-  This is the same trust level as giving them a shell.
+  with `claude_cli_skip_permissions` enabled, an allow-listed contact
+  who sends "delete everything in /home/deniz" gets that exact
+  behavior. Don't allow-list contacts you don't trust to operate your
+  machine. This is the same trust level as giving them a shell.
 
-- **Voice messages don't currently feed into the LLM.** Wave 11D will
-  add an STT step. Until then, `ai_bridge_maybe_handle()`
-  short-circuits on the `VOICE-1:` plaintext prefix.
+  **Default since 3.0.2:** `claude_cli_skip_permissions` defaults to
+  `false`. Tool-approval prompts are surfaced via the existing
+  conversation history (the bridge will reply with the prompt text and
+  expect a confirming follow-up message). Flip the toggle on
+  consciously if you want headless full-trust operation.
+
+- **Voice messages now feed into the LLM via on-device STT.** Wave 11D
+  added the whisper.cpp transcription step described in
+  [Voice-message integration § Wave 11D](#wave-11d--voice--stt--llm).
+  Audio bytes never leave the desktop; only the transcribed text is
+  forwarded to the configured LLM provider.
 
 - **API keys are stored in plaintext** in `<app_data>/ai_bridge.json`.
   They're protected by the OS file-permissions of that directory. If
@@ -251,16 +259,6 @@ the Settings UI renders consistently.
 
 ---
 
-## Wave 11C deltas (this commit)
-
-- New config flag `claude_cli_skip_permissions` (default `true`).
-  Adds `--dangerously-skip-permissions` to the `claude` invocation.
-  Without this the bridge would deadlock on Claude's interactive
-  tool-approval prompt.
-- This document.
-
----
-
 ## Wave 11E — Proactive Watchers (shipped)
 
 Until Wave 11E the bridge was strictly reactive: it only replied to
@@ -333,11 +331,9 @@ The mitigations:
 
 ### Known limitations / punted items
 
-- **No per-watcher concurrency lock.** If a watcher's command takes
-  longer than its schedule interval, the next tick will spawn a second
-  invocation in parallel. Workaround: use `flock` in your command, or
-  pick an interval > worst-case command runtime. Proper fix (per-id
-  `tokio::sync::Mutex`) is queued for Wave 11G.
+- **Per-watcher concurrency lock — shipped in 3.0.2.** A `tokio::sync::Mutex`
+  per watcher-id now prevents a second invocation while the first is still
+  running; multi-click on "Run now" no longer fans out.
 - **No retry on transient send failures.** A watcher whose send fails
   (relay down, target offline, etc.) records `error: send failed: ...`
   in `last_status` and waits for the next tick. The chat is the source
@@ -350,10 +346,12 @@ The mitigations:
 
 ## Roadmap
 
-- **Wave 11G** — per-watcher concurrency lock (see "punted items"
-  above). Plus a "history" view in Settings showing the last N fires
-  per watcher (currently you have to grep the audit log).
-- **Wave 11H** — pre-built watcher templates: "GitHub Actions watcher",
-  "filesystem-change watcher", "Slack overnight summary watcher" — one-
-  click install with the appropriate command + schedule + mode pre-
-  filled. Reduces the "I need to know shell" barrier.
+- **Wave 11G — mobile-auto-update half: shipped.** The Android client
+  now polls a signed manifest URL and surfaces in-app update banners.
+  The watcher-side concurrency-lock half landed in 3.0.2 (above).
+- **Wave 11H — future** — pre-built watcher templates: "GitHub Actions
+  watcher", "filesystem-change watcher", "Slack overnight summary
+  watcher" — one-click install with the appropriate command + schedule
+  + mode pre-filled. Reduces the "I need to know shell" barrier.
+- **Per-watcher fire-history view in Settings — future** — currently
+  you grep `audit.log` for `category=ai_bridge event=watcher_fired`.

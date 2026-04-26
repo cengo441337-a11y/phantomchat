@@ -44,6 +44,14 @@ import 'package:path_provider/path_provider.dart';
 const String kUpdateManifestUrl =
     'https://updates.dc-infosec.de/phantomchat/android/latest.json';
 
+/// Origin pin: every variant.url returned in the manifest MUST start with
+/// this prefix. Any deviation (different host, plain http://, other path)
+/// causes [UpdateService.checkForUpdate] to drop the manifest. This is the
+/// last line of defence if the manifest host is somehow MITMed before TLS
+/// validation kicks in — even with a tampered manifest the attacker can't
+/// redirect the APK fetch to their own bucket.
+const String kUpdateOriginPrefix = 'https://updates.dc-infosec.de/';
+
 /// How long to wait for the manifest before we give up. Short, because
 /// this runs in the boot path and we never want to delay app start.
 const Duration kManifestTimeout = Duration(seconds: 6);
@@ -54,15 +62,29 @@ const Duration kManifestTimeout = Duration(seconds: 6);
 typedef ProgressCallback = void Function(int received, int total);
 
 /// One ABI variant inside the manifest's `abis` map.
+///
+/// `versionCode` is the Android build-number (matches `versionCode` in
+/// AndroidManifest.xml and `PackageInfo.buildNumber` from
+/// `package_info_plus`). It is checked alongside the semver `version`
+/// string to defend against bump-protection attacks where an attacker
+/// re-publishes an OLD signed APK under a NEW version label.
+///
+/// `signature` is reserved for a future minisign-style signature over the
+/// manifest entry. Currently only logged — full verification (Wave TBD)
+/// will use the `ed25519` Dart package and a baked-in pubkey.
 class AbiVariant {
   final String url;
   final String sha256;
   final int sizeBytes;
+  final int versionCode;
+  final String? signature;
 
   const AbiVariant({
     required this.url,
     required this.sha256,
     required this.sizeBytes,
+    required this.versionCode,
+    this.signature,
   });
 
   factory AbiVariant.fromJson(Map<String, dynamic> json) {
@@ -70,6 +92,8 @@ class AbiVariant {
       url: json['url'] as String,
       sha256: (json['sha256'] as String).toLowerCase(),
       sizeBytes: json['size_bytes'] as int,
+      versionCode: json['version_code'] as int,
+      signature: json['signature'] as String?,
     );
   }
 }
@@ -104,6 +128,11 @@ class UpdateService {
     try {
       final pkg = await PackageInfo.fromPlatform();
       final installed = pkg.version;
+      // `buildNumber` is the Android `versionCode` as a string. Empty on
+      // platforms where the concept doesn't exist; treat that as 0 so the
+      // bump-protection check still works (any positive manifest value
+      // wins).
+      final installedCode = int.tryParse(pkg.buildNumber) ?? 0;
 
       final manifest = await _fetchManifest();
       if (manifest == null) return null;
@@ -118,7 +147,41 @@ class UpdateService {
       final abi = await primaryAbi();
       final raw = abis[abi];
       if (raw is! Map<String, dynamic>) return null;
-      final variant = AbiVariant.fromJson(raw);
+      final AbiVariant variant;
+      try {
+        variant = AbiVariant.fromJson(raw);
+      } catch (_) {
+        // Missing fields (e.g. version_code) → drop the manifest entirely
+        // rather than show a half-validated banner.
+        return null;
+      }
+
+      // Origin pin: refuse any download URL pointing outside our update
+      // host. Defends against a tampered manifest that redirects the APK
+      // fetch to an attacker-controlled bucket.
+      if (!isOriginAllowed(variant.url)) {
+        return null;
+      }
+
+      // Bump-protection: the manifest's `version_code` MUST exceed the
+      // installed APK's buildNumber. Without this, an attacker who can
+      // serve a tampered manifest could re-advertise an OLDER (but
+      // legitimately signed) APK with a known vulnerability under a
+      // higher semver string.
+      if (variant.versionCode <= installedCode) {
+        return null;
+      }
+
+      // Wave TBD — proper minisign-style signature verification using the
+      // `ed25519` Dart package + a baked-in pubkey. For now we only flag
+      // the presence of the field so we can start populating it on the
+      // server side without breaking older clients.
+      // TODO(wave-tbd): verify variant.signature against manifest digest.
+      if (variant.signature != null) {
+        // ignore: avoid_print
+        print('UpdateService: signature field present but verification '
+            'not yet implemented — value=${variant.signature}');
+      }
 
       return UpdateInfo(
         currentVersion: installed,
@@ -133,6 +196,11 @@ class UpdateService {
       return null;
     }
   }
+
+  /// True iff [url] points at our pinned update host. Public so tests can
+  /// exercise the origin-pin matrix without spinning up a manifest server.
+  static bool isOriginAllowed(String url) =>
+      url.startsWith(kUpdateOriginPrefix);
 
   static Future<Map<String, dynamic>?> _fetchManifest() async {
     final client = HttpClient()..connectionTimeout = kManifestTimeout;
@@ -155,6 +223,12 @@ class UpdateService {
       client.close(force: true);
     }
   }
+
+  /// Test-visible alias for the private semver comparator. Lives in the
+  /// same library so production paths can keep using `_isNewer`, while
+  /// `update_service_test.dart` can drive the comparator without a fragile
+  /// `@visibleForTesting` reflection dance.
+  static bool isNewer(String a, String b) => _isNewer(a, b);
 
   /// Strict numeric semver comparison: returns true if [a] > [b].
   /// Handles `1.0.0`, `1.0.0+1` (drops build metadata after `+`).

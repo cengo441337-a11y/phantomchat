@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
+import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import type { IncomingMessage, MsgLine, ReactionEntry } from "../types";
 import { renderMarkdown } from "../lib/markdown";
 import { autoLinkify } from "../lib/linkify";
@@ -128,6 +129,477 @@ function groupReactions(reactions: ReactionEntry[]): Array<{
   }));
 }
 
+/// Open an image file in the OS's default image viewer via the
+/// `tauri-plugin-opener` plugin. We intentionally pass the absolute
+/// disk path (NOT the asset:// URL) since the plugin invokes the
+/// platform's `xdg-open` / `open` / `start` which expect a file path.
+async function openInDefaultViewer(savedPath: string) {
+  try {
+    await openPath(savedPath);
+  } catch (e) {
+    console.warn("openPath failed:", e);
+  }
+}
+
+interface RowProps {
+  m: MsgLine;
+  i: number;
+  isLatest: boolean;
+  mentionLabels: string[];
+  pickerOpen: boolean;
+  onSetPicker: (idx: number | null) => void;
+  onBindClick?: () => void;
+  onOpenFolder?: () => void;
+  onReplyTo?: (msgId: string, preview: string) => void;
+  onReact?: (msgId: string, emoji: string, action: "add" | "remove") => void;
+  onTogglePin: (msgId: string, currentlyPinned: boolean) => void;
+  onToggleStar: (msgId: string, currentlyStarred: boolean) => void;
+  onJumpReply: (replyTargetMsgId: string) => void;
+  /// Live now-tick — only included as a memo-bust signal so rows with
+  /// `expires_at` re-render their countdown each second. Rows without
+  /// expires_at ignore it (memo predicate only checks nowTick when
+  /// expires_at is present).
+  nowTick: number;
+}
+
+/// Per-row render — extracted so it can be memoised. With 1000+ messages,
+/// re-rendering every row on every parent state change (e.g. typing-pill
+/// flicker, reaction add) drops frames. Memoising on the row's identity
+/// tuple — (msg_id, pinned, starred, reactions length, body) — collapses
+/// the work to only the rows that actually changed.
+const MessageRow = memo(function MessageRow(props: RowProps) {
+  const {
+    m,
+    i,
+    isLatest,
+    mentionLabels,
+    pickerOpen,
+    onSetPicker,
+    onBindClick,
+    onOpenFolder,
+    onReplyTo,
+    onReact,
+    onTogglePin,
+    onToggleStar,
+    onJumpReply,
+  } = props;
+  const { t } = useTranslation();
+
+  const arrow =
+    m.kind === "incoming" ? "◀" : m.kind === "outgoing" ? "▶" : "·";
+  const arrowColor =
+    m.kind === "incoming"
+      ? "text-cyber-cyan"
+      : m.kind === "outgoing"
+      ? "text-neon-green"
+      : "text-soft-grey";
+
+  const tampered = m.sig_ok === false;
+  const isUnbound = m.kind === "incoming" && m.label.startsWith("?");
+  const isFile = m.row_kind === "file" && m.file_meta;
+  const isVoice = m.row_kind === "voice" && m.voice_meta;
+  const fileHashBad = isFile && m.file_meta?.sha256_ok === false;
+  const isImageRow =
+    isFile &&
+    m.file_meta &&
+    isImageFile(m.file_meta.mime, m.file_meta.filename);
+
+  const enterClass = isLatest
+    ? m.kind === "incoming"
+      ? "pc-row-in-incoming"
+      : m.kind === "outgoing"
+      ? "pc-row-in-outgoing"
+      : ""
+    : "";
+
+  const canMutateState = m.kind !== "system" && !!m.msg_id;
+  const pinnedTint = m.pinned
+    ? "ring-1 ring-neon-magenta/40 bg-neon-magenta/5 "
+    : "";
+
+  const expiresInSecs =
+    m.expires_at !== undefined
+      ? Math.max(0, m.expires_at - Math.floor(Date.now() / 1000))
+      : null;
+
+  const replyTarget = m.reply_to?.in_reply_to_msg_id;
+
+  const grouped = m.reactions ? groupReactions(m.reactions) : [];
+
+  return (
+    <div
+      data-msg-idx={i}
+      data-msg-id={m.msg_id ?? ""}
+      className={
+        "group relative flex flex-col text-sm leading-snug font-mono px-1 py-0.5 rounded " +
+        (tampered || fileHashBad
+          ? "bg-red-900/30 border border-red-500/50 "
+          : "") +
+        pinnedTint +
+        enterClass
+      }
+      title={
+        tampered
+          ? t("message_stream.tampered_title")
+          : fileHashBad
+          ? t("message_stream.hash_mismatch_title")
+          : undefined
+      }
+    >
+      {m.reply_to && (
+        <button
+          onClick={() => {
+            if (!replyTarget) return;
+            onJumpReply(replyTarget);
+          }}
+          className="ml-[80px] mb-0.5 block max-w-[80%] text-left text-xs px-2 py-1 rounded bg-neon-magenta/10 border-l-2 border-neon-magenta hover:bg-neon-magenta/20 transition-colors"
+          title={t("messages.reply.quote_jump_title")}
+        >
+          <span className="text-neon-magenta">{"↪"}</span>{" "}
+          <span className="text-soft-grey italic">
+            {m.reply_to.quoted_preview}
+          </span>
+        </button>
+      )}
+
+      <div className="flex items-start gap-3">
+        <span className="text-soft-grey text-xs w-[64px] shrink-0">
+          {m.ts}
+          {expiresInSecs !== null && (
+            <span
+              className="block text-[9px] text-cyber-cyan/80"
+              title={t("messages.disappearing.row_title")}
+            >
+              {t("messages.disappearing.row_label", {
+                remaining: humanTtl(expiresInSecs),
+              })}
+            </span>
+          )}
+        </span>
+        <span className={`${arrowColor} font-bold w-4 shrink-0`}>{arrow}</span>
+
+        {(tampered || fileHashBad) && (
+          <span
+            className="text-red-400 font-bold w-4 shrink-0"
+            aria-label={
+              tampered
+                ? t("message_stream.warn_tampered")
+                : t("message_stream.warn_hash")
+            }
+          >
+            ⚠
+          </span>
+        )}
+
+        {m.pinned && (
+          <span
+            className="text-neon-magenta text-xs shrink-0"
+            aria-label="pinned"
+            title={t("messages.pin.pinned_badge_title")}
+          >
+            {"\u{1F4CC}"}
+          </span>
+        )}
+
+        <span
+          className={
+            "w-[100px] shrink-0 truncate whitespace-pre " +
+            (tampered || fileHashBad ? "text-red-300" : "text-neon-magenta")
+          }
+        >
+          {truncateLabel(m.label)}
+        </span>
+
+        {isVoice && m.voice_meta ? (
+          <VoiceMessageBubble
+            meta={m.voice_meta}
+            outgoing={m.kind === "outgoing"}
+          />
+        ) : isImageRow && m.file_meta ? (
+          fileHashBad ? (
+            <div className="flex flex-col gap-1">
+              <div className="w-[180px] h-[100px] bg-red-900/40 border border-red-500/60 rounded flex items-center justify-center text-red-300 text-xs uppercase tracking-wider">
+                ⚠ {t("message_stream.image_tampered_caption")}
+              </div>
+              <div className="text-[10px] text-red-300/80">
+                {m.file_meta.filename} ({humanSize(m.file_meta.size)})
+              </div>
+            </div>
+          ) : m.file_meta.saved_path ? (
+            <div className="flex flex-col gap-1">
+              <img
+                src={convertFileSrc(m.file_meta.saved_path)}
+                alt={m.file_meta.filename}
+                loading="lazy"
+                onClick={() =>
+                  void openInDefaultViewer(m.file_meta!.saved_path!)
+                }
+                className="rounded border border-dim-green/40 hover:border-neon-magenta/60 transition-colors"
+                style={{
+                  maxWidth: "320px",
+                  maxHeight: "240px",
+                  cursor: "pointer",
+                }}
+                title={t("message_stream.image_open_title", {
+                  filename: m.file_meta.filename,
+                })}
+              />
+              <div className="text-[10px] text-soft-grey">
+                {t("message_stream.image_caption_received", {
+                  filename: m.file_meta.filename,
+                  size: humanSize(m.file_meta.size),
+                })}
+              </div>
+            </div>
+          ) : (
+            <span className="flex items-center gap-2 text-neon-green/90">
+              <span aria-hidden="true">{"\u{1F4CE}"}</span>
+              <span className="text-soft-grey">
+                {t("message_stream.sent_label")}
+              </span>
+              <span className="font-bold">{m.file_meta.filename}</span>
+              <span className="text-soft-grey text-xs">
+                ({humanSize(m.file_meta.size)})
+              </span>
+            </span>
+          )
+        ) : isFile && m.file_meta ? (
+          <span
+            className={
+              "flex items-center gap-2 " +
+              (fileHashBad
+                ? "text-red-200/90"
+                : m.kind === "outgoing"
+                ? "text-neon-green/90"
+                : "text-cyber-cyan")
+            }
+          >
+            <span aria-hidden="true">{"\u{1F4CE}"}</span>
+            <span className="text-soft-grey">
+              {m.kind === "outgoing"
+                ? t("message_stream.sent_label")
+                : t("message_stream.received_label")}
+            </span>
+            {onOpenFolder && m.file_meta.saved_path ? (
+              <button
+                onClick={onOpenFolder}
+                className="underline hover:text-neon-magenta hover:pc-brand-glow-magenta transition-colors"
+                title={t("message_stream.saved_to", {
+                  path: m.file_meta.saved_path,
+                })}
+              >
+                {m.file_meta.filename}
+              </button>
+            ) : (
+              <span className="font-bold">{m.file_meta.filename}</span>
+            )}
+            <span className="text-soft-grey text-xs">
+              ({humanSize(m.file_meta.size)})
+            </span>
+            {m.kind === "incoming" &&
+              onOpenFolder &&
+              m.file_meta.saved_path && (
+                <button
+                  onClick={onOpenFolder}
+                  className="ml-2 neon-button-magenta text-xs"
+                  title={t("message_stream.open_folder_title")}
+                >
+                  {t("message_stream.open_folder_button")}
+                </button>
+              )}
+          </span>
+        ) : tampered ? (
+          <span className="pc-glitch text-red-200/90" data-text={m.body}>
+            {m.body}
+          </span>
+        ) : (
+          <RenderedBody
+            body={m.body}
+            isSystem={m.kind === "system"}
+            mentionLabels={mentionLabels}
+          />
+        )}
+
+        {isUnbound && onBindClick && (
+          <button
+            onClick={onBindClick}
+            className="ml-2 neon-button-magenta"
+            title={t("message_stream.bind_button_title", { label: m.label })}
+          >
+            {t("message_stream.bind_button")}
+          </button>
+        )}
+
+        {canMutateState && (
+          <div className="absolute right-1 top-0 hidden group-hover:flex items-center gap-1 bg-bg-panel/95 border border-dim-green/40 rounded px-1 py-0.5 shadow">
+            <button
+              onClick={() => onTogglePin(m.msg_id!, !!m.pinned)}
+              className={
+                "text-[11px] px-1 hover:text-neon-magenta transition-colors " +
+                (m.pinned ? "text-neon-magenta" : "text-soft-grey")
+              }
+              title={
+                m.pinned
+                  ? t("messages.pin.unpin_title")
+                  : t("messages.pin.pin_title")
+              }
+            >
+              {"\u{1F4CC}"}
+            </button>
+            <button
+              onClick={() => onToggleStar(m.msg_id!, !!m.starred)}
+              className={
+                "text-[11px] px-1 hover:text-cyber-cyan transition-colors " +
+                (m.starred ? "text-cyber-cyan" : "text-soft-grey")
+              }
+              title={
+                m.starred
+                  ? t("messages.star.unstar_title")
+                  : t("messages.star.star_title")
+              }
+            >
+              {"\u{2B50}"}
+            </button>
+          </div>
+        )}
+
+        {m.starred && (
+          <span
+            className="ml-auto text-cyber-cyan text-xs select-none"
+            aria-label="starred"
+            title={t("messages.star.starred_badge_title")}
+          >
+            {"\u{2B50}"}
+          </span>
+        )}
+
+        {m.kind === "outgoing" && m.delivery_state && (
+          <span
+            className={
+              (m.starred ? "" : "ml-auto") +
+              " pl-2 text-xs select-none " +
+              (m.delivery_state === "read"
+                ? "text-cyber-cyan font-bold"
+                : "text-soft-grey")
+            }
+            aria-label={`delivery: ${m.delivery_state}`}
+            title={`delivery: ${m.delivery_state}`}
+          >
+            {m.delivery_state === "sent" ? "✓" : "✓✓"}
+          </span>
+        )}
+      </div>
+
+      {grouped.length > 0 && (
+        <div className="ml-[180px] mt-0.5 flex flex-wrap gap-1">
+          {grouped.map(g => {
+            const youReacted = g.senders.some(s => s === "you");
+            return (
+              <button
+                key={g.emoji}
+                onClick={() => {
+                  if (!m.msg_id || !onReact) return;
+                  onReact(m.msg_id, g.emoji, youReacted ? "remove" : "add");
+                }}
+                title={t("messages.reactions.pill_title", {
+                  senders: g.senders.join(", "),
+                })}
+                className={
+                  "text-xs px-1.5 py-0.5 rounded-full border transition-colors " +
+                  (youReacted
+                    ? "bg-neon-magenta/20 border-neon-magenta/60 text-neon-magenta"
+                    : "bg-bg-elevated border-dim-green/40 text-soft-grey hover:border-neon-magenta/40")
+                }
+              >
+                <span aria-hidden="true">{g.emoji}</span>{" "}
+                <span className="font-bold">{g.count}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {m.kind !== "system" && (onReplyTo || onReact) && (
+        <div
+          className={
+            "absolute right-2 top-0 -translate-y-1/2 flex items-center gap-1 " +
+            "opacity-0 group-hover:opacity-100 transition-opacity " +
+            "bg-bg-elevated border border-dim-green/40 rounded shadow-md px-1 py-0.5"
+          }
+        >
+          {onReplyTo && m.msg_id && (
+            <button
+              onClick={() => {
+                if (!m.msg_id) return;
+                onReplyTo(m.msg_id, m.body);
+              }}
+              className="text-xs text-cyber-cyan hover:text-neon-magenta px-1 transition-colors"
+              title={t("messages.reply.toolbar_title")}
+            >
+              {t("messages.reply.toolbar_button")}
+            </button>
+          )}
+          {onReact && m.msg_id && (
+            <button
+              onClick={() => onSetPicker(i)}
+              className="text-xs text-cyber-cyan hover:text-neon-magenta px-1 transition-colors"
+              title={t("messages.reactions.toolbar_title")}
+            >
+              {t("messages.reactions.toolbar_button")}
+            </button>
+          )}
+        </div>
+      )}
+
+      {pickerOpen && onReact && m.msg_id && (
+        <EmojiPicker
+          onSelect={emoji => {
+            if (!m.msg_id) return;
+            const youReactedSame = (m.reactions ?? []).some(
+              r => r.sender_label === "you" && r.emoji === emoji,
+            );
+            onReact(m.msg_id, emoji, youReactedSame ? "remove" : "add");
+          }}
+          onClose={() => onSetPicker(null)}
+        />
+      )}
+    </div>
+  );
+}, (prev, next) => {
+  // Memoization key — re-render only when something visible to this row
+  // changed. Spec-listed identity fields: msg_id, pinned, starred,
+  // reactions length. We extend with body / delivery_state / label /
+  // sig_ok / expires_at / pickerOpen / isLatest because each of those
+  // also drives visible row state and skipping them would render stale.
+  // nowTick is included ONLY for rows that carry an expires_at, so the
+  // 1-Hz countdown re-renders just those rows instead of busting the
+  // memo on every row across the whole list.
+  const a = prev.m;
+  const b = next.m;
+  if (a.expires_at !== undefined || b.expires_at !== undefined) {
+    if (prev.nowTick !== next.nowTick) return false;
+  }
+  return (
+    a.msg_id === b.msg_id &&
+    a.pinned === b.pinned &&
+    a.starred === b.starred &&
+    (a.reactions?.length ?? 0) === (b.reactions?.length ?? 0) &&
+    a.body === b.body &&
+    a.delivery_state === b.delivery_state &&
+    a.expires_at === b.expires_at &&
+    a.label === b.label &&
+    a.sig_ok === b.sig_ok &&
+    prev.i === next.i &&
+    prev.isLatest === next.isLatest &&
+    prev.pickerOpen === next.pickerOpen &&
+    prev.mentionLabels === next.mentionLabels &&
+    prev.onBindClick === next.onBindClick &&
+    prev.onOpenFolder === next.onOpenFolder &&
+    prev.onReplyTo === next.onReplyTo &&
+    prev.onReact === next.onReact
+  );
+});
+
 export default function MessageStream({
   messages,
   activeLabel,
@@ -141,8 +613,8 @@ export default function MessageStream({
   onReact,
 }: Props) {
   const { t } = useTranslation();
-  const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
   /// Index of the row whose emoji picker is currently open. `null` =
   /// no popover. Closing happens on outside click + Escape inside the
   /// EmojiPicker component itself.
@@ -152,37 +624,34 @@ export default function MessageStream({
   /// the parent's `messages` reducer to fire on every tick. Bumped once
   /// per second only when at least one row actually has an `expires_at`
   /// to avoid pointless re-renders on chats without disappearing on.
-  const [, setNowTick] = useState(0);
+  const [nowTick, setNowTick] = useState(0);
   useEffect(() => {
     const hasExpiring = messages.some(m => m.expires_at !== undefined);
     if (!hasExpiring) return;
     const id = window.setInterval(() => setNowTick(n => n + 1), 1000);
     return () => window.clearInterval(id);
   }, [messages]);
+
   /// Set of `msg_id`s we've already fired `mark_read` for. Persists across
   /// re-renders via `useRef` so a rapid scroll doesn't trigger duplicate
   /// receipts for the same incoming row.
   const readFiredRef = useRef<Set<string>>(new Set());
   const onMarkReadRef = useRef(onMarkRead);
   onMarkReadRef.current = onMarkRead;
-  // Keep a stable index → message lookup for the IntersectionObserver
-  // callback (which only sees the DOM node + its data attribute).
+  // Stable index → message lookup for the rangeChanged callback.
   const messagesRef = useRef<MsgLine[]>(messages);
   messagesRef.current = messages;
 
   // ── Wave 8G drawer state ─────────────────────────────────────────────
-  // `pinnedDrawer` lists pinned messages of the active conversation.
-  // `starredDrawer` lists ALL starred messages (cross-conversation).
-  // Both are fetched lazily on open via the backend list helpers so the
-  // drawer always reflects on-disk truth, not in-memory `messages`.
   const [pinnedDrawerOpen, setPinnedDrawerOpen] = useState(false);
   const [starredDrawerOpen, setStarredDrawerOpen] = useState(false);
-  const [pinnedDrawerRows, setPinnedDrawerRows] = useState<IncomingMessage[]>([]);
-  const [starredDrawerRows, setStarredDrawerRows] = useState<IncomingMessage[]>([]);
+  const [pinnedDrawerRows, setPinnedDrawerRows] = useState<IncomingMessage[]>(
+    [],
+  );
+  const [starredDrawerRows, setStarredDrawerRows] = useState<IncomingMessage[]>(
+    [],
+  );
 
-  // Per-conversation pinned/starred counters drive the header buttons —
-  // computed from in-memory `messages` so they update instantly when the
-  // backend `message_state_changed` event lands without re-fetching.
   const pinnedCount = useMemo(
     () => messages.filter(m => m.pinned).length,
     [messages],
@@ -192,103 +661,54 @@ export default function MessageStream({
     [messages],
   );
 
-  // ── IntersectionObserver: fire `mark_read` for incoming rows ──────────
-  // (unchanged from Wave 6 — see git history for the full rationale).
-  useEffect(() => {
-    const root = containerRef.current;
-    if (!root) return;
-    if (typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(
-      entries => {
-        if (!document.hasFocus()) return;
-        const cb = onMarkReadRef.current;
-        if (!cb) return;
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
-          const idxStr = (entry.target as HTMLElement).dataset.msgIdx;
-          if (idxStr === undefined) continue;
-          const idx = Number(idxStr);
-          const m = messagesRef.current[idx];
-          if (!m) continue;
-          if (m.kind !== "incoming") continue;
-          if (!m.msg_id) continue;
-          if (readFiredRef.current.has(m.msg_id)) continue;
-          if (
-            m.label.startsWith("?") ||
-            m.label === "INBOX" ||
-            m.label === "INBOX!"
-          ) {
-            continue;
-          }
-          readFiredRef.current.add(m.msg_id);
-          cb(m.msg_id, m.label);
-        }
-      },
-      { root, threshold: 0.6 },
-    );
-    const rows = root.querySelectorAll<HTMLElement>("[data-msg-idx]");
-    rows.forEach(r => observer.observe(r));
-    return () => observer.disconnect();
-  }, [messages.length]);
-
-  // Pin to the bottom whenever a new message arrives — chat-app convention.
-  useEffect(() => {
-    if (highlightedIdx !== undefined) return;
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, highlightedIdx]);
-
-  // Search-panel "jump to result" target.
+  // ── Search-panel "jump to result" target ─────────────────────────────
+  // Virtuoso owns the scroll viewport now, so we drive scrolls via its
+  // imperative handle. The pulse-class still lands via DOM lookup once
+  // the row mounts (Virtuoso virtualises rows, so we wait a frame to
+  // give the just-rendered target time to attach to the DOM).
   useEffect(() => {
     if (highlightedIdx === undefined) return;
-    const root = containerRef.current;
-    if (!root) return;
-    const row = root.querySelector<HTMLElement>(
-      `[data-msg-idx="${highlightedIdx}"]`,
-    );
-    if (!row) return;
-    row.scrollIntoView({ behavior: "smooth", block: "center" });
-    row.classList.remove("pc-search-pulse");
-    void row.offsetWidth;
-    row.classList.add("pc-search-pulse");
-    const tt = window.setTimeout(() => {
+    virtuosoRef.current?.scrollToIndex({
+      index: highlightedIdx,
+      align: "center",
+      behavior: "smooth",
+    });
+    const tick = window.setTimeout(() => {
+      const root = containerRef.current;
+      if (!root) return;
+      const row = root.querySelector<HTMLElement>(
+        `[data-msg-idx="${highlightedIdx}"]`,
+      );
+      if (!row) return;
       row.classList.remove("pc-search-pulse");
-    }, 1600);
-    return () => window.clearTimeout(tt);
+      void row.offsetWidth;
+      row.classList.add("pc-search-pulse");
+      window.setTimeout(() => row.classList.remove("pc-search-pulse"), 1600);
+    }, 100);
+    return () => window.clearTimeout(tick);
   }, [highlightedIdx]);
 
   // ── Wave 8G: pin / star action handlers ──────────────────────────────
-  // Fire-and-forget — the backend emits `message_state_changed`, which
-  // App.tsx listens for + patches `messages` in place. Errors are
-  // surfaced via console.warn rather than the message stream so a failed
-  // pin doesn't pollute the transcript with a system row.
-  function handleTogglePin(msgId: string, currentlyPinned: boolean) {
-    const cmd = currentlyPinned ? "unpin_message" : "pin_message";
-    void invoke(cmd, { msgId }).catch(e =>
-      console.warn(`${cmd} failed:`, e),
-    );
-  }
-  function handleToggleStar(msgId: string, currentlyStarred: boolean) {
-    const cmd = currentlyStarred ? "unstar_message" : "star_message";
-    void invoke(cmd, { msgId }).catch(e =>
-      console.warn(`${cmd} failed:`, e),
-    );
-  }
+  const handleTogglePin = useCallback(
+    (msgId: string, currentlyPinned: boolean) => {
+      const cmd = currentlyPinned ? "unpin_message" : "pin_message";
+      void invoke(cmd, { msgId }).catch(e =>
+        console.warn(`${cmd} failed:`, e),
+      );
+    },
+    [],
+  );
+  const handleToggleStar = useCallback(
+    (msgId: string, currentlyStarred: boolean) => {
+      const cmd = currentlyStarred ? "unstar_message" : "star_message";
+      void invoke(cmd, { msgId }).catch(e =>
+        console.warn(`${cmd} failed:`, e),
+      );
+    },
+    [],
+  );
 
-  /// Open an image file in the OS's default image viewer via the
-  /// `tauri-plugin-opener` plugin. We intentionally pass the absolute
-  /// disk path (NOT the asset:// URL) since the plugin invokes the
-  /// platform's `xdg-open` / `open` / `start` which expect a file path.
-  async function openInDefaultViewer(savedPath: string) {
-    try {
-      await openPath(savedPath);
-    } catch (e) {
-      console.warn("openPath failed:", e);
-    }
-  }
-
-  /// Refresh the pinned drawer rows from the backend. Called on open and
-  /// any time `messages.length` changes while the drawer is mounted so a
-  /// new pin lands without a manual refresh.
+  // Drawer fetches — unchanged
   useEffect(() => {
     if (!pinnedDrawerOpen) return;
     void invoke<IncomingMessage[]>("list_pinned_messages", {
@@ -311,26 +731,33 @@ export default function MessageStream({
       });
   }, [starredDrawerOpen, messages.length]);
 
-  /// Drawer click → scroll to in-stream row by msg_id. Re-uses the same
-  /// `pc-search-pulse` highlight class as the SearchPanel jump path so
-  /// the visual affordance stays consistent across all "jump to" flows.
-  function jumpToMsgId(msgId: string) {
-    const root = containerRef.current;
-    if (!root) return;
-    // Find the matching row index by linear scan — message arrays are
-    // small enough that this is cheaper than maintaining a side index.
-    const idx = messages.findIndex(m => m.msg_id === msgId);
+  /// Drawer / reply-quote click → scroll to in-stream row by msg_id.
+  /// With virtualization, the target row may not be mounted; we
+  /// scrollToIndex first, then apply the pulse on the next frame after
+  /// Virtuoso has had time to mount it.
+  const jumpToMsgId = useCallback((msgId: string) => {
+    const idx = messagesRef.current.findIndex(m => m.msg_id === msgId);
     if (idx < 0) return;
-    const row = root.querySelector<HTMLElement>(`[data-msg-idx="${idx}"]`);
-    if (!row) return;
-    row.scrollIntoView({ behavior: "smooth", block: "center" });
-    row.classList.remove("pc-search-pulse");
-    void row.offsetWidth;
-    row.classList.add("pc-search-pulse");
-    window.setTimeout(() => row.classList.remove("pc-search-pulse"), 1600);
-  }
+    virtuosoRef.current?.scrollToIndex({
+      index: idx,
+      align: "center",
+      behavior: "smooth",
+    });
+    window.setTimeout(() => {
+      const root = containerRef.current;
+      if (!root) return;
+      const row = root.querySelector<HTMLElement>(`[data-msg-idx="${idx}"]`);
+      if (!row) return;
+      row.classList.remove("pc-search-pulse");
+      void row.offsetWidth;
+      row.classList.add("pc-search-pulse");
+      window.setTimeout(() => row.classList.remove("pc-search-pulse"), 1600);
+    }, 100);
+  }, []);
 
-  const title = activeLabel ? `#${activeLabel}` : t("message_stream.title_default");
+  const title = activeLabel
+    ? `#${activeLabel}`
+    : t("message_stream.title_default");
 
   // Stable label-set for the mention rewriter — only re-derive when the
   // upstream array's contents change. Re-deriving on every render would
@@ -338,8 +765,40 @@ export default function MessageStream({
   const mentionLabels = useMemo(
     () => (knownMentionLabels ? knownMentionLabels.filter(Boolean) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [knownMentionLabels?.join("")],
+    [knownMentionLabels?.join("")],
   );
+
+  /// Virtuoso `rangeChanged` callback — replaces the old
+  /// IntersectionObserver. Fires `mark_read(msg_id, label)` for every
+  /// incoming row in the visible range we haven't already acked. Same
+  /// gates as before (focused window, has msg_id, not unbound / INBOX).
+  const handleRangeChanged = useCallback(
+    (range: { startIndex: number; endIndex: number }) => {
+      if (typeof document !== "undefined" && !document.hasFocus()) return;
+      const cb = onMarkReadRef.current;
+      if (!cb) return;
+      const arr = messagesRef.current;
+      for (let idx = range.startIndex; idx <= range.endIndex; idx += 1) {
+        const m = arr[idx];
+        if (!m) continue;
+        if (m.kind !== "incoming") continue;
+        if (!m.msg_id) continue;
+        if (readFiredRef.current.has(m.msg_id)) continue;
+        if (
+          m.label.startsWith("?") ||
+          m.label === "INBOX" ||
+          m.label === "INBOX!"
+        ) {
+          continue;
+        }
+        readFiredRef.current.add(m.msg_id);
+        cb(m.msg_id, m.label);
+      }
+    },
+    [],
+  );
+
+  const lastIdx = messages.length - 1;
 
   return (
     <section className="flex-1 flex flex-col bg-bg-deep/70 backdrop-blur-[1px] border-b border-dim-green/40 overflow-hidden pc-pane pc-pane-magenta">
@@ -369,504 +828,45 @@ export default function MessageStream({
         </div>
       </div>
       <div className="flex-1 flex overflow-hidden">
-        <div
-          ref={containerRef}
-          className="flex-1 overflow-y-auto px-4 py-3 space-y-1"
-        >
-          {messages.length === 0 && (
-            <div className="text-soft-grey italic text-xs">
+        <div ref={containerRef} className="flex-1 overflow-hidden">
+          {messages.length === 0 ? (
+            <div className="px-4 py-3 text-soft-grey italic text-xs">
               {t("message_stream.empty")}
             </div>
-          )}
-          {messages.map((m, i) => {
-            const arrow =
-              m.kind === "incoming" ? "◀" : m.kind === "outgoing" ? "▶" : "·";
-            const arrowColor =
-              m.kind === "incoming"
-                ? "text-cyber-cyan"
-                : m.kind === "outgoing"
-                ? "text-neon-green"
-                : "text-soft-grey";
-
-            const tampered = m.sig_ok === false;
-            const isUnbound =
-              m.kind === "incoming" && m.label.startsWith("?");
-            const isFile = m.row_kind === "file" && m.file_meta;
-            const isVoice = m.row_kind === "voice" && m.voice_meta;
-            const fileHashBad =
-              isFile && m.file_meta?.sha256_ok === false;
-            // Wave 8G — image branch test. We render the inline thumbnail
-            // ONLY when the row has a non-falsy `saved_path` (incoming
-            // side) OR we'd fall back to the generic 📎 link otherwise.
-            const isImageRow =
-              isFile &&
-              m.file_meta &&
-              isImageFile(m.file_meta.mime, m.file_meta.filename);
-
-            const isLatest = i === messages.length - 1;
-            const enterClass = isLatest
-              ? m.kind === "incoming"
-                ? "pc-row-in-incoming"
-                : m.kind === "outgoing"
-                ? "pc-row-in-outgoing"
-                : ""
-              : "";
-
-            // Wave 8G — pinned tint + control-row availability flag.
-            // We only show pin/star toolbar for non-system rows that
-            // carry a stable `msg_id` (the backend keys mutations on
-            // msg_id, so a row missing one — i.e. legacy persisted
-            // pre-feature rows — has nothing to pin/star).
-            const canMutateState = m.kind !== "system" && !!m.msg_id;
-            const pinnedTint = m.pinned ? "ring-1 ring-neon-magenta/40 bg-neon-magenta/5 " : "";
-
-            // ── Disappearing-messages countdown ───────────────────────────
-            // Compute remaining seconds against the live now-tick. Rows past
-            // their deadline render with "0s" briefly until the 60s purge
-            // sweep on the backend removes them and the parent drops them
-            // from React state via the `messages_purged` event.
-            const expiresInSecs =
-              m.expires_at !== undefined
-                ? Math.max(0, m.expires_at - Math.floor(Date.now() / 1000))
-                : null;
-
-            // ── Reply-quote click target ──────────────────────────────────
-            // When a row carries `reply_to`, clicking the quote block scrolls
-            // to the original message via the same data-attribute trick the
-            // search-jump uses.
-            const replyTarget = m.reply_to?.in_reply_to_msg_id;
-
-            // Group reactions for the pill row; cheap O(N) per render but
-            // the per-row reaction count is always tiny (single-digit).
-            const grouped = m.reactions ? groupReactions(m.reactions) : [];
-
-            return (
-              <div
-                key={i}
-                data-msg-idx={i}
-                data-msg-id={m.msg_id ?? ""}
-                className={
-                  "group relative flex flex-col text-sm leading-snug font-mono px-1 py-0.5 rounded " +
-                  (tampered || fileHashBad
-                    ? "bg-red-900/30 border border-red-500/50 "
-                    : "") +
-                  pinnedTint +
-                  enterClass
-                }
-                title={
-                  tampered
-                    ? t("message_stream.tampered_title")
-                    : fileHashBad
-                    ? t("message_stream.hash_mismatch_title")
-                    : undefined
-                }
-              >
-                {/* Reply-quote block — a slim magenta-tinted card above the
-                    message body. Click scrolls to the quoted row using the
-                    same data-msg-id lookup the search-jump path uses. */}
-                {m.reply_to && (
-                  <button
-                    onClick={() => {
-                      if (!replyTarget) return;
-                      const root = containerRef.current;
-                      if (!root) return;
-                      const target = root.querySelector<HTMLElement>(
-                        `[data-msg-id="${CSS.escape(replyTarget)}"]`,
-                      );
-                      if (!target) return;
-                      target.scrollIntoView({
-                        behavior: "smooth",
-                        block: "center",
-                      });
-                      target.classList.remove("pc-search-pulse");
-                      void target.offsetWidth;
-                      target.classList.add("pc-search-pulse");
-                      window.setTimeout(() => {
-                        target.classList.remove("pc-search-pulse");
-                      }, 1600);
-                    }}
-                    className="ml-[80px] mb-0.5 block max-w-[80%] text-left text-xs px-2 py-1 rounded bg-neon-magenta/10 border-l-2 border-neon-magenta hover:bg-neon-magenta/20 transition-colors"
-                    title={t("messages.reply.quote_jump_title")}
-                  >
-                    <span className="text-neon-magenta">{"↪"}</span>{" "}
-                    <span className="text-soft-grey italic">
-                      {m.reply_to.quoted_preview}
-                    </span>
-                  </button>
-                )}
-
-                <div className="flex items-start gap-3">
-                <span className="text-soft-grey text-xs w-[64px] shrink-0">
-                  {m.ts}
-                  {expiresInSecs !== null && (
-                    <span
-                      className="block text-[9px] text-cyber-cyan/80"
-                      title={t("messages.disappearing.row_title")}
-                    >
-                      {t("messages.disappearing.row_label", {
-                        remaining: humanTtl(expiresInSecs),
-                      })}
-                    </span>
-                  )}
-                </span>
-                <span className={`${arrowColor} font-bold w-4 shrink-0`}>
-                  {arrow}
-                </span>
-
-                {(tampered || fileHashBad) && (
-                  <span
-                    className="text-red-400 font-bold w-4 shrink-0"
-                    aria-label={
-                      tampered
-                        ? t("message_stream.warn_tampered")
-                        : t("message_stream.warn_hash")
-                    }
-                  >
-                    ⚠
-                  </span>
-                )}
-
-                {/* Pinned indicator — small 📌 in front of the label so it
-                    sits on the same baseline as other row glyphs. Hidden
-                    when the row's hover-toolbar is opening anyway. */}
-                {m.pinned && (
-                  <span
-                    className="text-neon-magenta text-xs shrink-0"
-                    aria-label="pinned"
-                    title={t("messages.pin.pinned_badge_title")}
-                  >
-                    {"\u{1F4CC}"}
-                  </span>
-                )}
-
-                <span
-                  className={
-                    "w-[100px] shrink-0 truncate whitespace-pre " +
-                    (tampered || fileHashBad
-                      ? "text-red-300"
-                      : "text-neon-magenta")
-                  }
-                >
-                  {truncateLabel(m.label)}
-                </span>
-
-                {isVoice && m.voice_meta ? (
-                  /* Wave 11B — voice-message bubble. The HTML5 <audio>
-                     element decodes both opus (.ogg) and aac (.m4a)
-                     natively, so no Rust audio dep is required. The
-                     on-disk path comes from `<app_data>/voice/<msg_id>.<ext>`
-                     and is fed through `convertFileSrc` inside the bubble
-                     to produce the `tauri://` URL. The standard reply /
-                     react / pin / star toolbar still applies — this is
-                     just the body renderer. */
-                  <VoiceMessageBubble
-                    meta={m.voice_meta}
-                    outgoing={m.kind === "outgoing"}
-                  />
-                ) : isImageRow && m.file_meta ? (
-                  /* Wave 8G inline image branch. We render:
-                     - sender-side echo (no saved_path): generic 📎 caption fallback,
-                       since the bytes aren't on disk locally to convertFileSrc.
-                     - receiver-side w/ saved_path + sha256_ok != false: <img>
-                     - receiver-side w/ sha256_ok === false: red placeholder + ⚠
-                       (per spec: NEVER render the actual image content for a
-                       tampered file — security). */
-                  fileHashBad ? (
-                    <div className="flex flex-col gap-1">
-                      <div className="w-[180px] h-[100px] bg-red-900/40 border border-red-500/60 rounded flex items-center justify-center text-red-300 text-xs uppercase tracking-wider">
-                        ⚠ {t("message_stream.image_tampered_caption")}
-                      </div>
-                      <div className="text-[10px] text-red-300/80">
-                        {m.file_meta.filename} ({humanSize(m.file_meta.size)})
-                      </div>
-                    </div>
-                  ) : m.file_meta.saved_path ? (
-                    <div className="flex flex-col gap-1">
-                      <img
-                        src={convertFileSrc(m.file_meta.saved_path)}
-                        alt={m.file_meta.filename}
-                        loading="lazy"
-                        onClick={() =>
-                          void openInDefaultViewer(m.file_meta!.saved_path!)
-                        }
-                        className="rounded border border-dim-green/40 hover:border-neon-magenta/60 transition-colors"
-                        style={{
-                          maxWidth: "320px",
-                          maxHeight: "240px",
-                          cursor: "pointer",
-                        }}
-                        title={t("message_stream.image_open_title", {
-                          filename: m.file_meta.filename,
-                        })}
-                      />
-                      <div className="text-[10px] text-soft-grey">
-                        {t("message_stream.image_caption_received", {
-                          filename: m.file_meta.filename,
-                          size: humanSize(m.file_meta.size),
-                        })}
-                      </div>
-                    </div>
-                  ) : (
-                    /* Outgoing-side echo — sender doesn't keep a local
-                       copy, so we can't thumbnail. Fall through to the
-                       generic 📎 caption + filename. */
-                    <span className="flex items-center gap-2 text-neon-green/90">
-                      <span aria-hidden="true">{"\u{1F4CE}"}</span>
-                      <span className="text-soft-grey">
-                        {t("message_stream.sent_label")}
-                      </span>
-                      <span className="font-bold">{m.file_meta.filename}</span>
-                      <span className="text-soft-grey text-xs">
-                        ({humanSize(m.file_meta.size)})
-                      </span>
-                    </span>
-                  )
-                ) : isFile && m.file_meta ? (
-                  /* Non-image file row — original 📎 affordance. */
-                  <span
-                    className={
-                      "flex items-center gap-2 " +
-                      (fileHashBad
-                        ? "text-red-200/90"
-                        : m.kind === "outgoing"
-                        ? "text-neon-green/90"
-                        : "text-cyber-cyan")
-                    }
-                  >
-                    <span aria-hidden="true">{"\u{1F4CE}"}</span>
-                    <span className="text-soft-grey">
-                      {m.kind === "outgoing"
-                        ? t("message_stream.sent_label")
-                        : t("message_stream.received_label")}
-                    </span>
-                    {onOpenFolder && m.file_meta.saved_path ? (
-                      <button
-                        onClick={onOpenFolder}
-                        className="underline hover:text-neon-magenta hover:pc-brand-glow-magenta transition-colors"
-                        title={t("message_stream.saved_to", { path: m.file_meta.saved_path })}
-                      >
-                        {m.file_meta.filename}
-                      </button>
-                    ) : (
-                      <span className="font-bold">
-                        {m.file_meta.filename}
-                      </span>
-                    )}
-                    <span className="text-soft-grey text-xs">
-                      ({humanSize(m.file_meta.size)})
-                    </span>
-                    {m.kind === "incoming" &&
-                      onOpenFolder &&
-                      m.file_meta.saved_path && (
-                        <button
-                          onClick={onOpenFolder}
-                          className="ml-2 neon-button-magenta text-xs"
-                          title={t("message_stream.open_folder_title")}
-                        >
-                          {t("message_stream.open_folder_button")}
-                        </button>
-                      )}
-                  </span>
-                ) : tampered ? (
-                  /* Subtle dual-pseudo glitch — see .pc-glitch in styles.css.
-                     data-text mirrors the body so ::before/::after can render
-                     the offset cyan/magenta copies. */
-                  <span
-                    className="pc-glitch text-red-200/90"
-                    data-text={m.body}
-                  >
-                    {m.body}
-                  </span>
-                ) : (
-                  // Text body: pipe through markdown -> auto-linkify ->
-                  // mention pills. Every stage HTML-escapes its inputs,
-                  // so a literal <script> from a peer renders as visible
-                  // text rather than executing. The system row inten-
-                  // tionally bypasses the rich pipeline — its strings
-                  // come from our own i18n bundle, never from a peer.
-                  <RenderedBody
-                    body={m.body}
-                    isSystem={m.kind === "system"}
+          ) : (
+            <Virtuoso
+              ref={virtuosoRef}
+              className="pc-virtuoso-stream"
+              style={{ height: "100%" }}
+              data={messages}
+              // Auto-scroll to bottom when new messages land. "smooth" is
+              // close enough to the legacy `scrollIntoView({behavior:
+              // "smooth"})` chat-app convention to keep the same feel.
+              followOutput="smooth"
+              increaseViewportBy={{ top: 400, bottom: 400 }}
+              rangeChanged={handleRangeChanged}
+              itemContent={(idx, m) => (
+                <div className="px-4 py-0.5">
+                  <MessageRow
+                    m={m}
+                    i={idx}
+                    isLatest={idx === lastIdx}
                     mentionLabels={mentionLabels}
+                    pickerOpen={pickerForIdx === idx}
+                    onSetPicker={setPickerForIdx}
+                    onBindClick={onBindClick}
+                    onOpenFolder={onOpenFolder}
+                    onReplyTo={onReplyTo}
+                    onReact={onReact}
+                    onTogglePin={handleTogglePin}
+                    onToggleStar={handleToggleStar}
+                    onJumpReply={jumpToMsgId}
+                    nowTick={nowTick}
                   />
-                )}
-
-                {isUnbound && onBindClick && (
-                  <button
-                    onClick={onBindClick}
-                    className="ml-2 neon-button-magenta"
-                    title={t("message_stream.bind_button_title", { label: m.label })}
-                  >
-                    {t("message_stream.bind_button")}
-                  </button>
-                )}
-
-                {/* Wave 8G hover toolbar — Pin / Star buttons. Only visible
-                    on hover (group-hover) and only for rows we can mutate
-                    (i.e. with a stable msg_id). Sits absolute against the
-                    row's right edge so it doesn't reflow message text. */}
-                {canMutateState && (
-                  <div className="absolute right-1 top-0 hidden group-hover:flex items-center gap-1 bg-bg-panel/95 border border-dim-green/40 rounded px-1 py-0.5 shadow">
-                    <button
-                      onClick={() => handleTogglePin(m.msg_id!, !!m.pinned)}
-                      className={
-                        "text-[11px] px-1 hover:text-neon-magenta transition-colors " +
-                        (m.pinned ? "text-neon-magenta" : "text-soft-grey")
-                      }
-                      title={
-                        m.pinned
-                          ? t("messages.pin.unpin_title")
-                          : t("messages.pin.pin_title")
-                      }
-                    >
-                      {"\u{1F4CC}"}
-                    </button>
-                    <button
-                      onClick={() => handleToggleStar(m.msg_id!, !!m.starred)}
-                      className={
-                        "text-[11px] px-1 hover:text-cyber-cyan transition-colors " +
-                        (m.starred ? "text-cyber-cyan" : "text-soft-grey")
-                      }
-                      title={
-                        m.starred
-                          ? t("messages.star.unstar_title")
-                          : t("messages.star.star_title")
-                      }
-                    >
-                      {"\u{2B50}"}
-                    </button>
-                  </div>
-                )}
-
-                {/* Starred badge at the right edge — sits on the same row
-                    as the delivery-state ticks, separated by a gap. */}
-                {m.starred && (
-                  <span
-                    className="ml-auto text-cyber-cyan text-xs select-none"
-                    aria-label="starred"
-                    title={t("messages.star.starred_badge_title")}
-                  >
-                    {"\u{2B50}"}
-                  </span>
-                )}
-
-                {/* Delivery-state ticks. `ml-auto` only kicks in when the
-                    starred badge above isn't present (CSS auto-margin
-                    collapse), so we add a manual `pl-2` for spacing. */}
-                {m.kind === "outgoing" && m.delivery_state && (
-                  <span
-                    className={
-                      (m.starred ? "" : "ml-auto") +
-                      " pl-2 text-xs select-none " +
-                      (m.delivery_state === "read"
-                        ? "text-cyber-cyan font-bold"
-                        : "text-soft-grey")
-                    }
-                    aria-label={`delivery: ${m.delivery_state}`}
-                    title={`delivery: ${m.delivery_state}`}
-                  >
-                    {m.delivery_state === "sent" ? "✓" : "✓✓"}
-                  </span>
-                )}
                 </div>
-
-                {/* Reactions pill row — grouped by emoji, count + sender
-                    tooltip. Click on an existing pill toggles the active
-                    user's vote for that emoji (add if "you" hasn't reacted
-                    with this emoji yet, remove otherwise). */}
-                {grouped.length > 0 && (
-                  <div className="ml-[180px] mt-0.5 flex flex-wrap gap-1">
-                    {grouped.map(g => {
-                      const youReacted = g.senders.some(s => s === "you");
-                      return (
-                        <button
-                          key={g.emoji}
-                          onClick={() => {
-                            if (!m.msg_id || !onReact) return;
-                            onReact(
-                              m.msg_id,
-                              g.emoji,
-                              youReacted ? "remove" : "add",
-                            );
-                          }}
-                          title={t("messages.reactions.pill_title", {
-                            senders: g.senders.join(", "),
-                          })}
-                          className={
-                            "text-xs px-1.5 py-0.5 rounded-full border transition-colors " +
-                            (youReacted
-                              ? "bg-neon-magenta/20 border-neon-magenta/60 text-neon-magenta"
-                              : "bg-bg-elevated border-dim-green/40 text-soft-grey hover:border-neon-magenta/40")
-                          }
-                        >
-                          <span aria-hidden="true">{g.emoji}</span>{" "}
-                          <span className="font-bold">{g.count}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Hover toolbar — appears on row hover for incoming /
-                    outgoing rows. System rows have no actionable content.
-                    Sits absolute in the row's top-right so it doesn't
-                    reflow the layout when toggling visibility. */}
-                {m.kind !== "system" && (onReplyTo || onReact) && (
-                  <div
-                    className={
-                      "absolute right-2 top-0 -translate-y-1/2 flex items-center gap-1 " +
-                      "opacity-0 group-hover:opacity-100 transition-opacity " +
-                      "bg-bg-elevated border border-dim-green/40 rounded shadow-md px-1 py-0.5"
-                    }
-                  >
-                    {onReplyTo && m.msg_id && (
-                      <button
-                        onClick={() => {
-                          if (!m.msg_id) return;
-                          onReplyTo(m.msg_id, m.body);
-                        }}
-                        className="text-xs text-cyber-cyan hover:text-neon-magenta px-1 transition-colors"
-                        title={t("messages.reply.toolbar_title")}
-                      >
-                        {t("messages.reply.toolbar_button")}
-                      </button>
-                    )}
-                    {onReact && m.msg_id && (
-                      <button
-                        onClick={() => setPickerForIdx(i)}
-                        className="text-xs text-cyber-cyan hover:text-neon-magenta px-1 transition-colors"
-                        title={t("messages.reactions.toolbar_title")}
-                      >
-                        {t("messages.reactions.toolbar_button")}
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {pickerForIdx === i && onReact && m.msg_id && (
-                  <EmojiPicker
-                    onSelect={emoji => {
-                      if (!m.msg_id) return;
-                      // If "you" already reacted with this exact emoji,
-                      // toggle remove; otherwise add. The backend de-dupes
-                      // identical add events server-side too, but we make
-                      // the UI feel snappy by inferring intent here.
-                      const youReactedSame = (m.reactions ?? []).some(
-                        r => r.sender_label === "you" && r.emoji === emoji,
-                      );
-                      onReact(
-                        m.msg_id,
-                        emoji,
-                        youReactedSame ? "remove" : "add",
-                      );
-                    }}
-                    onClose={() => setPickerForIdx(null)}
-                  />
-                )}
-              </div>
-            );
-          })}
-          <div ref={bottomRef} />
+              )}
+            />
+          )}
         </div>
 
         {/* ── Pinned drawer (per-conversation) ───────────────────────── */}
@@ -935,10 +935,6 @@ export default function MessageStream({
                   <li
                     key={i}
                     onClick={() => {
-                      // Switch conversation first so the row is in the
-                      // active stream, then jump on the next tick once
-                      // App.tsx has re-rendered with the new active
-                      // contact.
                       if (
                         onSwitchConversation &&
                         m.sender_label &&
@@ -991,8 +987,6 @@ function RenderedBody({
     const linked = autoLinkify(md);
     const { html: withMentions } = detectMentions(linked, mentionLabels);
     return withMentions;
-    // mentionLabels is memoised by the parent; re-run only when the
-    // body text or label-set actually changes.
   }, [body, isSystem, mentionLabels]);
 
   if (isSystem) {

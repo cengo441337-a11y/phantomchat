@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$HOME/Android/Sdk/ndk/28.2.13676358}"
 export ANDROID_NDK_HOME
 
-ABIS=("arm64-v8a")  # add "armeabi-v7a" "x86_64" once you need them
+ABIS=("arm64-v8a" "armeabi-v7a" "x86_64")
 MODE="release"
 [[ "${1:-}" == "--debug" ]] && MODE="debug"
 
@@ -45,12 +45,11 @@ if [ "$MODE" = release ]; then
     #                       crash reports collected from production devices.
     mkdir -p "$REPO_ROOT/mobile/build/symbols"
     flutter build apk --release \
-        --target-platform android-arm64 \
         --split-per-abi \
         --obfuscate \
         --split-debug-info="$REPO_ROOT/mobile/build/symbols/"
 else
-    flutter build apk --debug --target-platform android-arm64
+    flutter build apk --debug
 fi
 
 echo
