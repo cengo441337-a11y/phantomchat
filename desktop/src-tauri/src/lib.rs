@@ -10,6 +10,8 @@
 //! `~/.local/share/...` on Linux for `cargo check` purposes.
 
 mod ai_bridge;
+#[cfg(feature = "stt")]
+mod ai_bridge_stt;
 
 use std::{
     fs,
@@ -1996,6 +1998,28 @@ async fn spawn_listener_task(
                                 sig_ok,
                                 &contacts_path,
                             );
+                            // Wave 11D: hand the FULL wire plaintext (prefix
+                            // included) to the AI bridge so it can detect
+                            // the VOICE-1 head, locate the just-saved audio
+                            // file, transcribe via whisper.cpp, then route
+                            // the transcript through the LLM. Sender
+                            // attribution mirrors the same INBOX / "?<hex>"
+                            // logic the text path uses — `should_respond`
+                            // gates on the resolved label.
+                            let voice_sender_label =
+                                resolve_sender_label_for_bridge(
+                                    sender_pub,
+                                    sig_ok,
+                                    &contacts_path,
+                                );
+                            // Treat the wire bytes as a `&str` for the
+                            // bridge — `from_utf8_lossy` matches the text
+                            // path (binary bytes survive as replacement
+                            // chars, but the ASCII `VOICE-1:` head is
+                            // intact, which is all the prefix check needs).
+                            let voice_pt =
+                                String::from_utf8_lossy(&msg.plaintext).to_string();
+                            ai_bridge_maybe_handle(&app, &voice_sender_label, &voice_pt);
                             return;
                         }
                     }
@@ -5237,6 +5261,228 @@ fn ai_bridge_clear_history(app: AppHandle, contact_label: String) -> Result<(), 
     ai_bridge::clear_history(&dir, &contact_label).map_err(|e| e.to_string())
 }
 
+/// Wave 11D — list every whisper model in the published catalogue, with a
+/// `downloaded` flag indicating whether the user already has each one
+/// sitting in `<app_data>/whisper/`. Pure metadata; no network. Always
+/// callable regardless of the `stt` feature flag — the UI uses this to
+/// surface "build doesn't have STT" gracefully.
+#[tauri::command]
+fn ai_bridge_list_whisper_models(
+    app: AppHandle,
+) -> Result<Vec<ai_bridge::WhisperModelInfo>, String> {
+    let dir = app_data(&app).map_err(|e| e.to_string())?;
+    Ok(ai_bridge::list_whisper_models(&dir))
+}
+
+/// Wave 11D — stream a whisper.cpp ggml model from HuggingFace into
+/// `<app_data>/whisper/ggml-<name>.bin`. Emits `whisper_download_progress`
+/// events with `{name, downloaded_bytes, total_bytes}` so the Settings
+/// UI can render a progress bar. Idempotent — calling twice with the
+/// same name overwrites the existing file (useful if the previous
+/// download died mid-stream).
+///
+/// Stays compiled-in even when the `stt` feature is OFF: the user
+/// might be running a non-stt build but want to pre-stage a model for
+/// when they upgrade. The actual transcription path is what's
+/// feature-gated, not the download.
+#[tauri::command]
+async fn ai_bridge_download_whisper_model(
+    app: AppHandle,
+    name: String,
+) -> Result<String, String> {
+    use std::io::Write as _;
+    if !ai_bridge::is_known_whisper_model(&name) {
+        return Err(format!(
+            "unknown whisper model '{}' — must be one of the published catalogue",
+            name
+        ));
+    }
+    let dir = app_data(&app).map_err(|e| e.to_string())?;
+    let models_dir = ai_bridge::whisper_models_dir(&dir);
+    std::fs::create_dir_all(&models_dir)
+        .map_err(|e| format!("mkdir {}: {}", models_dir.display(), e))?;
+    let dest = ai_bridge::whisper_model_path(&dir, &name);
+    let url = ai_bridge::whisper_model_url(&name);
+
+    audit(
+        &app,
+        "ai_bridge",
+        "stt_model_download_start",
+        serde_json::json!({"name": &name, "url": &url}),
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60 * 30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("GET {}: {}", url, e))?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {} for {}", resp.status(), url));
+    }
+    let total_bytes = resp.content_length().unwrap_or(0);
+
+    // Write to a temp file then rename — half-downloaded files would
+    // confuse `is_file()` checks elsewhere into thinking we have a
+    // valid model.
+    let tmp = dest.with_extension("bin.partial");
+    let mut file = std::fs::File::create(&tmp)
+        .map_err(|e| format!("create {}: {}", tmp.display(), e))?;
+    let mut downloaded: u64 = 0;
+    // Throttle progress emit to once every 256 KB so a 1 GB download
+    // doesn't drown the React event bus in 250 k tiny events.
+    let mut next_emit_at: u64 = 0;
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| format!("chunk read: {e}"))?
+    {
+        file.write_all(&chunk)
+            .map_err(|e| format!("write {}: {}", tmp.display(), e))?;
+        downloaded += chunk.len() as u64;
+        if downloaded >= next_emit_at {
+            next_emit_at = downloaded + 256 * 1024;
+            let _ = app.emit(
+                "whisper_download_progress",
+                serde_json::json!({
+                    "name": &name,
+                    "downloaded_bytes": downloaded,
+                    "total_bytes": total_bytes,
+                }),
+            );
+        }
+    }
+    file.sync_all()
+        .map_err(|e| format!("sync {}: {}", tmp.display(), e))?;
+    drop(file);
+    std::fs::rename(&tmp, &dest)
+        .map_err(|e| format!("rename {} → {}: {}", tmp.display(), dest.display(), e))?;
+
+    // Final 100 % event so the UI snaps the bar to full.
+    let _ = app.emit(
+        "whisper_download_progress",
+        serde_json::json!({
+            "name": &name,
+            "downloaded_bytes": downloaded,
+            "total_bytes": total_bytes.max(downloaded),
+        }),
+    );
+
+    audit(
+        &app,
+        "ai_bridge",
+        "stt_model_download_done",
+        serde_json::json!({"name": &name, "bytes": downloaded}),
+    );
+    Ok(dest.to_string_lossy().to_string())
+}
+
+/// Wave 11D — extract the saved audio file path from a `VOICE-1:` wire
+/// payload, run whisper.cpp on it, return the transcription. Mirrors the
+/// parsing logic in `handle_incoming_voice_v1` (kept separate rather
+/// than refactored into a shared parser because the receive path also
+/// needs side-effects — file write, emit message — that this helper
+/// must NOT duplicate).
+#[cfg(feature = "stt")]
+async fn transcribe_voice_for_bridge(
+    app: &AppHandle,
+    app_data_dir: &std::path::Path,
+    cfg: &ai_bridge::AiBridgeConfig,
+    full_plaintext: &str,
+) -> anyhow::Result<String> {
+    use anyhow::anyhow;
+
+    // 1. Strip the prefix and parse the same 9-byte header
+    // `handle_incoming_voice_v1` parsed.
+    let bytes = full_plaintext.as_bytes();
+    if bytes.len() < VOICE_PREFIX_V1.len() + 9 {
+        return Err(anyhow!("VOICE-1 wire too short for STT"));
+    }
+    let body = &bytes[VOICE_PREFIX_V1.len()..];
+    let codec_id = body[0];
+    let ext = match codec_id {
+        0x00 => "ogg",
+        0x01 => "m4a",
+        other => return Err(anyhow!("unknown VOICE-1 codec_id 0x{:02x}", other)),
+    };
+
+    // 2. Re-derive the same msg_id `handle_incoming_voice_v1` did. Note:
+    // both helpers run on the listener thread within the same wall-clock
+    // second 99% of the time, but the `chrono::Local::now()` they each
+    // call independently means the timestamps may differ by ms-to-secs.
+    // Rather than racing, we re-scan the voice/ dir for a file with this
+    // codec extension that contains the audio body bytes — fast on a
+    // few-files dir, robust against the timestamp skew.
+    let voice_dir = app_data_dir.join("voice");
+    if !voice_dir.is_dir() {
+        return Err(anyhow!("voice dir not found"));
+    }
+    let audio_bytes = &body[9..];
+    let mut found: Option<PathBuf> = None;
+    if let Ok(rd) = std::fs::read_dir(&voice_dir) {
+        // Prefer newest first — STT runs right after the receive path
+        // wrote the file, so the matching `<msg_id>.<ext>` is almost
+        // always at the top of the dir listing.
+        let mut entries: Vec<_> = rd
+            .flatten()
+            .filter(|e| {
+                e.path().extension().and_then(|s| s.to_str()) == Some(ext)
+            })
+            .collect();
+        entries.sort_by_key(|e| {
+            e.metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        });
+        entries.reverse();
+        for e in entries {
+            let p = e.path();
+            if let Ok(disk_bytes) = std::fs::read(&p) {
+                if disk_bytes == audio_bytes {
+                    found = Some(p);
+                    break;
+                }
+            }
+        }
+    }
+    let path = found.ok_or_else(|| {
+        anyhow!("could not locate saved voice file in {}", voice_dir.display())
+    })?;
+
+    // 3. Build the WhisperConfig + invoke. whisper.cpp blocks the
+    // calling thread for inference duration (multi-second on a 30 s
+    // clip with the base model on CPU) — wrap in `spawn_blocking` so
+    // tokio's worker threads stay free.
+    let model_path = PathBuf::from(&cfg.stt_model_path);
+    let language = cfg.stt_language.clone().filter(|s| !s.is_empty());
+    let whisper_cfg = ai_bridge_stt::WhisperConfig {
+        enabled: cfg.stt_enabled,
+        model_path,
+        language,
+    };
+    let path_for_blocking = path.clone();
+    let app_for_audit = app.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        ai_bridge_stt::transcribe(&whisper_cfg, &path_for_blocking)
+    })
+    .await
+    .map_err(|e| anyhow!("STT thread join: {e}"))?;
+    let text = res?;
+    // Belt-and-braces: if the inference returns suspiciously short
+    // output (whisper occasionally emits "[BLANK_AUDIO]" for silence),
+    // surface a clear error rather than feeding noise to the LLM.
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed == "[BLANK_AUDIO]" {
+        let _ = app_for_audit.emit("error", "AI bridge: STT returned blank — skipping reply");
+        return Err(anyhow!("blank transcription"));
+    }
+    Ok(trimmed.to_string())
+}
+
 /// Manual one-shot test — sends `prompt` through the configured provider
 /// without involving the relay/inbox. Used by the Settings UI's "Test
 /// connection" button so the user can verify their config before flipping
@@ -5254,23 +5500,14 @@ async fn ai_bridge_test(app: AppHandle, prompt: String) -> Result<String, String
 /// Spawns a background task that calls the configured provider and replies
 /// via the existing send pipeline. Returns immediately so the listener loop
 /// stays unblocked.
+///
+/// Wave 11D — when the inbound message is a `VOICE-1:` envelope and STT
+/// is enabled in config (and the binary was built with `--features stt`),
+/// the audio is transcribed via on-device whisper.cpp first and the
+/// transcript is treated exactly like a typed message. Without STT —
+/// either compile-out or runtime-off or model-missing — voice messages
+/// still silently skip the bridge, preserving the Wave 11B behaviour.
 fn ai_bridge_maybe_handle(app: &AppHandle, sender_label: &str, plaintext: &str) {
-    // Wave 11B: voice messages are NOT auto-replied to by the LLM. The
-    // wire-prefix peek here doubles as a content-type guard — `should_respond`
-    // only inspects `sender_label`, so without this short-circuit the bridge
-    // would otherwise feed the literal label string ("🎙️ Voice message · 0:12")
-    // back to the LLM. We use `starts_with` on the bytes for the live emit
-    // path AND on the prefix-shaped plaintext label as a belt-and-braces
-    // check (the listener loop only ever calls this with the raw plaintext
-    // bytes wrapped in a `String::from_utf8_lossy`, which preserves the
-    // ASCII `VOICE-1:` head intact).
-    // TODO(Wave 11D): wire in STT here so voice messages CAN be auto-
-    // replied to by the bridge — the desktop will transcribe via a local
-    // whisper.cpp / API provider, then feed the transcript through
-    // `ai_bridge::complete` like a text turn.
-    if plaintext.starts_with("VOICE-1:") {
-        return;
-    }
     let app_data_dir = match app_data(app) {
         Ok(d) => d,
         Err(_) => return,
@@ -5279,14 +5516,92 @@ fn ai_bridge_maybe_handle(app: &AppHandle, sender_label: &str, plaintext: &str) 
     if !ai_bridge::should_respond(&cfg, sender_label) {
         return;
     }
+
+    // Voice-message branch. We intercept `VOICE-1:` payloads here BEFORE
+    // forwarding to `complete()` — otherwise the LLM would see the raw
+    // wire bytes (binary header + opus/aac stream) which is both useless
+    // and a privacy footgun (binary blobs round-tripped to a cloud LLM).
+    let is_voice = plaintext.starts_with("VOICE-1:");
+    if is_voice {
+        // Compile-time gate: if the build doesn't include the `stt`
+        // feature, voice messages skip the bridge silently — same
+        // behaviour the original Wave 11B short-circuit had.
+        #[cfg(not(feature = "stt"))]
+        {
+            return;
+        }
+        // Runtime gate: user hasn't enabled STT or hasn't downloaded a
+        // model yet. Skip silently — the voice row is already in the
+        // chat, the user can read it themselves.
+        #[cfg(feature = "stt")]
+        {
+            if !cfg.stt_enabled {
+                return;
+            }
+            let model_path = std::path::PathBuf::from(&cfg.stt_model_path);
+            if !model_path.is_file() {
+                return;
+            }
+        }
+    }
+
     let app = app.clone();
     let sender_label = sender_label.to_string();
     let plaintext = plaintext.to_string();
     tokio::spawn(async move {
+        // Wave 11D: VOICE-1 → transcribe → use transcript as the user
+        // turn. Errors here are audit-logged + we skip the auto-reply —
+        // the bridge stays alive for the next message.
+        let user_turn_text: String = if is_voice {
+            #[cfg(feature = "stt")]
+            {
+                match transcribe_voice_for_bridge(&app, &app_data_dir, &cfg, &plaintext).await {
+                    Ok(text) => text,
+                    Err(e) => {
+                        let _ = app.emit(
+                            "error",
+                            format!("AI bridge: STT failed: {}", e),
+                        );
+                        audit(
+                            &app,
+                            "ai_bridge",
+                            "stt_failed",
+                            serde_json::json!({"err": e.to_string(), "from": sender_label}),
+                        );
+                        return;
+                    }
+                }
+            }
+            // Defensive — the compile-time gate above already returned.
+            // The cfg-attr keeps the closure well-typed when stt is off.
+            #[cfg(not(feature = "stt"))]
+            {
+                return;
+            }
+        } else {
+            plaintext.clone()
+        };
+
+        if is_voice {
+            audit(
+                &app,
+                "ai_bridge",
+                "stt_ok",
+                serde_json::json!({
+                    "from": sender_label,
+                    "transcript_chars": user_turn_text.chars().count(),
+                }),
+            );
+        }
+
         let history = ai_bridge::get_history(&app_data_dir, &sender_label);
         // Wave 11F: per-contact provider/model/system-prompt overrides.
         let effective = ai_bridge::effective_config(&cfg, &sender_label);
         let max_turns = effective.max_history_turns;
+        // Reassign for downstream — the rest of this closure refers to
+        // `plaintext` as "what the user said", which after STT is the
+        // transcript, not the raw VOICE-1 wire bytes.
+        let plaintext = user_turn_text;
         match ai_bridge::complete(&effective, &history, &plaintext).await {
             Ok(reply) => {
                 let _ = ai_bridge::append_turn(
@@ -5444,6 +5759,9 @@ pub fn run() {
             ai_bridge_get_history,
             ai_bridge_clear_history,
             ai_bridge_test,
+            // ── Wave 11D: voice → STT → LLM ────────────────────────
+            ai_bridge_list_whisper_models,
+            ai_bridge_download_whisper_model,
         ])
         .setup(|app| {
             // Pre-create the data dir on first launch so command handlers
@@ -6061,6 +6379,36 @@ fn format_voice_duration(duration_ms: u32) -> String {
         format!("{}:{:02}:{:02}", hours, mins, secs)
     } else {
         format!("{}:{:02}", mins, secs)
+    }
+}
+
+/// Wave 11D — resolve the same sender label `handle_incoming_voice_v1`
+/// computes, but without any side effects (no IncomingMessage emit, no
+/// file write). Used by the AI-bridge hook so we can call
+/// `should_respond(label)` without duplicating the contact-book lookup
+/// inline at every callsite.
+fn resolve_sender_label_for_bridge(
+    sender_pub: Option<[u8; 32]>,
+    sig_ok: bool,
+    contacts_path: &std::path::Path,
+) -> String {
+    match sender_pub {
+        None => "INBOX".to_string(),
+        Some(_) if !sig_ok => "INBOX!".to_string(),
+        Some(pub_bytes) => {
+            let pub_hex = hex::encode(pub_bytes);
+            let book = load_contacts(contacts_path);
+            book.contacts
+                .iter()
+                .find(|c| {
+                    c.signing_pub
+                        .as_deref()
+                        .map(|h| h.eq_ignore_ascii_case(&pub_hex))
+                        .unwrap_or(false)
+                })
+                .map(|c| c.label.clone())
+                .unwrap_or_else(|| format!("?{}", &pub_hex[..8]))
+        }
     }
 }
 

@@ -237,7 +237,24 @@
       "overrides_inherit_provider": "(inherit base provider)",
       "overrides_model_placeholder": "model name (empty = base)",
       "overrides_prompt_placeholder": "system prompt (empty = base)",
-      "overrides_clear": "Clear override"
+      "overrides_clear": "Clear override",
+      "stt": {
+        "section_title": "Voice → Text → LLM (Wave 11D)",
+        "section_hint": "When enabled, incoming voice messages from allow-listed contacts are transcribed on this machine via whisper.cpp and the transcript is fed into the LLM exactly like a typed message. Audio bytes never leave this box — even with a cloud LLM provider, only the resulting text crosses the network.",
+        "enable_label": "Enable STT for voice messages",
+        "model_label": "Whisper model",
+        "model_recommended": "(recommended)",
+        "model_downloaded": "downloaded",
+        "model_not_downloaded": "not downloaded",
+        "download_button": "Download model",
+        "downloading": "Downloading… {{percent}}%",
+        "download_failed": "Download failed: {{error}}",
+        "download_success": "Downloaded ✓",
+        "language_label": "Language",
+        "language_auto": "auto-detect",
+        "build_disabled": "This build was compiled without STT support — voice messages will be skipped by the bridge regardless of this toggle. Rebuild with `--features stt` to enable.",
+        "model_missing": "No model selected — pick one above and click Download."
+      }
     },
     "about": {
       "title": "about",

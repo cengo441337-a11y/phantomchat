@@ -237,7 +237,24 @@
       "overrides_inherit_provider": "(Basis-Provider erben)",
       "overrides_model_placeholder": "Modell-Name (leer = Basis)",
       "overrides_prompt_placeholder": "System-Prompt (leer = Basis)",
-      "overrides_clear": "Override entfernen"
+      "overrides_clear": "Override entfernen",
+      "stt": {
+        "section_title": "Sprache → Text → LLM (Wave 11D)",
+        "section_hint": "Wenn aktiviert, werden eingehende Sprachnachrichten von freigegebenen Kontakten lokal via whisper.cpp transkribiert und die Transkription wird wie eine getippte Nachricht ans LLM weitergeleitet. Audio-Bytes verlassen niemals diese Maschine — selbst mit einem Cloud-LLM-Provider gehen nur Texte ins Netz.",
+        "enable_label": "STT für Sprachnachrichten aktivieren",
+        "model_label": "Whisper-Modell",
+        "model_recommended": "(empfohlen)",
+        "model_downloaded": "heruntergeladen",
+        "model_not_downloaded": "nicht heruntergeladen",
+        "download_button": "Modell herunterladen",
+        "downloading": "Lädt… {{percent}}%",
+        "download_failed": "Download fehlgeschlagen: {{error}}",
+        "download_success": "Heruntergeladen ✓",
+        "language_label": "Sprache",
+        "language_auto": "automatisch erkennen",
+        "build_disabled": "Dieser Build wurde ohne STT-Support kompiliert — Sprachnachrichten werden von der Bridge unabhängig von diesem Toggle übersprungen. Mit `--features stt` neu bauen, um zu aktivieren.",
+        "model_missing": "Kein Modell ausgewählt — oben wählen und auf Download klicken."
+      }
     },
     "about": {
       "title": "Über",

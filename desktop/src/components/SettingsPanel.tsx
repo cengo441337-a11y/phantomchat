@@ -16,6 +16,8 @@ import type {
   PrivacyConfigDto,
   RestoreResult,
   UpdateInfo,
+  WhisperDownloadProgress,
+  WhisperModelInfo,
 } from "../types";
 
 interface Props {
@@ -140,6 +142,50 @@ export default function SettingsPanel({ onClose }: Props) {
   const [aiTestResult, setAiTestResult] = useState<string | null>(null);
   const [aiTesting, setAiTesting] = useState(false);
 
+  // ── Wave 11D — voice → STT → LLM ────────────────────────────────────────
+  const [whisperModels, setWhisperModels] = useState<WhisperModelInfo[]>([]);
+  const [sttDownloading, setSttDownloading] = useState<string | null>(null);
+  const [sttDownloadPct, setSttDownloadPct] = useState<number>(0);
+  const [sttDownloadErr, setSttDownloadErr] = useState<string | null>(null);
+  const [sttDownloadDone, setSttDownloadDone] = useState<string | null>(null);
+
+  async function reloadWhisperModels() {
+    try {
+      const list = await invoke<WhisperModelInfo[]>(
+        "ai_bridge_list_whisper_models",
+      );
+      setWhisperModels(list);
+    } catch (e) {
+      // Older builds without the command registered: just leave the
+      // list empty — the section degrades to "no models available".
+      console.warn("ai_bridge_list_whisper_models failed:", e);
+      setWhisperModels([]);
+    }
+  }
+
+  async function downloadWhisperModel(name: string) {
+    setSttDownloading(name);
+    setSttDownloadPct(0);
+    setSttDownloadErr(null);
+    setSttDownloadDone(null);
+    try {
+      const path = await invoke<string>("ai_bridge_download_whisper_model", {
+        name,
+      });
+      // Auto-select the just-downloaded model in the config so the user
+      // doesn't have to fish through the dropdown afterwards.
+      if (aiCfg) {
+        await saveAiCfg({ ...aiCfg, stt_model_path: path });
+      }
+      setSttDownloadDone(name);
+      void reloadWhisperModels();
+    } catch (e) {
+      setSttDownloadErr(String(e));
+    } finally {
+      setSttDownloading(null);
+    }
+  }
+
   async function reloadAiCfg() {
     try {
       const cfg = await invoke<AiBridgeConfig>("ai_bridge_get_config");
@@ -195,6 +241,29 @@ export default function SettingsPanel({ onClose }: Props) {
 
   useEffect(() => {
     void reloadAiCfg();
+    void reloadWhisperModels();
+    // Wave 11D — listen for download progress events emitted by the
+    // Rust download command. We update a single percentage scalar here
+    // rather than a per-model map because we only allow one download
+    // at a time (`sttDownloading` gates the button).
+    let unlistenProgress: (() => void) | undefined;
+    void listen<WhisperDownloadProgress>(
+      "whisper_download_progress",
+      ev => {
+        const total = ev.payload.total_bytes || 0;
+        if (total <= 0) return;
+        const pct = Math.min(
+          100,
+          Math.round((ev.payload.downloaded_bytes / total) * 100),
+        );
+        setSttDownloadPct(pct);
+      },
+    ).then(fn => {
+      unlistenProgress = fn;
+    });
+    return () => {
+      unlistenProgress?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -1730,6 +1799,128 @@ export default function SettingsPanel({ onClose }: Props) {
                   onBlur={() => void saveAiCfg(aiCfg)}
                   className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-24 font-mono"
                 />
+              </div>
+
+              {/* ── Wave 11D: voice → STT → LLM ──────────────────────── */}
+              <div className="border-t border-cyber-cyan/20 pt-3 space-y-2">
+                <div className="text-xs text-neon-green">
+                  {t("settings.ai_bridge.stt.section_title")}
+                </div>
+                <div className="text-[10px] text-soft-grey">
+                  {t("settings.ai_bridge.stt.section_hint")}
+                </div>
+                <label className="flex items-center gap-2 text-xs text-cyber-cyan">
+                  <input
+                    type="checkbox"
+                    checked={aiCfg.stt_enabled}
+                    onChange={e =>
+                      void saveAiCfg({
+                        ...aiCfg,
+                        stt_enabled: e.target.checked,
+                      })
+                    }
+                  />
+                  {t("settings.ai_bridge.stt.enable_label")}
+                </label>
+                <div>
+                  <label className="text-xs text-soft-grey block mb-1">
+                    {t("settings.ai_bridge.stt.model_label")}
+                  </label>
+                  <select
+                    value={aiCfg.stt_model_path}
+                    onChange={e =>
+                      void saveAiCfg({
+                        ...aiCfg,
+                        stt_model_path: e.target.value,
+                      })
+                    }
+                    className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full font-mono"
+                  >
+                    <option value="">
+                      — {t("settings.ai_bridge.stt.model_missing")}
+                    </option>
+                    {whisperModels
+                      .filter(m => m.downloaded)
+                      .map(m => (
+                        <option key={m.name} value={m.path}>
+                          {m.name} ({m.size_mb} MB)
+                          {m.recommended &&
+                            ` ${t("settings.ai_bridge.stt.model_recommended")}`}
+                        </option>
+                      ))}
+                  </select>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {whisperModels.map(m => (
+                      <button
+                        key={m.name}
+                        onClick={() => void downloadWhisperModel(m.name)}
+                        disabled={sttDownloading !== null}
+                        className="neon-button text-[10px] disabled:opacity-40"
+                        title={`ggml-${m.name}.bin (${m.size_mb} MB)`}
+                      >
+                        {sttDownloading === m.name
+                          ? t("settings.ai_bridge.stt.downloading", {
+                              percent: sttDownloadPct,
+                            })
+                          : `${t(
+                              "settings.ai_bridge.stt.download_button",
+                            )}: ${m.name}`}
+                      </button>
+                    ))}
+                  </div>
+                  {sttDownloading && (
+                    <div className="mt-2 h-1 bg-black border border-cyber-cyan/30">
+                      <div
+                        className="h-full bg-neon-green transition-all"
+                        style={{ width: `${sttDownloadPct}%` }}
+                      />
+                    </div>
+                  )}
+                  {sttDownloadDone && !sttDownloading && (
+                    <div className="text-[10px] text-neon-green mt-1">
+                      {t("settings.ai_bridge.stt.download_success")}{" "}
+                      ({sttDownloadDone})
+                    </div>
+                  )}
+                  {sttDownloadErr && (
+                    <div className="text-[10px] text-neon-magenta mt-1">
+                      {t("settings.ai_bridge.stt.download_failed", {
+                        error: sttDownloadErr,
+                      })}
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <label className="text-xs text-soft-grey block mb-1">
+                    {t("settings.ai_bridge.stt.language_label")}
+                  </label>
+                  <select
+                    value={aiCfg.stt_language ?? ""}
+                    onChange={e =>
+                      void saveAiCfg({
+                        ...aiCfg,
+                        stt_language:
+                          e.target.value === "" ? null : e.target.value,
+                      })
+                    }
+                    className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-40 font-mono"
+                  >
+                    <option value="">
+                      {t("settings.ai_bridge.stt.language_auto")}
+                    </option>
+                    <option value="en">English (en)</option>
+                    <option value="de">Deutsch (de)</option>
+                    <option value="fr">Français (fr)</option>
+                    <option value="es">Español (es)</option>
+                    <option value="it">Italiano (it)</option>
+                    <option value="nl">Nederlands (nl)</option>
+                    <option value="pt">Português (pt)</option>
+                    <option value="pl">Polski (pl)</option>
+                    <option value="ru">Русский (ru)</option>
+                    <option value="ja">日本語 (ja)</option>
+                    <option value="zh">中文 (zh)</option>
+                  </select>
+                </div>
               </div>
 
               {/* Test connection */}

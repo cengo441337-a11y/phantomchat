@@ -105,6 +105,27 @@ pub struct AiBridgeConfig {
     ///   - cap history at 0 for one contact (stateless) but 50 for another
     #[serde(default)]
     pub contact_overrides: HashMap<String, ContactOverride>,
+
+    // ── Wave 11D — voice → STT → LLM ────────────────────────────────────────
+    // When enabled AND the model file exists on disk, incoming `VOICE-1:`
+    // payloads from allow-listed contacts are transcribed via whisper.cpp
+    // and the transcription is fed into the LLM exactly like a typed
+    // message would be. Disabled by default until the user picks + downloads
+    // a model — the Rust side ALSO degrades to a silent skip if the binary
+    // was compiled `--no-default-features` (no `stt` feature → no whisper-rs
+    // linkage), so this flag toggling on without the feature is a no-op.
+    #[serde(default)]
+    pub stt_enabled: bool,
+    /// Absolute path to the ggml whisper model. `app_data/whisper/ggml-<name>.bin`
+    /// in normal use; left as a free-form string so power users can
+    /// point at a custom-trained model elsewhere on disk.
+    #[serde(default)]
+    pub stt_model_path: String,
+    /// `None` (or empty after migration) → whisper auto-detects from the
+    /// first 30 s of audio. Two-letter ISO 639-1 code otherwise (`"de"`,
+    /// `"en"`, …).
+    #[serde(default)]
+    pub stt_language: Option<String>,
 }
 
 /// Per-contact override applied on top of `AiBridgeConfig`. Every field is
@@ -151,6 +172,9 @@ impl Default for AiBridgeConfig {
             allowlist: Vec::new(),
             max_history_turns: DEFAULT_MAX_HISTORY_TURNS,
             contact_overrides: HashMap::new(),
+            stt_enabled: false,
+            stt_model_path: String::new(),
+            stt_language: None,
         }
     }
 }
@@ -659,5 +683,79 @@ async fn claude_api_complete(
         return Err(anyhow!("Anthropic response had no text content blocks"));
     }
     Ok(text)
+}
+
+// ── Wave 11D — whisper.cpp model catalogue ─────────────────────────────────
+//
+// HuggingFace mirrors the canonical ggerganov/whisper.cpp model artefacts
+// at predictable URLs of the form
+//   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-<name>.bin
+// We hard-code the catalogue here rather than fetching it at runtime so
+// the UI can render available models even when the user is offline (the
+// user just won't be able to download a new one until they have net).
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhisperModelInfo {
+    pub name: String,
+    pub size_mb: u32,
+    pub downloaded: bool,
+    pub recommended: bool,
+    /// Absolute on-disk path the model would land at after download.
+    /// Always populated even when `downloaded == false` so the UI can
+    /// pre-fill the config path the moment a download completes.
+    pub path: String,
+}
+
+/// Static catalogue of (name, size MB, recommended). Sized to match
+/// HuggingFace's published artefact sizes (rounded). `.en` variants are
+/// English-only and ~half the size of multilingual; the multilingual
+/// `base` is the recommended default for German + English households.
+pub const WHISPER_MODEL_CATALOGUE: &[(&str, u32, bool)] = &[
+    ("tiny.en", 39, false),
+    ("tiny", 75, false),
+    ("base.en", 74, false),
+    ("base", 142, true), // recommended default — multilingual, fast on CPU
+    ("small.en", 244, false),
+    ("small", 466, false),
+    ("medium.en", 769, false),
+    ("medium", 1_500, false),
+];
+
+pub fn whisper_models_dir(app_data_dir: &std::path::Path) -> PathBuf {
+    app_data_dir.join("whisper")
+}
+
+pub fn whisper_model_path(app_data_dir: &std::path::Path, name: &str) -> PathBuf {
+    whisper_models_dir(app_data_dir).join(format!("ggml-{}.bin", name))
+}
+
+pub fn whisper_model_url(name: &str) -> String {
+    format!(
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{}.bin",
+        name
+    )
+}
+
+pub fn list_whisper_models(app_data_dir: &std::path::Path) -> Vec<WhisperModelInfo> {
+    WHISPER_MODEL_CATALOGUE
+        .iter()
+        .map(|(name, size_mb, recommended)| {
+            let path = whisper_model_path(app_data_dir, name);
+            WhisperModelInfo {
+                name: (*name).to_string(),
+                size_mb: *size_mb,
+                downloaded: path.is_file(),
+                recommended: *recommended,
+                path: path.to_string_lossy().to_string(),
+            }
+        })
+        .collect()
+}
+
+/// Validate `name` is in the published catalogue — gates the download
+/// command so a malicious frontend payload can't coax the daemon into
+/// streaming a 5 GB unrelated file from huggingface into app_data.
+pub fn is_known_whisper_model(name: &str) -> bool {
+    WHISPER_MODEL_CATALOGUE.iter().any(|(n, _, _)| *n == name)
 }
 

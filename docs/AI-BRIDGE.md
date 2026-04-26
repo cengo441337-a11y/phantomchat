@@ -166,18 +166,88 @@ await invoke("ai_bridge_clear_history", { contactLabel: "alice" });
 
 ---
 
-## Voice-message integration (Wave 11B)
+## Voice-message integration
 
-Voice messages currently bypass the bridge — the audio bytes get
-saved to `<app_data>/voice/<msg_id>.<ext>` and surface as a
-`kind: "voice"` row in the chat, but nothing pipes them into the
-LLM. Wave 11D will add a whisper-cpp STT step before the LLM call:
+### Wave 11B — receive only
+
+Voice messages were saved to `<app_data>/voice/<msg_id>.<ext>` and
+surfaced as `kind: "voice"` rows in the chat, but the bridge did NOT
+auto-reply to them — the receive handler short-circuited on the
+`VOICE-1:` wire prefix.
+
+### Wave 11D — voice → STT → LLM
+
+The bridge now closes the loop. When an inbound message hits the
+listener, the routing is:
 
 ```
-voice-msg → whisper-cpp transcribe → LLM completion → text reply
+VOICE-1:<header><opus-or-aac>
+        │
+        ├─→ handle_incoming_voice_v1
+        │     · saves audio to <app_data>/voice/<msg_id>.<ext>
+        │     · emits IncomingMessage{kind:"voice"} to the React side
+        │
+        └─→ ai_bridge_maybe_handle (Wave 11D)
+              · checks should_respond(sender_label)
+              · runs whisper.cpp on the saved file (BLOCKING in spawn_blocking)
+              · feeds the transcript into ai_bridge::complete(...) like a typed turn
+              · sends the LLM reply back through the standard send pipeline
 ```
 
-Until then: type your message if you want the bridge to respond.
+The audio bytes never leave the desktop machine. Even with a
+cloud-LLM provider configured (Claude, OpenAI), the LLM only ever sees
+the transcribed TEXT — same privacy property as the rest of the bridge.
+
+#### Setup
+
+1. Open Settings → AI Bridge → "Voice → Text → LLM (Wave 11D)".
+2. Click "Download model" next to your preferred model. Files are
+   pulled from
+   `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-<name>.bin`
+   into `<app_data>/whisper/`. Progress bar updates in real time.
+3. Pick the downloaded model from the dropdown.
+4. (Optional) Pick a language. Auto-detect works fine for most cases
+   but adds ~100 ms of overhead for the first 30 s of every clip.
+5. Tick "Enable STT for voice messages".
+
+#### Model selection — tradeoffs
+
+| Model | Size | Languages | Speed (CPU) | WER  | Recommended for |
+|-------|------|-----------|-------------|------|------------------|
+| `tiny.en` | 39 MB | English only | fastest | high | English-only smoke tests |
+| `tiny` | 75 MB | multilingual | fastest | high | low-RAM boxes, all-language smoke tests |
+| `base.en` | 74 MB | English only | very fast | medium | English-only daily use on weak CPU |
+| `base` | 142 MB | multilingual | very fast | medium | **default recommendation** — German+English on commodity hardware |
+| `small.en` | 244 MB | English only | fast | low | English voice-to-action, accuracy-sensitive |
+| `small` | 466 MB | multilingual | fast | low | multi-language daily use |
+| `medium.en` | 769 MB | English only | medium | very low | English-only, accuracy >> latency |
+| `medium` | 1.5 GB | multilingual | medium | very low | best-in-class for multi-language voice |
+
+`.en` variants are roughly half the size and 5-15 % faster than the
+multilingual peers, at the cost of being English-only. If your home
+contacts speak any non-English language at all, pick the multilingual
+variant.
+
+#### Compile-time gating
+
+STT is behind a Cargo feature `stt` (default-on). The whisper-rs
+build pulls in `whisper.cpp` via `cmake` + a C compiler — CI runners
+without that toolchain can build with `--no-default-features` and ship
+a working bridge that just skips voice messages (same as Wave 11B
+behaviour). The Tauri commands `ai_bridge_list_whisper_models` and
+`ai_bridge_download_whisper_model` stay registered in either build so
+the Settings UI renders consistently.
+
+#### Privacy guarantee
+
+- Audio bytes are decoded + transcribed entirely in-process on the
+  desktop. No network calls during STT.
+- The LLM provider receives only the transcribed text, which it then
+  treats as a normal user turn (history, system prompt, allow-list — all
+  the existing Wave 11A/F gates apply unchanged).
+- The decoded PCM is never written to disk; only the original
+  encoded bytes (already on disk from the Wave 11B receive path) and
+  the resulting text exist in persistent storage.
 
 ---
 

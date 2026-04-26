@@ -74,9 +74,35 @@ phantomchat_relays = { path = "../../relays" }
 openmls    = "0.8"
 tls_codec  = { version = "0.4", features = ["derive", "serde", "mls"] }
 
+# ── Wave 11D — voice → STT → LLM ───────────────────────────────────────────
+# Both crates are gated behind the `stt` feature so CI machines without
+# `cmake` / `clang` (whisper.cpp build deps) can still `cargo check
+# --no-default-features` cleanly. Production releases enable `stt` via
+# the default feature set so the desktop bundle ships with on-device
+# transcription.
+#
+# - `whisper-rs`: bindings to whisper.cpp. CPU-only — no `cuda`/`metal`/
+#   `vulkan` features so the same artefact runs on any Win/Linux box.
+#   `log_backend` + `tracing_backend` route whisper's internal logs into
+#   the existing tauri logging path (otherwise they hit stderr noisily).
+# - `symphonia`: container/codec dispatcher used to decode the saved
+#   `<msg_id>.ogg` (Opus container) or `<msg_id>.m4a` (AAC in ISO BMFF)
+#   into f32 mono PCM at 16 kHz — what whisper expects. Pure-Rust;
+#   the Wave 11B mobile-side recorder picks codec by Android API level
+#   so we have to handle both wire formats. Note: symphonia 0.5 parses
+#   the OGG container but does NOT decode the Opus codec stream itself
+#   — the bridge surfaces that as a clean error + skip-reply rather
+#   than panicking, see `ai_bridge_stt::transcribe`.
+whisper-rs = { version = "0.16", optional = true, default-features = false, features = ["log_backend", "tracing_backend"] }
+symphonia  = { version = "0.5", optional = true, default-features = false, features = ["mp3", "aac", "isomp4", "ogg"] }
+
 [features]
-default = ["custom-protocol"]
+default = ["custom-protocol", "stt"]
 # Tauri convention: the `custom-protocol` feature is enabled in production
 # builds (`tauri build`) and skipped in `tauri dev` so the dev server can
 # proxy the frontend.
 custom-protocol = ["tauri/custom-protocol"]
+# Wave 11D — on-device speech-to-text for incoming voice messages. Behind
+# a feature so `cargo check --no-default-features` stays clean on hosts
+# without the whisper.cpp build toolchain (cmake + a C compiler).
+stt = ["dep:whisper-rs", "dep:symphonia"]

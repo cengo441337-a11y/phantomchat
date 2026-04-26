@@ -540,6 +540,41 @@ export interface AiBridgeConfig {
   /// Per-contact override map (Wave 11F). Keys are contact labels;
   /// values are partial overrides applied on top of the base config.
   contact_overrides: Record<string, AiBridgeContactOverride>;
+
+  // ── Wave 11D: voice → STT → LLM ─────────────────────────────────────────
+  /// When true AND `stt_model_path` exists on disk AND the desktop binary
+  /// was built with `--features stt`, incoming `VOICE-1:` messages from
+  /// allow-listed contacts are transcribed via on-device whisper.cpp and
+  /// fed into the LLM exactly like a typed message would be.
+  stt_enabled: boolean;
+  /// Absolute path to the ggml whisper model file. Normally
+  /// `<app_data>/whisper/ggml-<name>.bin` after the user clicks
+  /// "Download" in Settings, but can be a custom path for power users.
+  stt_model_path: string;
+  /// Two-letter ISO 639-1 hint passed to whisper. `null` (or empty
+  /// string) → auto-detect from the first 30 s of the audio.
+  stt_language: string | null;
+}
+
+// Wave 11D — one row in the whisper-model picker. Mirrors
+// `ai_bridge::WhisperModelInfo` on the Rust side.
+export interface WhisperModelInfo {
+  name: string;
+  size_mb: number;
+  downloaded: boolean;
+  recommended: boolean;
+  /// Absolute on-disk path the model would land at after download.
+  /// Always populated; `downloaded === false` means the path is just
+  /// where it WOULD land. UI pre-fills `stt_model_path` with this when
+  /// a download finishes.
+  path: string;
+}
+
+// Payload of the `whisper_download_progress` Tauri event.
+export interface WhisperDownloadProgress {
+  name: string;
+  downloaded_bytes: number;
+  total_bytes: number;
 }
 
 export interface AiBridgeContactOverride {
