@@ -5284,7 +5284,10 @@ fn ai_bridge_maybe_handle(app: &AppHandle, sender_label: &str, plaintext: &str) 
     let plaintext = plaintext.to_string();
     tokio::spawn(async move {
         let history = ai_bridge::get_history(&app_data_dir, &sender_label);
-        match ai_bridge::complete(&cfg, &history, &plaintext).await {
+        // Wave 11F: per-contact provider/model/system-prompt overrides.
+        let effective = ai_bridge::effective_config(&cfg, &sender_label);
+        let max_turns = effective.max_history_turns;
+        match ai_bridge::complete(&effective, &history, &plaintext).await {
             Ok(reply) => {
                 let _ = ai_bridge::append_turn(
                     &app_data_dir,
@@ -5293,7 +5296,7 @@ fn ai_bridge_maybe_handle(app: &AppHandle, sender_label: &str, plaintext: &str) 
                         role: ai_bridge::Role::User,
                         content: plaintext.clone(),
                     },
-                    cfg.max_history_turns,
+                    max_turns,
                 );
                 let _ = ai_bridge::append_turn(
                     &app_data_dir,
@@ -5302,7 +5305,7 @@ fn ai_bridge_maybe_handle(app: &AppHandle, sender_label: &str, plaintext: &str) 
                         role: ai_bridge::Role::Assistant,
                         content: reply.clone(),
                     },
-                    cfg.max_history_turns,
+                    max_turns,
                 );
                 if let Err(e) = send_message_inner(
                     app.clone(),

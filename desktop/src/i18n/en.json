@@ -230,7 +230,14 @@
       "test_title": "Test request",
       "test_button": "Test provider",
       "test_running": "Running…",
-      "saved": "Saved ✓"
+      "saved": "Saved ✓",
+      "overrides_title": "Per-contact routing (Wave 11F)",
+      "overrides_hint": "Optionally route specific contacts to a different provider, model, or system prompt. Leaving fields empty inherits from the base config.",
+      "overrides_active": "(override active)",
+      "overrides_inherit_provider": "(inherit base provider)",
+      "overrides_model_placeholder": "model name (empty = base)",
+      "overrides_prompt_placeholder": "system prompt (empty = base)",
+      "overrides_clear": "Clear override"
     },
     "about": {
       "title": "about",

@@ -1583,6 +1583,134 @@ export default function SettingsPanel({ onClose }: Props) {
                 </div>
               </div>
 
+              {/* Wave 11F: per-contact overrides */}
+              {aiCfg.allowlist.length > 0 && (
+                <div className="border-t border-cyber-cyan/20 pt-3">
+                  <div className="text-xs text-neon-green mb-1">
+                    {t("settings.ai_bridge.overrides_title")}
+                  </div>
+                  <div className="text-xs text-soft-grey mb-2">
+                    {t("settings.ai_bridge.overrides_hint")}
+                  </div>
+                  <div className="space-y-2">
+                    {aiCfg.allowlist.map(label => {
+                      const ov = aiCfg.contact_overrides[label];
+                      const hasOv = !!ov;
+                      return (
+                        <details
+                          key={label}
+                          className="bg-black/40 border border-cyber-cyan/20 px-2 py-1"
+                        >
+                          <summary className="text-xs text-cyber-cyan cursor-pointer flex items-center gap-2">
+                            <span className="font-mono">{label}</span>
+                            {hasOv && (
+                              <span className="text-neon-green text-[10px]">
+                                {t("settings.ai_bridge.overrides_active")}
+                              </span>
+                            )}
+                          </summary>
+                          <div className="mt-2 space-y-2 pl-2">
+                            <select
+                              value={ov?.provider ?? ""}
+                              onChange={e => {
+                                const next = { ...(ov ?? {}) };
+                                if (e.target.value === "") {
+                                  delete next.provider;
+                                } else {
+                                  next.provider = e.target.value as
+                                    AiBridgeConfig["provider"];
+                                }
+                                const overrides = { ...aiCfg.contact_overrides };
+                                if (Object.keys(next).length === 0) {
+                                  delete overrides[label];
+                                } else {
+                                  overrides[label] = next;
+                                }
+                                void saveAiCfg({
+                                  ...aiCfg,
+                                  contact_overrides: overrides,
+                                });
+                              }}
+                              className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full"
+                            >
+                              <option value="">
+                                {t("settings.ai_bridge.overrides_inherit_provider")}
+                              </option>
+                              <option value="claude_cli">claude_cli</option>
+                              <option value="ollama">ollama</option>
+                              <option value="openai_compat">openai_compat</option>
+                              <option value="claude_api">claude_api</option>
+                            </select>
+                            <input
+                              type="text"
+                              value={ov?.model ?? ""}
+                              onChange={e => {
+                                const next = { ...(ov ?? {}) };
+                                if (e.target.value.trim() === "") {
+                                  delete next.model;
+                                } else {
+                                  next.model = e.target.value;
+                                }
+                                setAiCfg({
+                                  ...aiCfg,
+                                  contact_overrides: {
+                                    ...aiCfg.contact_overrides,
+                                    [label]: next,
+                                  },
+                                });
+                              }}
+                              onBlur={() => void saveAiCfg(aiCfg)}
+                              className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full font-mono"
+                              placeholder={t(
+                                "settings.ai_bridge.overrides_model_placeholder",
+                              )}
+                            />
+                            <textarea
+                              value={ov?.system_prompt ?? ""}
+                              onChange={e => {
+                                const next = { ...(ov ?? {}) };
+                                if (e.target.value.trim() === "") {
+                                  delete next.system_prompt;
+                                } else {
+                                  next.system_prompt = e.target.value;
+                                }
+                                setAiCfg({
+                                  ...aiCfg,
+                                  contact_overrides: {
+                                    ...aiCfg.contact_overrides,
+                                    [label]: next,
+                                  },
+                                });
+                              }}
+                              onBlur={() => void saveAiCfg(aiCfg)}
+                              rows={2}
+                              className="bg-black border border-cyber-cyan text-cyber-cyan text-xs px-2 py-1 w-full font-mono"
+                              placeholder={t(
+                                "settings.ai_bridge.overrides_prompt_placeholder",
+                              )}
+                            />
+                            <button
+                              onClick={() => {
+                                const overrides = { ...aiCfg.contact_overrides };
+                                delete overrides[label];
+                                void saveAiCfg({
+                                  ...aiCfg,
+                                  contact_overrides: overrides,
+                                });
+                              }}
+                              disabled={!hasOv}
+                              className="text-xs text-neon-magenta hover:underline disabled:opacity-30"
+                            >
+                              {t("settings.ai_bridge.overrides_clear")}
+                            </button>
+                          </div>
+                        </details>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* History cap */}
               <div>
                 <label className="text-xs text-soft-grey block mb-1">

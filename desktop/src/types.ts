@@ -536,6 +536,17 @@ export interface AiBridgeConfig {
   system_prompt: string;
   allowlist: string[];
   max_history_turns: number;
+
+  /// Per-contact override map (Wave 11F). Keys are contact labels;
+  /// values are partial overrides applied on top of the base config.
+  contact_overrides: Record<string, AiBridgeContactOverride>;
+}
+
+export interface AiBridgeContactOverride {
+  provider?: AiBridgeProvider;
+  model?: string;
+  system_prompt?: string;
+  max_history_turns?: number;
 }
 
 export interface AiBridgeTurn {

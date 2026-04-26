@@ -27,6 +27,7 @@
 //! reply stateless (useful when the bridge sits in front of a tool-using
 //! agent that handles its own state).
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -95,6 +96,36 @@ pub struct AiBridgeConfig {
     /// (no auto-reply, no logging beyond the standard inbox path).
     pub allowlist: Vec<String>,
     pub max_history_turns: u32,
+
+    /// Per-contact overrides applied on top of the base config when the
+    /// sender's label matches a key. Missing fields inherit from base.
+    /// Use cases:
+    ///   - route a senior contact to claude-opus; route a casual one to ollama
+    ///   - give different contacts different system prompts (work vs personal)
+    ///   - cap history at 0 for one contact (stateless) but 50 for another
+    #[serde(default)]
+    pub contact_overrides: HashMap<String, ContactOverride>,
+}
+
+/// Per-contact override applied on top of `AiBridgeConfig`. Every field is
+/// optional — `None` means "use the base config's value". Stored in the
+/// same `ai_bridge.json` so a single save round-trips everything.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ContactOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ProviderKind>,
+    /// Override the per-provider model name. Routed to the right field
+    /// based on the (possibly-overridden) provider:
+    ///   ollama        → ollama_model
+    ///   openai_compat → openai_model
+    ///   claude_api    → claude_api_model
+    ///   claude_cli    → appended as `--model <m>` to the CLI args
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_history_turns: Option<u32>,
 }
 
 fn default_true() -> bool {
@@ -119,8 +150,47 @@ impl Default for AiBridgeConfig {
             system_prompt: "You are PhantomChat, the user's home assistant. The user is messaging you from their phone; keep replies concise and actionable.".to_string(),
             allowlist: Vec::new(),
             max_history_turns: DEFAULT_MAX_HISTORY_TURNS,
+            contact_overrides: HashMap::new(),
         }
     }
+}
+
+/// Apply any per-contact override on top of the base config. Returned as
+/// `Cow::Borrowed` when there's no override (zero-copy hot path) and
+/// `Cow::Owned` when an override merge produced a fresh struct.
+pub fn effective_config<'a>(
+    cfg: &'a AiBridgeConfig,
+    contact_label: &str,
+) -> Cow<'a, AiBridgeConfig> {
+    let Some(override_) = cfg.contact_overrides.get(contact_label) else {
+        return Cow::Borrowed(cfg);
+    };
+    let mut effective = cfg.clone();
+    if let Some(p) = override_.provider {
+        effective.provider = p;
+    }
+    if let Some(m) = &override_.model {
+        match effective.provider {
+            ProviderKind::Ollama => effective.ollama_model = m.clone(),
+            ProviderKind::OpenAiCompat => effective.openai_model = m.clone(),
+            ProviderKind::ClaudeApi => effective.claude_api_model = m.clone(),
+            ProviderKind::ClaudeCli => {
+                // Inject `--model <m>` ahead of the user-provided extras so
+                // the user can still append flags after this in the base
+                // config (last-arg-wins is claude's behaviour).
+                let mut new_args = vec!["--model".to_string(), m.clone()];
+                new_args.extend(effective.claude_cli_extra_args.drain(..));
+                effective.claude_cli_extra_args = new_args;
+            }
+        }
+    }
+    if let Some(sp) = &override_.system_prompt {
+        effective.system_prompt = sp.clone();
+    }
+    if let Some(mht) = override_.max_history_turns {
+        effective.max_history_turns = mht;
+    }
+    Cow::Owned(effective)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

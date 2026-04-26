@@ -230,7 +230,14 @@
       "test_title": "Test-Anfrage",
       "test_button": "Provider testen",
       "test_running": "Läuft…",
-      "saved": "Gespeichert ✓"
+      "saved": "Gespeichert ✓",
+      "overrides_title": "Pro-Kontakt-Routing (Wave 11F)",
+      "overrides_hint": "Optional pro Kontakt anderen Provider, anderes Modell oder anderen System-Prompt einstellen. Leer lassen heißt: Basiskonfiguration wird verwendet.",
+      "overrides_active": "(override aktiv)",
+      "overrides_inherit_provider": "(Basis-Provider erben)",
+      "overrides_model_placeholder": "Modell-Name (leer = Basis)",
+      "overrides_prompt_placeholder": "System-Prompt (leer = Basis)",
+      "overrides_clear": "Override entfernen"
     },
     "about": {
       "title": "Über",
