@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Wave 11G — FileProvider path mapping for the in-app APK auto-update.
+
+  We download the new APK to the app's external cache dir (so it's still
+  readable by the system package-installer running outside our process)
+  and expose it via content:// for the install Intent.
+
+  `external-cache-path` maps to context.getExternalCacheDir() which on a
+  typical device is /sdcard/Android/data/<pkg>/cache/.
+  `cache-path` maps to context.getCacheDir() (internal). open_filex will
+  pick whichever the file actually lives in.
+-->
+<paths>
+    <external-cache-path name="external_cache" path="." />
+    <cache-path name="internal_cache" path="." />
+    <files-path name="files" path="." />
+</paths>

@@ -10,6 +10,7 @@
 //! `~/.local/share/...` on Linux for `cargo check` purposes.
 
 mod ai_bridge;
+mod ai_bridge_watchers;
 #[cfg(feature = "stt")]
 mod ai_bridge_stt;
 
@@ -862,6 +863,27 @@ fn app_data(app: &AppHandle) -> anyhow::Result<PathBuf> {
         .map_err(|e| anyhow!("resolve app_data_dir: {}", e))?;
     fs::create_dir_all(&dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
     Ok(dir)
+}
+
+/// Crate-internal alias of [`app_data`] — keeps the public signature
+/// unchanged while letting sibling modules (`ai_bridge_watchers`) reach
+/// into the same path resolver instead of duplicating the
+/// `path().app_data_dir()` boilerplate.
+pub(crate) fn app_data_dir_for(app: &AppHandle) -> anyhow::Result<PathBuf> {
+    app_data(app)
+}
+
+/// Crate-internal wrapper around [`audit`] for sibling-module use. The
+/// underlying `audit()` is a closed function (best-effort, returns
+/// `()`); this re-export gives `ai_bridge_watchers` a stable handle
+/// without exposing the entire path-helpers module.
+pub(crate) fn audit_for_watchers(
+    app: &AppHandle,
+    category: &str,
+    event: &str,
+    details: serde_json::Value,
+) {
+    audit(app, category, event, details);
 }
 
 fn keys_path(app: &AppHandle) -> anyhow::Result<PathBuf> {
@@ -5496,6 +5518,159 @@ async fn ai_bridge_test(app: AppHandle, prompt: String) -> Result<String, String
         .map_err(|e| e.to_string())
 }
 
+// ── Wave 11E — proactive watchers Tauri surface ─────────────────────────
+
+#[tauri::command]
+fn ai_bridge_list_watchers(
+    app: AppHandle,
+) -> Result<Vec<ai_bridge_watchers::Watcher>, String> {
+    let dir = app_data(&app).map_err(|e| e.to_string())?;
+    Ok(ai_bridge_watchers::list_watchers(&dir))
+}
+
+#[tauri::command]
+fn ai_bridge_add_watcher(
+    app: AppHandle,
+    name: String,
+    schedule: ai_bridge_watchers::WatcherSchedule,
+    command: String,
+    target_contact: String,
+    mode: ai_bridge_watchers::WatcherMode,
+) -> Result<ai_bridge_watchers::Watcher, String> {
+    let dir = app_data(&app).map_err(|e| e.to_string())?;
+    let w = ai_bridge_watchers::add_watcher(
+        &dir,
+        name,
+        schedule,
+        command,
+        target_contact,
+        mode,
+    )
+    .map_err(|e| e.to_string())?;
+    audit(
+        &app,
+        "ai_bridge",
+        "watcher_added",
+        serde_json::json!({
+            "id": w.id,
+            "name": w.name,
+            "target": w.target_contact,
+            "mode": w.mode,
+            "schedule": w.schedule,
+        }),
+    );
+    Ok(w)
+}
+
+#[tauri::command]
+fn ai_bridge_update_watcher(
+    app: AppHandle,
+    id: String,
+    name: String,
+    schedule: ai_bridge_watchers::WatcherSchedule,
+    command: String,
+    target_contact: String,
+    mode: ai_bridge_watchers::WatcherMode,
+    enabled: bool,
+) -> Result<ai_bridge_watchers::Watcher, String> {
+    let dir = app_data(&app).map_err(|e| e.to_string())?;
+    let w = ai_bridge_watchers::update_watcher(
+        &dir,
+        &id,
+        name,
+        schedule,
+        command,
+        target_contact,
+        mode,
+        enabled,
+    )
+    .map_err(|e| e.to_string())?;
+    audit(
+        &app,
+        "ai_bridge",
+        "watcher_updated",
+        serde_json::json!({
+            "id": w.id,
+            "name": w.name,
+            "target": w.target_contact,
+            "mode": w.mode,
+            "schedule": w.schedule,
+            "enabled": w.enabled,
+        }),
+    );
+    Ok(w)
+}
+
+#[tauri::command]
+fn ai_bridge_remove_watcher(app: AppHandle, id: String) -> Result<bool, String> {
+    let dir = app_data(&app).map_err(|e| e.to_string())?;
+    let removed = ai_bridge_watchers::remove_watcher(&dir, &id)
+        .map_err(|e| e.to_string())?;
+    if removed {
+        audit(
+            &app,
+            "ai_bridge",
+            "watcher_removed",
+            serde_json::json!({ "id": id }),
+        );
+    }
+    Ok(removed)
+}
+
+#[tauri::command]
+fn ai_bridge_set_watcher_enabled(
+    app: AppHandle,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let dir = app_data(&app).map_err(|e| e.to_string())?;
+    ai_bridge_watchers::set_watcher_enabled(&dir, &id, enabled)
+        .map_err(|e| e.to_string())?;
+    audit(
+        &app,
+        "ai_bridge",
+        "watcher_updated",
+        serde_json::json!({ "id": id, "enabled": enabled }),
+    );
+    Ok(())
+}
+
+/// Validate a cron expression. Returns the next-fire ISO 8601 timestamp
+/// so the UI can render "next fire: <ts>" beside the input. Surfaces
+/// parse errors as command-string errors that the React side can render
+/// in the modal's validation row.
+#[tauri::command]
+fn ai_bridge_validate_cron(expr: String) -> Result<String, String> {
+    ai_bridge_watchers::validate_cron_expression(&expr).map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize)]
+struct WatcherFireResult {
+    stdout: String,
+    exit_code: i32,
+    message_sent: bool,
+    status: String,
+}
+
+#[tauri::command]
+async fn ai_bridge_run_watcher_now(
+    app: AppHandle,
+    id: String,
+) -> Result<WatcherFireResult, String> {
+    let send_box: ai_bridge_watchers::SendFn = Box::new(move |a, label, body| {
+        Box::pin(async move { send_message_inner(a, label, body).await })
+    });
+    let outcome = ai_bridge_watchers::manual_fire(&app, &id, send_box)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(WatcherFireResult {
+        stdout: outcome.stdout,
+        exit_code: outcome.exit_code,
+        message_sent: outcome.message_sent,
+        status: outcome.status,
+    })
+}
+
 /// Inbox hook (called from `start_listener` after `app.emit("message", ...)`).
 /// Spawns a background task that calls the configured provider and replies
 /// via the existing send pipeline. Returns immediately so the listener loop
@@ -5762,12 +5937,33 @@ pub fn run() {
             // ── Wave 11D: voice → STT → LLM ────────────────────────
             ai_bridge_list_whisper_models,
             ai_bridge_download_whisper_model,
+            // ── Wave 11E: proactive watchers ───────────────────────
+            ai_bridge_list_watchers,
+            ai_bridge_add_watcher,
+            ai_bridge_update_watcher,
+            ai_bridge_remove_watcher,
+            ai_bridge_set_watcher_enabled,
+            ai_bridge_validate_cron,
+            ai_bridge_run_watcher_now,
         ])
         .setup(|app| {
             // Pre-create the data dir on first launch so command handlers
             // never have to defensively `mkdir -p` on the hot path.
             let handle = app.handle().clone();
             let _ = app_data(&handle);
+
+            // ── Wave 11E — proactive watcher scheduler ────────────────
+            // Spin up the once-a-second tick that fires due watchers.
+            // Idempotent: the inner `start_scheduler` short-circuits if
+            // already running. The send-fn shim wraps `send_message_inner`
+            // (the same path the auto-reply uses) into the boxed-future
+            // shape the watcher module expects.
+            let watcher_handle = handle.clone();
+            let send_dispatcher: ai_bridge_watchers::SendDispatcher =
+                std::sync::Arc::new(|app, label, body| {
+                    Box::pin(async move { send_message_inner(app, label, body).await })
+                });
+            ai_bridge_watchers::start_scheduler(watcher_handle, send_dispatcher);
 
             // Kick off the disappearing-messages auto-purge timer. Idempotent
             // via `AppState.purge_started`. The first sweep fires after one

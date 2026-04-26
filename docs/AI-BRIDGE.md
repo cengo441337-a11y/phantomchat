@@ -259,15 +259,101 @@ the Settings UI renders consistently.
   tool-approval prompt.
 - This document.
 
+---
+
+## Wave 11E — Proactive Watchers (shipped)
+
+Until Wave 11E the bridge was strictly reactive: it only replied to
+incoming messages from allow-listed contacts. Wave 11E adds **proactive
+pushes** — the home daemon sends UNPROMPTED messages on triggers (CI
+green, scheduled task, file changed, etc.) to a pre-configured target
+contact.
+
+### Use-case examples
+
+| Goal | Schedule | Mode | Command |
+|------|----------|------|---------|
+| Ping me when CI passes | every 60 s | `AlertOnly` (inverted: send iff exit ≠ 0; for "green" use a script that exits non-zero on red) | `gh run list --workflow=ci.yml --limit 1 --json conclusion -q '.[0].conclusion' \| grep -q success` |
+| Hourly deploy-status push | cron `0 0 * * * *` (every hour at :00:00) | `Raw` | `kubectl rollout status deploy/web --timeout=10s` |
+| 9 AM daily overnight log summary | cron `0 0 9 * * *` | `Summarize` | `journalctl --since=yesterday \| grep -i error` |
+| File-change watcher (poll) | every 30 s | `Summarize` | `find ~/Downloads/incoming -mmin -1 -type f` |
+| Hourly disk-space alert | cron `0 0 * * * *` | `AlertOnly` | `df -h / \| awk 'NR==2 {if (substr($5,1,length($5)-1)+0 > 90) exit 1}'` |
+
+`Raw` sends the command's stdout verbatim, prefixed with `🔔 [<watcher_name>]\n`.
+`Summarize` runs the stdout through the configured LLM with a "Summarize
+in 1-3 sentences" system prompt. `AlertOnly` only sends when the exit
+code is non-zero — useful for "no news is good news" scenarios.
+
+### Cron-expression cheatsheet
+
+The `cron` crate expects a **6-field** expression: `sec min hour
+day-of-month month day-of-week` (with an optional 7th `year` field). This
+differs from classic Unix cron's 5-field form — leave `sec` as `0` to
+match what crontab.guru shows.
+
+| Pattern | Meaning |
+|---------|---------|
+| `0 * * * * *` | every minute, on the minute |
+| `0 */5 * * * *` | every 5 minutes |
+| `0 0 * * * *` | every hour, on the hour |
+| `0 0 9 * * *` | every day at 9:00 AM |
+| `0 0 9 * * Mon-Fri` | weekdays at 9:00 AM |
+| `0 30 18 * * Fri` | every Friday at 6:30 PM |
+| `0 0 0 1 * *` | midnight on the 1st of each month |
+
+The Settings UI ships a "Verify" button next to the cron input that
+calls back into the Rust `cron::Schedule::from_str` parser and renders
+the next-fire timestamp inline. Reference: <https://crontab.guru>
+(translate the 5-field pattern from there into 6-field by prefixing `0 `).
+
+### Security model
+
+Watchers run shell commands AS THE BRIDGE PROCESS USER. Anyone who can
+edit `<app_data>/ai_bridge_watchers.json` (or who can persuade the user
+to add a watcher via the Settings panel) can execute arbitrary code on
+the home machine — same threat class as `claude_cli_skip_permissions`.
+
+The mitigations:
+
+- **Allow-list gate at send time.** A watcher whose `target_contact` is
+  not on the AI-Bridge allow-list logs `error: target '...' not on
+  AI-bridge allowlist` and skips the send. Defends against typo'd
+  labels or a malicious config silently exfiltrating output to an
+  attacker-controlled contact.
+- **Audit-log entries.** Every `add` / `update` / `remove` / `fired` /
+  `failed` event lands in `audit.log` under category `ai_bridge`,
+  events `watcher_added` / `watcher_updated` / `watcher_removed` /
+  `watcher_fired` / `watcher_failed`. Compliance auditors can grep on
+  category=ai_bridge to see the full lifecycle.
+- **Per-command timeout.** A 5-minute wall-clock cap kills runaway
+  commands so a hung process doesn't hold a watcher slot forever.
+- **stdout truncation.** Output exceeding 8000 chars is truncated
+  before send, defending the chat from being spammed by megabyte-scale
+  output.
+
+### Known limitations / punted items
+
+- **No per-watcher concurrency lock.** If a watcher's command takes
+  longer than its schedule interval, the next tick will spawn a second
+  invocation in parallel. Workaround: use `flock` in your command, or
+  pick an interval > worst-case command runtime. Proper fix (per-id
+  `tokio::sync::Mutex`) is queued for Wave 11G.
+- **No retry on transient send failures.** A watcher whose send fails
+  (relay down, target offline, etc.) records `error: send failed: ...`
+  in `last_status` and waits for the next tick. The chat is the source
+  of truth, so the lost push is gone.
+- **Cron timezone is `Local`.** Watchers fire in the host's local
+  timezone, not UTC. Set `TZ=` in the bridge process environment if
+  you need a different anchor.
+
+---
+
 ## Roadmap
 
-- **Wave 11D** — on-device STT for voice → LLM. Probably whisper.cpp
-  via the `whisper-rs` crate; punted from 11B because the model file
-  (~75-466 MB depending on size) needs an opt-in download flow.
-- **Wave 11E** — proactive bridge: home-AI sends UNPROMPTED messages
-  ("CI just turned green", "cron job finished", "PR review came in").
-  Architecturally trivial — the bridge already has a relay handle
-  and a contact label. Just needs a pluggable trigger source.
-- **Wave 11F** — multi-bridge: route different contacts to different
-  providers / models / system prompts. E.g. business contacts → strict
-  Claude with company-specific MCP, personal → less-supervised Ollama.
+- **Wave 11G** — per-watcher concurrency lock (see "punted items"
+  above). Plus a "history" view in Settings showing the last N fires
+  per watcher (currently you have to grep the audit log).
+- **Wave 11H** — pre-built watcher templates: "GitHub Actions watcher",
+  "filesystem-change watcher", "Slack overnight summary watcher" — one-
+  click install with the appropriate command + schedule + mode pre-
+  filled. Reduces the "I need to know shell" barrier.

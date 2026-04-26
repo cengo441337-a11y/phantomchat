@@ -37,6 +37,20 @@ class I18n {
       'voice.tapToPlay': 'TAP TO PLAY',
       'voice.permissionDenied': 'MIC PERMISSION DENIED',
       'voice.unavailable': '[VOICE CLIP UNAVAILABLE]',
+      // Wave 11G — APK auto-update.
+      'update.banner': 'UPDATE AVAILABLE: v{version} — TAP TO DOWNLOAD',
+      'update.dialog.title': 'NEW VERSION AVAILABLE',
+      'update.dialog.version': 'v{current} → v{new}',
+      'update.dialog.notes': 'CHANGES:',
+      'update.dialog.size': 'DOWNLOAD SIZE: {size}',
+      'update.dialog.download': 'DOWNLOAD + INSTALL',
+      'update.dialog.dismiss': 'LATER',
+      'update.downloading': 'DOWNLOADING…',
+      'update.installing': 'LAUNCHING INSTALLER…',
+      'update.error.download': 'DOWNLOAD FAILED',
+      'update.error.checksum': 'CHECKSUM MISMATCH — ABORTED',
+      'update.error.install': 'COULD NOT LAUNCH INSTALLER',
+      'update.abort': 'ABORT',
     },
     'de': {
       'voice.pressToRecord': 'ZUM AUFNEHMEN GEDRÜCKT HALTEN',
@@ -47,6 +61,30 @@ class I18n {
       'voice.tapToPlay': 'ZUM ABSPIELEN TIPPEN',
       'voice.permissionDenied': 'MIKROFONZUGRIFF VERWEIGERT',
       'voice.unavailable': '[SPRACHCLIP NICHT VERFÜGBAR]',
+      // Wave 11G — APK auto-update.
+      'update.banner': 'UPDATE VERFÜGBAR: v{version} — JETZT HERUNTERLADEN',
+      'update.dialog.title': 'NEUE VERSION VERFÜGBAR',
+      'update.dialog.version': 'v{current} → v{new}',
+      'update.dialog.notes': 'ÄNDERUNGEN:',
+      'update.dialog.size': 'DOWNLOAD-GRÖSSE: {size}',
+      'update.dialog.download': 'HERUNTERLADEN + INSTALLIEREN',
+      'update.dialog.dismiss': 'SPÄTER',
+      'update.downloading': 'WIRD HERUNTERGELADEN…',
+      'update.installing': 'INSTALLER WIRD GESTARTET…',
+      'update.error.download': 'DOWNLOAD FEHLGESCHLAGEN',
+      'update.error.checksum': 'PRÜFSUMME UNGÜLTIG — ABGEBROCHEN',
+      'update.error.install': 'INSTALLER KONNTE NICHT GESTARTET WERDEN',
+      'update.abort': 'ABBRECHEN',
     },
   };
+
+  /// Like [t] but substitutes `{key}` placeholders from the given map.
+  /// Used by the Wave 11G update strings which embed a version / size.
+  static String tf(String key, Map<String, String> args) {
+    var s = t(key);
+    args.forEach((k, v) {
+      s = s.replaceAll('{$k}', v);
+    });
+    return s;
+  }
 }

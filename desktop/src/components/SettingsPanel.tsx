@@ -5,6 +5,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { listen } from "@tauri-apps/api/event";
 import AddressQR from "./AddressQR";
 import ThemeSwitcher from "./ThemeSwitcher";
+import WatchersSettings from "./WatchersSettings";
 import type {
   AiBridgeConfig,
   AuditEntry,
@@ -1779,6 +1780,9 @@ export default function SettingsPanel({ onClose }: Props) {
                   </div>
                 </div>
               )}
+
+              {/* Wave 11E — proactive watchers */}
+              <WatchersSettings allowlist={aiCfg.allowlist} />
 
               {/* History cap */}
               <div>

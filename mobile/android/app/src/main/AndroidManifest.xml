@@ -25,6 +25,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Wave 11G: in-app APK auto-update. We download the new APK to
+         <app cache>/update-X.Y.Z.apk and hand it to the system package-installer
+         via a content:// URI (FileProvider). Android 8+ requires the app
+         requesting an install to declare REQUEST_INSTALL_PACKAGES — the user
+         still has to grant the runtime "Install unknown apps" toggle the
+         first time, exactly like a sideloaded APK. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <application
         android:label="@string/app_name"
         android:name="${applicationName}"
@@ -71,6 +79,21 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+        <!-- Wave 11G: FileProvider for handing the downloaded APK to the
+             system package-installer. Android 7+ blocks file:// URIs across
+             app boundaries (FileUriExposedException), so `open_filex` wraps
+             the file in a content:// URI authored by this provider.
+             The authority must match what `open_filex` derives from the
+             applicationId: "<applicationId>.fileprovider". -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_provider_paths" />
+        </provider>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
@@ -81,6 +104,13 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- Wave 11G: required so the package-installer activity is visible
+             to us under Android 11+ scoped package visibility. Without this
+             `open_filex` cannot resolve a handler for the APK mime type. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:mimeType="application/vnd.android.package-archive"/>
         </intent>
     </queries>
 </manifest>

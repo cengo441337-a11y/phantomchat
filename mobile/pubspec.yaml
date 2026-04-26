@@ -40,6 +40,20 @@ dependencies:
   record: ^5.1.2
   audioplayers: ^6.1.0
   permission_handler: ^11.3.1
+  # Wave 11G — in-app APK auto-update.
+  # `package_info_plus` reads the installed app's version (from pubspec) at
+  # runtime so we can compare against the manifest's version field.
+  # `device_info_plus` exposes Build.SUPPORTED_ABIS so we can pick the right
+  # APK variant (arm64-v8a / armeabi-v7a / x86_64).
+  # `open_filex` hands a downloaded file to the OS — on Android this triggers
+  # the package-installer when the file mime is application/vnd.android.package-archive.
+  package_info_plus: ^8.0.0
+  device_info_plus: ^11.0.0
+  open_filex: ^4.5.0
+  # `crypto` is already a transitive dep (via flutter_secure_storage and
+  # cryptography) — make it explicit so we can use the streaming SHA256
+  # API directly in update_service.dart for chunked APK hashing.
+  crypto: ^3.0.0
 
 dev_dependencies:
   flutter_test:

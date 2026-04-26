@@ -7,6 +7,7 @@ import '../services/storage_service.dart';
 import '../theme.dart';
 import '../widgets/glitch_text.dart';
 import '../widgets/cyber_card.dart';
+import '../widgets/update_banner.dart';
 import 'chat.dart';
 import 'qr_scan.dart';
 import 'settings.dart';
@@ -253,18 +254,24 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: kBg,
       body: GridBackground(
         child: SafeArea(
-          child: Column(
-            children: [
-              _buildHeader(),
-              Container(height: 1, color: kCyan.withValues(alpha: 0.12)),
-              Expanded(
-                child: _loading
-                    ? const Center(child: CircularProgressIndicator(color: kCyan, strokeWidth: 1.5))
-                    : _contacts.isEmpty
-                        ? _buildEmpty()
-                        : _buildList(),
-              ),
-            ],
+          // Wave 11G — wrap the home body in `UpdateBanner` so a yellow
+          // "update available" strip shows above the contact list when
+          // a newer APK has been published. The banner is invisible
+          // when no update is pending, so existing layout is preserved.
+          child: UpdateBanner(
+            child: Column(
+              children: [
+                _buildHeader(),
+                Container(height: 1, color: kCyan.withValues(alpha: 0.12)),
+                Expanded(
+                  child: _loading
+                      ? const Center(child: CircularProgressIndicator(color: kCyan, strokeWidth: 1.5))
+                      : _contacts.isEmpty
+                          ? _buildEmpty()
+                          : _buildList(),
+                ),
+              ],
+            ),
           ),
         ),
       ),

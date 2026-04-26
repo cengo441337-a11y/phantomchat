@@ -588,3 +588,38 @@ export interface AiBridgeTurn {
   role: "user" | "assistant";
   content: string;
 }
+
+// ── Wave 11E: Proactive Watchers ──────────────────────────────────────────
+//
+// A Watcher is a cron-like trigger that runs a shell command on a schedule
+// and pushes the result (raw / summarised / alert-only) to a pre-configured
+// contact via the same E2E send pipeline the AI Bridge auto-reply uses.
+
+/// Mirrors the Rust `WatcherSchedule` enum — serde renders this with a
+/// `type` discriminant so we mirror that here.
+export type WatcherSchedule =
+  | { type: "interval"; secs: number }
+  | { type: "cron"; expr: string };
+
+export type WatcherMode = "raw" | "summarize" | "alert_only";
+
+export interface Watcher {
+  id: string;
+  name: string;
+  enabled: boolean;
+  schedule: WatcherSchedule;
+  command: string;
+  target_contact: string;
+  mode: WatcherMode;
+  last_run_at?: string | null;
+  last_status?: string | null;
+}
+
+/// Returned by the manual-fire Tauri command. Mirrors the Rust
+/// `WatcherFireResult` struct.
+export interface WatcherFireResult {
+  stdout: string;
+  exit_code: number;
+  message_sent: boolean;
+  status: string;
+}
