@@ -5,6 +5,10 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import AddressQR from "./AddressQR";
 import type {
   AuditEntry,
+  CrashReport,
+  PrivacyConfigDto,
+  UpdateInfo,
+} from "../types";
   BackupMeta,
   BackupResult,
   PrivacyConfigDto,
@@ -104,6 +108,19 @@ export default function SettingsPanel({ onClose }: Props) {
   const [auditFilter, setAuditFilter] = useState<string>("__all__");
   const [auditExportedPath, setAuditExportedPath] = useState<string | null>(null);
 
+  // ── Diagnostics ─────────────────────────────────────────────────────────
+  // Opt-in checkbox toggles the `crash_reporting_opted_in.flag` sentinel
+  // in the app-data dir. The "show crash reports" button opens an inline
+  // modal listing recent panics (timestamp + version + first-line message)
+  // with per-row Send / Delete buttons. Send is hard-gated on the opt-in;
+  // it returns an error string if the user hasn't ticked the box yet.
+  const [crashOptIn, setCrashOptIn] = useState(false);
+  const [crashModalOpen, setCrashModalOpen] = useState(false);
+  const [crashReports, setCrashReports] = useState<CrashReport[]>([]);
+  const [crashLoadErr, setCrashLoadErr] = useState<string | null>(null);
+  const [crashSending, setCrashSending] = useState<string | null>(null);
+  const [crashRowMsg, setCrashRowMsg] = useState<Record<string, string>>({});
+
   // ── Danger Zone ─────────────────────────────────────────────────────────
   const [dangerOpen, setDangerOpen] = useState(false);
   const [wipeStage, setWipeStage] = useState<"idle" | "confirm">("idle");
@@ -187,6 +204,12 @@ export default function SettingsPanel({ onClose }: Props) {
       } catch (e) {
         setAuditErr(String(e));
       }
+      // Crash-reporting opt-in state for the Diagnostics checkbox.
+      try {
+        const flag = await invoke<boolean>("get_crash_reporting_opt_in");
+        setCrashOptIn(flag);
+      } catch {
+        /* leave default false */
       try {
         const s = await invoke<LanOrgStatus>("lan_org_status");
         setLanStatus(s);
@@ -600,6 +623,64 @@ export default function SettingsPanel({ onClose }: Props) {
       setAuditExportedPath(p);
     } catch (e) {
       setAuditExportedPath(`error: ${String(e)}`);
+    }
+  }
+
+  async function toggleCrashOptIn(next: boolean) {
+    try {
+      await invoke("set_crash_reporting_opt_in", { enabled: next });
+      setCrashOptIn(next);
+    } catch {
+      // Silently swallow — UI just doesn't flip the box, no crash impact.
+    }
+  }
+
+  async function openCrashModal() {
+    setCrashModalOpen(true);
+    setCrashLoadErr(null);
+    try {
+      const list = await invoke<CrashReport[]>("list_crash_reports", { limit: 50 });
+      setCrashReports(list);
+    } catch (e) {
+      setCrashLoadErr(String(e));
+    }
+  }
+
+  async function reloadCrashList() {
+    try {
+      const list = await invoke<CrashReport[]>("list_crash_reports", { limit: 50 });
+      setCrashReports(list);
+      setCrashLoadErr(null);
+    } catch (e) {
+      setCrashLoadErr(String(e));
+    }
+  }
+
+  async function sendCrashReport(crashId: string) {
+    setCrashSending(crashId);
+    setCrashRowMsg(m => ({ ...m, [crashId]: "" }));
+    try {
+      await invoke<string>("dispatch_crash_report", { crashId });
+      setCrashRowMsg(m => ({ ...m, [crashId]: t("settings.diagnostics.sent") }));
+      // Re-pull so user_dispatched flips visually.
+      await reloadCrashList();
+    } catch (e) {
+      setCrashRowMsg(m => ({
+        ...m,
+        [crashId]: t("settings.diagnostics.send_failed", { error: String(e) }),
+      }));
+    } finally {
+      setCrashSending(null);
+    }
+  }
+
+  async function clearAllCrashes() {
+    try {
+      await invoke("clear_crash_reports");
+      setCrashReports([]);
+      setCrashRowMsg({});
+    } catch (e) {
+      setCrashLoadErr(t("settings.diagnostics.clear_failed", { error: String(e) }));
     }
   }
 
@@ -1182,6 +1263,159 @@ export default function SettingsPanel({ onClose }: Props) {
             </div>
           )}
         </section>
+
+        {/* ── Diagnostics ─────────────────────────────────────────────── */}
+        <section className="mb-6">
+          <h3 className="text-neon-green text-xs uppercase tracking-widest mb-2">
+            {t("settings.diagnostics.title")}
+          </h3>
+          <div className="space-y-3 text-xs">
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={crashOptIn}
+                onChange={e => void toggleCrashOptIn(e.target.checked)}
+              />
+              <div className="flex flex-col">
+                <span className="text-neon-green">
+                  {t("settings.diagnostics.optin_label")}
+                </span>
+                <span className="text-soft-grey text-[10px]">
+                  {t("settings.diagnostics.optin_hint")}
+                </span>
+              </div>
+            </label>
+            <div className="flex gap-2 items-center">
+              <button
+                onClick={() => void openCrashModal()}
+                className="neon-button text-xs"
+              >
+                {t("settings.diagnostics.view_button")}
+              </button>
+            </div>
+            <p className="text-soft-grey text-[10px]">
+              {t("settings.diagnostics.privacy_note")}
+            </p>
+          </div>
+        </section>
+
+        {crashModalOpen && (
+          <div
+            className="fixed inset-0 bg-black/80 flex items-center justify-center z-[60]"
+            onClick={() => setCrashModalOpen(false)}
+          >
+            <div
+              className="bg-bg-panel border border-neon-magenta shadow-neon-magenta rounded-md w-[680px] max-w-[92%] max-h-[80vh] overflow-y-auto p-5"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-neon-magenta font-bold uppercase tracking-widest text-sm">
+                  {t("settings.diagnostics.view_modal_title")}
+                </h3>
+                <button
+                  onClick={() => setCrashModalOpen(false)}
+                  className="text-soft-grey hover:text-neon-green text-sm uppercase tracking-wider px-2"
+                >
+                  {t("settings.diagnostics.view_modal_close")}
+                </button>
+              </div>
+              {crashLoadErr && (
+                <div className="text-xs text-neon-magenta mb-2">
+                  {t("settings.diagnostics.load_failed", { error: crashLoadErr })}
+                </div>
+              )}
+              {crashReports.length === 0 ? (
+                <div className="text-soft-grey italic text-xs">
+                  {t("settings.diagnostics.empty")}
+                </div>
+              ) : (
+                <>
+                  <div className="border border-dim-green/40 rounded">
+                    <table className="w-full text-[10px] font-mono">
+                      <thead className="bg-bg-deep sticky top-0">
+                        <tr className="text-soft-grey uppercase tracking-wider">
+                          <th className="text-left px-2 py-1">
+                            {t("settings.diagnostics.col_ts")}
+                          </th>
+                          <th className="text-left px-2 py-1">
+                            {t("settings.diagnostics.col_version")}
+                          </th>
+                          <th className="text-left px-2 py-1">
+                            {t("settings.diagnostics.col_msg")}
+                          </th>
+                          <th className="text-left px-2 py-1">
+                            {t("settings.diagnostics.col_actions")}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {crashReports.map(report => {
+                          const id = report.ts;
+                          const sent = report.user_dispatched === true;
+                          const sending = crashSending === id;
+                          const rowMsg = crashRowMsg[id];
+                          const firstLine = (report.panic_msg ?? "")
+                            .split("\n")[0]
+                            .slice(0, 80);
+                          return (
+                            <tr
+                              key={id}
+                              className="border-t border-dim-green/20 align-top"
+                            >
+                              <td className="px-2 py-1 text-soft-grey whitespace-nowrap">
+                                {report.ts}
+                              </td>
+                              <td className="px-2 py-1 text-cyber-cyan whitespace-nowrap">
+                                {report.version}
+                              </td>
+                              <td className="px-2 py-1 text-neon-magenta break-all">
+                                {firstLine || "(no message)"}
+                              </td>
+                              <td className="px-2 py-1 whitespace-nowrap">
+                                <div className="flex flex-col gap-1">
+                                  <button
+                                    onClick={() => void sendCrashReport(id)}
+                                    disabled={sending || sent || !crashOptIn}
+                                    className="neon-button text-[10px] py-0.5 px-2 disabled:opacity-40"
+                                    title={
+                                      crashOptIn
+                                        ? undefined
+                                        : t("settings.diagnostics.optin_hint")
+                                    }
+                                  >
+                                    {sending
+                                      ? t("settings.diagnostics.sending")
+                                      : sent
+                                        ? t("settings.diagnostics.sent")
+                                        : t("settings.diagnostics.send_button")}
+                                  </button>
+                                  {rowMsg && (
+                                    <span className="text-cyber-cyan text-[10px]">
+                                      {rowMsg}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="flex justify-end mt-3">
+                    <button
+                      onClick={() => void clearAllCrashes()}
+                      className="neon-button text-xs border-neon-magenta/70 text-neon-magenta hover:bg-neon-magenta/10"
+                    >
+                      {t("settings.diagnostics.clear_all_button")}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* ── Danger Zone ────────────────────────────────────────────── */}
         <section className="border border-neon-magenta/40 rounded-md p-3">

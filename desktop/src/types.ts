@@ -267,6 +267,21 @@ export interface AuditEntry {
   details: Record<string, unknown>;
 }
 
+// ── Crash reporting (Diagnostics) ────────────────────────────────────────────
+//
+// Mirrors the Rust `CrashReport` struct. Each row is one captured panic:
+// timestamp, app version, OS, the panic's first-line message + source
+// location, and the captured backtrace. `user_dispatched` flips to `true`
+// after a successful POST via `dispatch_crash_report` so the UI can render
+// "already sent" instead of offering a re-send.
+export interface CrashReport {
+  ts: string;
+  version: string;
+  os: string;
+  panic_msg: string;
+  location: string;
+  backtrace: string;
+  user_dispatched?: boolean;
 // ── LAN org (mDNS zero-touch discovery) ─────────────────────────────────────
 //
 // Mirrors the Rust `LanOrgStatus` + `DiscoveredPeer` structs. The shared-

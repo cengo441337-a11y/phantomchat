@@ -363,6 +363,29 @@ phantomchat/
 
 ---
 
+## Self-Hosted Relay
+
+Public relays (Damus, nos.lol, snort.social) are fine for most users —
+PhantomChat envelopes look indistinguishable from cover-traffic at the
+relay layer, so even a fully malicious operator learns nothing about
+content or recipients.
+
+Organisations with hard data-sovereignty requirements (Kanzleien,
+Steuerberater, Behörden) can run their own Nostr relay so that even the
+TCP-layer metadata never leaves infrastructure they control. The
+walkthrough — `strfry` on Docker, nginx + Let's Encrypt in front,
+PhantomChat client config, ops notes (backup, compaction, monitoring,
+log retention) — lives at:
+
+[**docs/RELAY-SELFHOSTING.md**](docs/RELAY-SELFHOSTING.md)
+
+Quick teaser: ~30 minutes from a fresh VM to a working
+`wss://relay.your-org.de`. The same doc also covers pointing the
+(opt-in) crash-report uploader at your own collector endpoint instead of
+`updates.dc-infosec.de`.
+
+---
+
 ## Contributing
 
 Pull Requests und Issues sind willkommen, besonders für:

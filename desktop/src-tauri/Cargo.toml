@@ -31,6 +31,10 @@ dirs         = "5"
 x25519-dalek = "2.0"
 chrono       = { version = "0.4", default-features = false, features = ["clock"] }
 qrcodegen    = "1.8"
+# rustls-tls so we don't pull native OpenSSL into the bundle just for the
+# opt-in crash-report POST. `default-features = false` strips the default
+# native-tls path; we only need the JSON-body POST surface.
+reqwest      = { version = "0.13", default-features = false, features = ["rustls", "http2", "json"] }
 # Pure-Rust mDNS responder + browser used for zero-touch LAN org discovery.
 # No system mdns daemon required; runs its own ServiceDaemon on UDP 5353.
 mdns-sd      = "0.13"
