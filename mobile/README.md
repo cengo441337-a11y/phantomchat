@@ -1,132 +1,127 @@
-# phantomchat (mobile)
+# PhantomChat — Mobile (Flutter / Android)
 
-Flutter front-end for PhantomChat. The Rust core is compiled to a native
-shared library (via `cargo-ndk` + `flutter_rust_bridge`) and bundled into the
-Android APK / iOS app.
+The mobile client for [PhantomChat](../README.md). This wave (7B-mobile-catchup) brings the Flutter
+app up to wire-protocol parity with the v3.0.0 Desktop release: **MLS group chat (RFC 9420)**,
+**sealed-sender attribution**, **read-receipts + typing indicators**, plus stub / system-message
+handling for **file-transfer** so a v3 Desktop user sending a file no longer renders garbage on
+the phone.
 
-## Getting Started
+iOS is **out of scope for this wave** — see the bottom of this file.
 
-This project is a starting point for a Flutter application.
+## Layout
 
-A few resources to get you started if this is your first Flutter project:
+```
+mobile/
+├── lib/                       # Dart / Flutter source
+│   ├── main.dart              # bootstrap + RustLib.init
+│   ├── screens/
+│   │   ├── home.dart          # contact list + Channels button
+│   │   ├── chat.dart          # 1:1 chat (now v3 sealed-sender)
+│   │   └── channels.dart      # NEW — MLS group chat tab
+│   ├── services/
+│   │   ├── relay_service.dart # NEW — prefix-dispatch (MLS / FILE / RCPT / TYPN)
+│   │   └── contact_directory.dart  # NEW — v3 contact book w/ signing_pub_hex
+│   └── src/rust/              # auto-generated FRB Dart bindings
+├── rust/                      # NEW — wrapper crate exposing v3 APIs
+│   ├── Cargo.toml             # standalone (not a workspace member)
+│   └── src/api.rs             # send_sealed_v3 / receive_full_v3 / mls_*
+├── android/                   # Android Gradle project
+├── scripts/
+│   └── build-android.sh       # NEW — cross-compile + Gradle helper
+└── flutter_rust_bridge.yaml   # points at ./rust (NOT ../core)
+```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+The wrapper crate (`mobile/rust/`) intentionally pulls
+`phantomchat_core` with `default-features = false, features = ["net"]` so we
+don't link a duplicate `flutter_rust_bridge` runtime (the desktop build pulls
+the `ffi` feature; the cdylib symbols would collide).
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Prerequisites
 
----
+- **Flutter** ≥ 3.41 — <https://docs.flutter.dev/get-started/install>
+- **Rust** stable + the four Android targets:
 
-## Production builds + signing
+  ```bash
+  rustup target add aarch64-linux-android \
+                    armv7-linux-androideabi \
+                    x86_64-linux-android \
+                    i686-linux-android
+  ```
 
-By default `flutter build apk --release` produces a release-mode APK signed
-with Flutter's auto-generated **debug-keystore**. That's fine for pilot
-sideloading, but it has three big downsides:
+- **cargo-ndk** — `cargo install cargo-ndk`
+- **Android SDK + NDK** — install via Android Studio; the script reads
+  `ANDROID_NDK_ROOT` (or `NDK_HOME`). Tested with NDK 26.x.
+- **JDK 17** — required by the Flutter Gradle plugin (set via `JAVA_HOME`).
 
-1. The debug-keystore is **per-machine and ephemeral** — different from the
-   production-keystore. When we eventually switch, every existing install will
-   refuse to upgrade (Android rejects upgrades whose signing certificate
-   changed) and users will have to **uninstall + reinstall** to get the new
-   build.
-2. The Play Store **rejects debug-signed uploads**.
-3. Browsers and Android show "App von unbekannter Quelle" / "App from unknown
-   source" warnings, partly because of debug-signing.
-
-The fix is a persistent **production upload-keystore** that we use for every
-release from now on, forever.
-
-### One-time setup: generate the production keystore
-
-Run on the build machine, exactly **once**:
+## Building an APK
 
 ```bash
-bash mobile/scripts/generate-release-keystore.sh
+mobile/scripts/build-android.sh release apk
 ```
 
-This:
+The script:
 
-- Generates `~/.android/phantomchat-release.jks` — RSA 4096, 10000-day
-  validity, alias `phantomchat`, distinguished name
-  `CN=PhantomChat, OU=DC INFOSEC, O=DC INFOSEC, L=Berlin, ST=Berlin, C=DE`
-  (override the city via `--cn-city <city>` or `PHANTOMCHAT_CN_CITY=...`).
-- Generates a CSPRNG 32-character alphanumeric password and writes it to
-  `~/.android/phantomchat-release.password.txt` (mode `0600`).
-- Refuses to overwrite an existing keystore (idempotent re-run is safe).
-- Prints a loud warning telling you to back everything up.
+1. Cross-compiles `phantomchat_mobile` to all four ABIs via `cargo ndk`.
+2. Stages the resulting `libphantomchat_mobile.so` files into
+   `mobile/android/app/src/main/jniLibs/<abi>/` (this directory is
+   git-ignored — it's regenerated on every build).
+3. Runs `flutter build apk --release --split-per-abi`.
 
-> **!!! CRITICAL — READ THIS !!!**
->
-> The production keystore is **the only thing on earth that can sign updates
-> for the PhantomChat Android app**. If you lose `phantomchat-release.jks`
-> *or* you lose the password:
->
-> - Every existing PhantomChat install becomes **permanently unupgradeable**.
->   Users have to uninstall and reinstall to receive any new version.
-> - The Play Store listing becomes orphaned — you can never publish a new
->   version under the same package id (`de.dcinfosec.phantomchat`) again.
-> - There is no recovery. Not from us, not from Google, not from anyone.
->
-> Back up **both** files immediately to:
->
-> 1. Your password manager (1Password / Bitwarden / KeePassXC) — keystore
->    as a secure attachment, password as a secure note.
-> 2. The Hostinger VPS, alongside the Tauri Updater key
->    (`/root/secrets/phantomchat/android/`, root-only perms).
-> 3. An offline encrypted USB stored physically separately from your laptop.
->
-> Verify each backup by `sha256sum`-ing the file and matching it against the
-> local copy.
+Outputs land under `mobile/build/app/outputs/apk/release/`.
 
-### Wire the keystore into Gradle
-
-Copy the template, then fill in the real password from the password file:
+For an AAB suitable for Google Play:
 
 ```bash
-cp mobile/android/key.properties.template mobile/android/key.properties
-# Then edit mobile/android/key.properties and replace the storePassword /
-# keyPassword placeholders with the contents of:
-#   ~/.android/phantomchat-release.password.txt
+mobile/scripts/build-android.sh release appbundle
 ```
 
-`mobile/android/key.properties` is **gitignored** — it never goes near a
-commit. The matching `.template` file IS tracked so contributors can see the
-expected schema.
-
-`mobile/android/app/build.gradle.kts` automatically picks up `key.properties`
-and uses it for `signingConfigs.release`. If `key.properties` is absent, the
-build falls back to debug-signing with a warning so contributors without the
-production keystore can still produce a local `--release` APK for testing.
-
-### Build a sideloadable APK (release, production-signed)
+For a quick debug-signed APK (faster, but bigger):
 
 ```bash
-bash mobile/scripts/build-android.sh
+mobile/scripts/build-android.sh debug
 ```
 
-The script logs whether it's using the production or debug keystore. Output
-APKs land in `mobile/build/app/outputs/flutter-apk/`.
+## Regenerating the FRB bindings
 
-For a debug-mode APK (no production-signing needed):
+After editing `mobile/rust/src/api.rs`:
 
 ```bash
-bash mobile/scripts/build-android.sh --debug
+cd mobile && flutter_rust_bridge_codegen generate
 ```
 
-### Build an Android App Bundle (.aab) for the Play Store
+This rewrites:
 
-```bash
-bash mobile/scripts/build-android-bundle.sh
-```
+- `mobile/lib/src/rust/api.dart` (Dart facade)
+- `mobile/lib/src/rust/frb_generated.{dart,io.dart,web.dart}`
+- `mobile/rust/src/frb_generated.rs` (Rust glue)
 
-This **requires** `mobile/android/key.properties` to exist — the script
-refuses to run otherwise, since debug-signed `.aab`s are useless for upload.
-The signed bundle is written to:
+Don't edit any of the above by hand — the codegen will overwrite them.
 
-```
-mobile/build/app/outputs/bundle/release/app-release.aab
-```
+## v3 wire-format support matrix
 
-Upload that file to the Google Play Console (Internal testing → Production).
+| Prefix | Direction | Mobile behaviour (this wave) |
+|--------|-----------|------------------------------|
+| (none) | RX        | sealed-sender 1:1, attribution surfaced via `RelayEvent.kind == "message"` |
+| `MLS-WLC2` | RX | `mlsDirectoryInsert(meta) → mlsJoinViaWelcome(welcome)`, emits `mls_joined` |
+| `MLS-WLC1` | RX | legacy v1 fallback (placeholder inviter), emits `mls_joined` |
+| `MLS-APP1` | RX | `mlsDecrypt`, emits `mls_message` / `mls_epoch` |
+| `FILE1:01` | RX | system message ("file received: …, switch to Desktop"). **Write-to-storage deferred to wave 7B-followup.** |
+| `RCPT-1:`  | RX | emits `receipt` event (msg_id + delivered/read) |
+| `TYPN-1:`  | RX | emits `typing` event (sender_pub + ttl) |
+| `MLS-APP1` | TX | wrapped + ciphertext returned by `mlsEncrypt`; transport hookup pending |
+| `RCPT-1:` / `TYPN-1:` | TX | encoder helpers in `relay_service.dart`; UI wiring pending |
+
+## iOS — out of scope (deferred)
+
+iOS support requires:
+
+- macOS host (Xcode is macOS-only)
+- Xcode 15.x + iOS 17 SDK
+- Apple Developer account (~ \$99 / year) for signing + TestFlight
+- Manual `phantomchat_mobile` cross-compile to `aarch64-apple-ios` +
+  `aarch64-apple-ios-sim` + `x86_64-apple-ios` and lipo into a single
+  `libphantomchat_mobile.a` checked into `ios/Frameworks/`.
+- `mobile/ios/Podfile` regeneration via `pod install`.
+
+Targeting **wave 7B-followup-2** when a Mac mini or rented CI runner is
+available.
