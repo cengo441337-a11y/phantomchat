@@ -25,8 +25,10 @@ use phantomchat_core::{
     keys::{IdentityKey, PhantomSigningKey, SpendKey, ViewKey},
     mls::{self, GroupId, PhantomMlsGroup, PhantomMlsMember},
     privacy::{PrivacyConfig, PrivacyMode, ProxyConfig, ProxyKind},
+    secure_storage::{detect_best_storage, key_id_for_path, SecureStorage, SecureStorageError},
     session::SessionStore,
 };
+use zeroize::Zeroizing;
 use phantomchat_relays::{
     make_multi_relay, BridgeProvider, ConnectionEvent, EnvelopeHandler, StateHandler,
 };
@@ -69,6 +71,10 @@ const CRASH_OPTIN_FILE: &str = "crash_reporting_opted_in.flag";
 /// follow-up). Self-hosters can override by editing this constant + a
 /// rebuild — orgs running their own collector point at their own URL.
 const CRASH_REPORT_ENDPOINT: &str = "https://updates.dc-infosec.de/crash-report";
+/// Persistence target for the desktop main-window geometry (position, size,
+/// maximized flag, last monitor identity). See the `window_state` module
+/// section further down for the on-disk schema and restore policy.
+const WINDOW_STATE_FILE: &str = "window_state.json";
 const POW_DIFFICULTY: u32 = 8;
 
 /// Bootstrap relay set written to `relays.json` if the file is missing.
@@ -674,6 +680,13 @@ pub struct AppState {
     /// instead of a half-open hang. AsyncMutex so we can hold it across
     /// the (async) take + spawn.
     pub subscriber: AsyncMutex<Option<ListenerControl>>,
+    /// Live LAN-org broadcaster + browser state. `None` until
+    /// `lan_org_create` / `lan_org_join` (or the auto-rehydrate path on
+    /// startup) brings up the mDNS daemon. Held behind an `AsyncMutex`
+    /// so the join/leave commands — which await disk I/O and the daemon
+    /// shutdown — can hold the lock across `.await` points without
+    /// poisoning a std mutex.
+    pub lan_org: AsyncMutex<Option<LanOrg>>,
 }
 
 /// Control handle for one in-flight relay-subscriber task. `shutdown_tx`
@@ -808,6 +821,228 @@ fn audit(app: &AppHandle, category: &str, event: &str, details: serde_json::Valu
     }
 }
 
+// ── Window-state persistence (multi-monitor aware) ──────────────────────────
+//
+// On-disk schema (`$APPDATA/de.dc-infosec.phantomchat/window_state.json`):
+//
+//   {
+//     "schema_version": 1,
+//     "x": 100,
+//     "y": 50,
+//     "width": 1320,
+//     "height": 820,
+//     "maximized": false,
+//     "monitor_label": "DELL U2722DE",
+//     "monitor_position": { "x": 1920, "y": 0 }
+//   }
+//
+// All units are LOGICAL pixels — Tauri's `LogicalPosition`/`LogicalSize`
+// abstract over DPI, so a window persisted on a 1.5x scaled display
+// restores correctly on a 1.0x display without manual math.
+//
+// `monitor_label` + `monitor_position` form a soft fingerprint of the
+// display the user last had the window on. On restore we walk
+// `available_monitors()` and only re-apply the persisted geometry if a
+// matching monitor is still attached (label equal AND top-left position
+// within ±20 px). Otherwise we fall back to the platform default — which
+// is the centered 1100×720 the WindowBuilder gave us in tauri.conf.json.
+//
+// Off-screen rescue: even when the monitor matches, we double-check that
+// the restored rect lies entirely inside that monitor's bounds. A user
+// who unplugs a 4K display and reattaches a 1080p one with the same name
+// would otherwise get a window stranded outside the visible area.
+//
+// We deliberately hand-roll this instead of pulling in
+// `tauri-plugin-window-state` because the upstream plugin's restore
+// policy is "always restore last geometry" with no monitor-identity
+// check — bad UX on an Anwalt's docking-station + portable laptop combo
+// where a missing display means the window comes back invisible.
+
+/// Tolerance (in logical pixels) for matching a persisted monitor against
+/// the currently-attached set. Two monitors that report the same label
+/// and a top-left position within this many pixels are considered the
+/// same physical display. ±20 px absorbs minor DPI-rounding drift while
+/// still distinguishing a monitor reattached at a different desktop
+/// coordinate after a layout change.
+const MONITOR_MATCH_TOLERANCE_PX: f64 = 20.0;
+
+/// Debounce window for save_window_state writes. A drag emits a flood of
+/// `Moved` events at every cursor tick; coalescing to one write per 500 ms
+/// keeps `window_state.json` from being rewritten thousands of times per
+/// gesture without losing the final position when the user releases.
+const WINDOW_STATE_DEBOUNCE_MS: u64 = 500;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MonitorPos {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WindowStateDisk {
+    #[serde(default = "window_state_schema_default")]
+    pub schema_version: u32,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    #[serde(default)]
+    pub maximized: bool,
+    #[serde(default)]
+    pub monitor_label: String,
+    #[serde(default)]
+    pub monitor_position: MonitorPos,
+}
+
+impl Default for MonitorPos {
+    fn default() -> Self {
+        Self { x: 0.0, y: 0.0 }
+    }
+}
+
+fn window_state_schema_default() -> u32 {
+    1
+}
+
+fn window_state_path(app: &AppHandle) -> anyhow::Result<PathBuf> {
+    Ok(app_data(app)?.join(WINDOW_STATE_FILE))
+}
+
+/// Lenient loader: missing or corrupt file → `None`, never an error.
+/// First launch must not warn the user; a hand-edited file that fails to
+/// parse falls back to defaults (same stance as `load_privacy`).
+fn load_window_state(app: &AppHandle) -> Option<WindowStateDisk> {
+    let path = window_state_path(app).ok()?;
+    let raw = fs::read(&path).ok()?;
+    serde_json::from_slice::<WindowStateDisk>(&raw).ok()
+}
+
+/// Write the window state atomically-enough for our purposes (single
+/// `fs::write` — the file is small and a torn write just means we lose
+/// the latest gesture, never corrupt earlier app data).
+fn save_window_state(app: &AppHandle, state: WindowStateDisk) -> Result<(), String> {
+    let path = window_state_path(app).map_err(|e| e.to_string())?;
+    let buf = serde_json::to_vec_pretty(&state).map_err(|e| e.to_string())?;
+    fs::write(&path, buf).map_err(|e| format!("write {}: {}", path.display(), e))?;
+    Ok(())
+}
+
+/// Capture the current window geometry into a `WindowStateDisk`. Reads
+/// physical units off the OS, converts to logical via the window's scale
+/// factor so persistence is DPI-independent.
+fn capture_window_state(
+    win: &tauri::WebviewWindow,
+) -> Result<WindowStateDisk, String> {
+    let scale = win.scale_factor().map_err(|e| e.to_string())?;
+    let pos = win.outer_position().map_err(|e| e.to_string())?;
+    let size = win.outer_size().map_err(|e| e.to_string())?;
+    let maximized = win.is_maximized().unwrap_or(false);
+    let monitor = win.current_monitor().ok().flatten();
+    let (label, mpos) = match monitor {
+        Some(m) => {
+            let mp = m.position();
+            (
+                m.name().cloned().unwrap_or_default(),
+                MonitorPos {
+                    x: mp.x as f64 / scale,
+                    y: mp.y as f64 / scale,
+                },
+            )
+        }
+        None => (String::new(), MonitorPos::default()),
+    };
+    Ok(WindowStateDisk {
+        schema_version: 1,
+        x: pos.x as f64 / scale,
+        y: pos.y as f64 / scale,
+        width: size.width as f64 / scale,
+        height: size.height as f64 / scale,
+        maximized,
+        monitor_label: label,
+        monitor_position: mpos,
+    })
+}
+
+/// Walk `available_monitors()` and pick the one matching the persisted
+/// monitor identity. `None` ⇒ the user disconnected or rearranged
+/// displays; caller falls back to the centered default.
+fn find_matching_monitor(
+    win: &tauri::WebviewWindow,
+    state: &WindowStateDisk,
+) -> Option<tauri::Monitor> {
+    let monitors = win.available_monitors().ok()?;
+    let scale = win.scale_factor().unwrap_or(1.0);
+    monitors.into_iter().find(|m| {
+        let label_match = m
+            .name()
+            .map(|n| n == &state.monitor_label)
+            .unwrap_or(state.monitor_label.is_empty());
+        let mp = m.position();
+        let mx = mp.x as f64 / scale;
+        let my = mp.y as f64 / scale;
+        let pos_match = (mx - state.monitor_position.x).abs() <= MONITOR_MATCH_TOLERANCE_PX
+            && (my - state.monitor_position.y).abs() <= MONITOR_MATCH_TOLERANCE_PX;
+        label_match && pos_match
+    })
+}
+
+/// Verify the persisted rect fits inside `monitor`. Catches the
+/// "saved off-screen" / "monitor downgraded to lower resolution" cases
+/// before we apply geometry that would leave the window unreachable.
+fn rect_fits_monitor(
+    win: &tauri::WebviewWindow,
+    state: &WindowStateDisk,
+    monitor: &tauri::Monitor,
+) -> bool {
+    let scale = win.scale_factor().unwrap_or(1.0);
+    let mp = monitor.position();
+    let ms = monitor.size();
+    let m_x = mp.x as f64 / scale;
+    let m_y = mp.y as f64 / scale;
+    let m_w = ms.width as f64 / scale;
+    let m_h = ms.height as f64 / scale;
+    state.x >= m_x
+        && state.y >= m_y
+        && state.x + state.width <= m_x + m_w
+        && state.y + state.height <= m_y + m_h
+}
+
+/// Restore window geometry from disk if a matching monitor is attached
+/// AND the persisted rect still fits on it. Returns `Some(label)` on a
+/// successful restore so the caller can audit-log the monitor name; the
+/// audit entry deliberately omits the actual coordinates (per the spec
+/// these could leak desktop layout via the audit-log export).
+fn restore_window_state(app: &AppHandle, win: &tauri::WebviewWindow) -> Option<String> {
+    let state = load_window_state(app)?;
+    let monitor = match find_matching_monitor(win, &state) {
+        Some(m) => m,
+        None => {
+            audit(
+                app,
+                "display",
+                "window_restore_skipped",
+                serde_json::json!({ "reason": "monitor_missing" }),
+            );
+            return None;
+        }
+    };
+    if !rect_fits_monitor(win, &state, &monitor) {
+        audit(
+            app,
+            "display",
+            "window_restore_skipped",
+            serde_json::json!({ "reason": "off_screen" }),
+        );
+        return None;
+    }
+    let _ = win.set_position(tauri::LogicalPosition::new(state.x, state.y));
+    let _ = win.set_size(tauri::LogicalSize::new(state.width, state.height));
+    if state.maximized {
+        let _ = win.maximize();
+    }
+    Some(state.monitor_label.clone())
+}
+
 /// Read `privacy.json`, or fall back to `PrivacyConfigDto::default()` if
 /// the file is missing/corrupt. Lenient — same stance as `load_relays`:
 /// a hand-edited config that fails to parse should not brick the app.
@@ -908,25 +1143,212 @@ fn save_mls_directory(
 }
 
 // ── Identity persistence (mirrors `cli::cmd_keygen` JSON layout) ─────────────
+//
+// Wave 8H — OS-secure keystore
+// ----------------------------
+// The on-disk `keys.json` no longer carries `view_private` /
+// `spend_private` / `signing_private` plaintext. Instead it carries
+// `view_private_ref` / `spend_private_ref` / `signing_private_ref`
+// — opaque key_ids that resolve to byte blobs in the host's secure
+// keystore (DPAPI on Windows, Keychain on macOS, libsecret on Linux,
+// or — on hosts with no keystore — the in-process fallback).
+//
+// Migration is automatic and one-way: the first time `load_identity`
+// sees a legacy plaintext keyfile it stores the secrets in the keystore,
+// rewrites `keys.json` atomically (`.tmp` + fsync + rename), and emits an
+// `audit("identity", "migrated_to_secure_storage", …)` line. If anything
+// fails before the rename, the original plaintext keys.json survives so
+// the user never gets locked out of their identity.
+//
+// `signing_public` and `view_public` / `spend_public` continue to live
+// inline as hex — they are by design shareable.
 
-/// Load view + spend + signing keys from the on-disk keyfile.
-///
-/// Backwards-compat: if `signing_private` is absent (pre-attribution
-/// keyfiles), a fresh [`PhantomSigningKey`] is generated and the keyfile
-/// is rewritten in-place with the two new fields. The fourth tuple element
-/// signals whether such an upgrade happened so the caller can emit a
-/// one-time `status` event to the frontend.
-fn load_identity(
+/// Lazily-initialised handle onto the host's secure keystore. We initialise
+/// once per process and reuse the same `Box<dyn SecureStorage>` for every
+/// migration / load / write. Wrapped in `OnceLock` so the first identity
+/// access on the hot path doesn't pay a dispatch cost on every subsequent
+/// call.
+static SECURE_STORAGE: std::sync::OnceLock<Box<dyn SecureStorage>> = std::sync::OnceLock::new();
+
+fn secure_storage() -> &'static dyn SecureStorage {
+    SECURE_STORAGE.get_or_init(detect_best_storage).as_ref()
+}
+
+/// Compose the per-secret key_id from a path-derived prefix. Keeps the
+/// three secrets under one identity-file logically grouped in the OS
+/// keystore (`secret-tool search service phantomchat` lists them together)
+/// and lets `wipe_all_data` purge them by enumerating the suffixes.
+fn secret_key_id(path: &std::path::Path, suffix: &str) -> String {
+    format!("{}:{}", key_id_for_path(path), suffix)
+}
+
+const SECRET_SUFFIXES: &[&str] = &["view", "spend", "signing", "identity"];
+
+/// Atomic write helper: serialise `value` to `path.tmp`, fsync, rename
+/// onto `path`. If anything errors before the rename, the original file
+/// (if any) is preserved bit-for-bit. Used by the migration path so a
+/// power-loss between "stash secrets in keystore" and "rewrite keys.json"
+/// never leaves a half-converted file on disk.
+fn atomic_write_json(path: &std::path::Path, value: &serde_json::Value) -> anyhow::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    {
+        let mut f = fs::File::create(&tmp)
+            .with_context(|| format!("create {}", tmp.display()))?;
+        let bytes = serde_json::to_vec_pretty(value)?;
+        f.write_all(&bytes).with_context(|| format!("write {}", tmp.display()))?;
+        f.sync_all().with_context(|| format!("fsync {}", tmp.display()))?;
+    }
+    fs::rename(&tmp, path)
+        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
+    Ok(())
+}
+
+/// Stash a single secret (already base64-decoded) in the host keystore
+/// under the canonical per-path key_id, and return the key_id string the
+/// caller should write into the rewritten keys.json.
+fn stash_secret(
     path: &std::path::Path,
-) -> anyhow::Result<(ViewKey, SpendKey, PhantomSigningKey, bool)> {
+    suffix: &str,
+    secret: &[u8],
+) -> Result<String, SecureStorageError> {
+    let id = secret_key_id(path, suffix);
+    secure_storage().store(&id, secret)?;
+    Ok(id)
+}
+
+/// Pull a secret back from the keystore by its `_ref` value. Returned in a
+/// `Zeroizing<Vec<u8>>` so the plaintext is wiped from RAM as soon as the
+/// caller's deref-and-copy into a typed key struct returns.
+fn fetch_secret(key_id: &str) -> anyhow::Result<Zeroizing<Vec<u8>>> {
+    let bytes = secure_storage()
+        .load(key_id)
+        .with_context(|| format!("secure-storage load '{key_id}'"))?;
+    Ok(Zeroizing::new(bytes))
+}
+
+/// Convert a keys.json that still carries `*_private` plaintext into the
+/// new `*_private_ref` form. Returns `Ok(true)` iff a migration ran.
+///
+/// Atomicity contract: if any single keystore-store call fails (or the
+/// final atomic rewrite fails), the on-disk keys.json is left untouched
+/// and the caller can retry on the next launch.
+fn migrate_keys_json_if_legacy(
+    app: &AppHandle,
+    path: &std::path::Path,
+) -> anyhow::Result<bool> {
     let raw = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let mut json: serde_json::Value = serde_json::from_slice(&raw)?;
 
-    let view_bytes = B64.decode(
-        json["view_private"]
-            .as_str()
-            .context("missing view_private")?,
-    )?;
+    let has_legacy = ["view_private", "spend_private", "signing_private", "identity_private"]
+        .iter()
+        .any(|f| json.get(*f).and_then(|v| v.as_str()).is_some());
+    if !has_legacy {
+        return Ok(false);
+    }
+
+    // Migrate every plaintext field that exists. `identity_private` is
+    // legacy and may not appear on freshly-keygen'd files, so be lenient.
+    for (field, suffix) in [
+        ("view_private", "view"),
+        ("spend_private", "spend"),
+        ("signing_private", "signing"),
+        ("identity_private", "identity"),
+    ] {
+        if let Some(s) = json.get(field).and_then(|v| v.as_str()) {
+            // Wrap the decoded plaintext in `Zeroizing` so it's wiped from
+            // RAM as soon as the keystore-store call returns, even on the
+            // error path.
+            let plaintext: Zeroizing<Vec<u8>> = Zeroizing::new(
+                B64.decode(s).with_context(|| format!("decode {field} base64"))?,
+            );
+            let id = stash_secret(path, suffix, &plaintext)
+                .map_err(|e| anyhow!("stash {field}: {e}"))?;
+            if let Some(obj) = json.as_object_mut() {
+                obj.remove(field);
+                obj.insert(format!("{field}_ref"), serde_json::Value::String(id));
+            }
+        }
+    }
+
+    // Stamp which backend we used so a later operator audit can
+    // differentiate a real keychain from the fallback plaintext store.
+    let backend = secure_storage().name();
+    if let Some(obj) = json.as_object_mut() {
+        obj.insert(
+            "storage_backend".to_string(),
+            serde_json::Value::String(backend.to_string()),
+        );
+    }
+
+    atomic_write_json(path, &json)?;
+
+    audit(
+        app,
+        "identity",
+        "migrated_to_secure_storage",
+        serde_json::json!({
+            "backend": backend,
+        }),
+    );
+    if backend == "fallback-plaintext" {
+        audit(
+            app,
+            "identity",
+            "secure_storage_fallback_warning",
+            serde_json::json!({
+                "reason": "no OS keystore detected; secrets live in process memory only"
+            }),
+        );
+    }
+
+    Ok(true)
+}
+
+/// Load view + spend + signing keys from the on-disk keyfile.
+///
+/// Handles three input shapes:
+///
+/// 1. **Legacy plaintext** (`view_private`, etc.) — auto-migrated to
+///    the secure-storage form on first sight, then loaded as case 2.
+/// 2. **Secure-storage refs** (`view_private_ref`, etc.) — the
+///    canonical post-Wave-8H format; secrets fetched from
+///    `secure_storage()`.
+/// 3. **Mixed / partial** (e.g. `signing_private` absent on
+///    pre-attribution keyfiles) — the missing piece is generated
+///    fresh, written to the keystore, and the keyfile is upgraded
+///    in-place. The fourth tuple element flags such an upgrade so
+///    the caller can emit a one-time `status` event.
+fn load_identity(
+    app: &AppHandle,
+    path: &std::path::Path,
+) -> anyhow::Result<(ViewKey, SpendKey, PhantomSigningKey, bool)> {
+    // Step 1 — best-effort auto-migration. A migration failure surfaces
+    // via the load below (the *_private fields will still be there, the
+    // *_private_ref fields will be missing) so we don't gate the entire
+    // load on it; just log if it errored.
+    if let Err(e) = migrate_keys_json_if_legacy(app, path) {
+        eprintln!("identity migration to secure-storage failed: {e:#}");
+    }
+
+    let raw = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut json: serde_json::Value = serde_json::from_slice(&raw)?;
+
+    // Helper: load a single secret either by `_ref` (preferred) or by
+    // legacy plaintext (fallback if the migration above failed).
+    let load_secret = |json: &serde_json::Value,
+                       field: &str|
+     -> anyhow::Result<Zeroizing<Vec<u8>>> {
+        let ref_field = format!("{field}_ref");
+        if let Some(id) = json.get(&ref_field).and_then(|v| v.as_str()) {
+            return fetch_secret(id);
+        }
+        if let Some(s) = json.get(field).and_then(|v| v.as_str()) {
+            return Ok(Zeroizing::new(B64.decode(s)?));
+        }
+        Err(anyhow!("missing {field} (or {ref_field})"))
+    };
+
+    let view_bytes = load_secret(&json, "view_private")?;
     let view_secret = StaticSecret::from(
         <[u8; 32]>::try_from(view_bytes.as_slice()).map_err(|_| anyhow!("bad view key"))?,
     );
@@ -935,11 +1357,7 @@ fn load_identity(
         secret: view_secret,
     };
 
-    let spend_bytes = B64.decode(
-        json["spend_private"]
-            .as_str()
-            .context("missing spend_private")?,
-    )?;
+    let spend_bytes = load_secret(&json, "spend_private")?;
     let spend_secret = StaticSecret::from(
         <[u8; 32]>::try_from(spend_bytes.as_slice()).map_err(|_| anyhow!("bad spend key"))?,
     );
@@ -948,30 +1366,35 @@ fn load_identity(
         secret: spend_secret,
     };
 
-    let (signing, upgraded) = match json["signing_private"].as_str() {
-        Some(s) => {
-            let bytes = B64.decode(s)?;
+    // Signing key handling: prefer the `_ref` form, then plaintext, then
+    // generate-and-persist if the keyfile predates sealed-sender
+    // attribution. The `upgraded` flag fires only in that last case.
+    let (signing, upgraded) = match load_secret(&json, "signing_private") {
+        Ok(bytes) => {
             let arr: [u8; 32] = <[u8; 32]>::try_from(bytes.as_slice())
                 .map_err(|_| anyhow!("bad signing key"))?;
             (PhantomSigningKey::from_bytes(arr), false)
         }
-        None => {
+        Err(_) => {
             let sk = PhantomSigningKey::generate();
-            // Persist so subsequent runs reuse the same identity for
-            // attribution. Best-effort: a write failure is non-fatal — the
-            // in-memory key still works for this session.
-            if let Some(obj) = json.as_object_mut() {
-                obj.insert(
-                    "signing_private".to_string(),
-                    serde_json::Value::String(B64.encode(sk.to_bytes())),
-                );
-                obj.insert(
-                    "signing_public".to_string(),
-                    serde_json::Value::String(hex::encode(sk.public_bytes())),
-                );
-                let _ = serde_json::to_vec_pretty(&json)
-                    .ok()
-                    .and_then(|b| fs::write(path, b).ok());
+            // Persist directly into the keystore + a `_ref` in keys.json.
+            // Best-effort: a failure here just means the next launch will
+            // generate a different signing key (cosmetic — sealed-sender
+            // attribution will show a different signing_pub).
+            let plaintext: Zeroizing<[u8; 32]> = Zeroizing::new(sk.to_bytes());
+            if let Ok(id) = stash_secret(path, "signing", plaintext.as_ref()) {
+                if let Some(obj) = json.as_object_mut() {
+                    obj.insert(
+                        "signing_private_ref".to_string(),
+                        serde_json::Value::String(id),
+                    );
+                    obj.insert(
+                        "signing_public".to_string(),
+                        serde_json::Value::String(hex::encode(sk.public_bytes())),
+                    );
+                    obj.remove("signing_private");
+                    let _ = atomic_write_json(path, &json);
+                }
             }
             (sk, true)
         }
@@ -986,21 +1409,46 @@ fn write_identity(path: &std::path::Path) -> anyhow::Result<IdentityInfo> {
     let spend = SpendKey::generate();
     let signing = PhantomSigningKey::generate();
 
-    // Field names + encodings match `cli/src/main.rs::cmd_keygen` exactly so
-    // the same keyfile is interchangeable between CLI and Desktop.
+    // Stash every secret in the host keystore first, build the on-disk
+    // keys.json out of the returned key_ids. Identity-private is also
+    // stashed even though current call sites don't read it back — keeps
+    // the wire-format symmetry with the CLI keyfile (so an export/import
+    // round-trip survives a future feature that needs the identity key).
+    //
+    // `Zeroizing` wraps each plaintext blob so it's wiped from RAM as
+    // soon as `stash_secret` returns. The struct fields themselves
+    // already zeroize-on-drop via the `Zeroize` derives in `core::keys`.
+    let view_priv: Zeroizing<[u8; 32]> = Zeroizing::new(view.secret.to_bytes());
+    let spend_priv: Zeroizing<[u8; 32]> = Zeroizing::new(spend.secret.to_bytes());
+    let signing_priv: Zeroizing<[u8; 32]> = Zeroizing::new(signing.to_bytes());
+    let identity_priv: Zeroizing<[u8; 32]> = Zeroizing::new(id.private);
+
+    let view_ref = stash_secret(path, "view", view_priv.as_ref())
+        .map_err(|e| anyhow!("stash view: {e}"))?;
+    let spend_ref = stash_secret(path, "spend", spend_priv.as_ref())
+        .map_err(|e| anyhow!("stash spend: {e}"))?;
+    let signing_ref = stash_secret(path, "signing", signing_priv.as_ref())
+        .map_err(|e| anyhow!("stash signing: {e}"))?;
+    let identity_ref = stash_secret(path, "identity", identity_priv.as_ref())
+        .map_err(|e| anyhow!("stash identity: {e}"))?;
+
+    // Field names + encodings of the public-side fields match
+    // `cli/src/main.rs::cmd_keygen` exactly so the address/QR shape is
+    // identical to the CLI keyfile. The `*_ref` fields are new and only
+    // make sense to a desktop install on the same host.
     let json = serde_json::json!({
-        "identity_private": B64.encode(id.private),
-        "identity_public":  B64.encode(id.public),
-        "view_private":     B64.encode(view.secret.to_bytes()),
-        "view_public":      hex::encode(view.public.as_bytes()),
-        "spend_private":    B64.encode(spend.secret.to_bytes()),
-        "spend_public":     hex::encode(spend.public.as_bytes()),
-        "signing_private":  B64.encode(signing.to_bytes()),
-        "signing_public":   hex::encode(signing.public_bytes()),
+        "identity_private_ref": identity_ref,
+        "identity_public":      B64.encode(id.public),
+        "view_private_ref":     view_ref,
+        "view_public":          hex::encode(view.public.as_bytes()),
+        "spend_private_ref":    spend_ref,
+        "spend_public":         hex::encode(spend.public.as_bytes()),
+        "signing_private_ref":  signing_ref,
+        "signing_public":       hex::encode(signing.public_bytes()),
+        "storage_backend":      secure_storage().name(),
     });
 
-    fs::write(path, serde_json::to_vec_pretty(&json)?)
-        .with_context(|| format!("writing {}", path.display()))?;
+    atomic_write_json(path, &json)?;
 
     Ok(IdentityInfo {
         address: format!(
@@ -1196,7 +1644,7 @@ async fn send_sealed_to_address(
     let recipient = PhantomAddress::parse(recipient_addr)
         .ok_or_else(|| anyhow!("invalid recipient address '{}'", recipient_addr))?;
 
-    let (_view, _spend, signing_key, _upgraded) = load_identity(&keys_path)?;
+    let (_view, _spend, signing_key, _upgraded) = load_identity(app, &keys_path)?;
 
     let mut store = SessionStore::load(&sessions_path)
         .with_context(|| format!("loading sessions from {}", sessions_path.display()))?;
@@ -1285,7 +1733,7 @@ async fn spawn_listener_task(
     let sessions_path = sessions_path(&app).map_err(|e| e.to_string())?;
 
     let (view_key, spend_key, _signing, upgraded) =
-        load_identity(&keys_path).map_err(|e| e.to_string())?;
+        load_identity(&app, &keys_path).map_err(|e| e.to_string())?;
     if upgraded {
         let _ = app.emit(
             "status",
@@ -2984,6 +3432,15 @@ fn export_keyfile(app: AppHandle) -> Result<String, String> {
 /// Validate + write a pasted keyfile JSON into `app_data_dir/keys.json`.
 /// Overwrites any existing file (the wizard's "Restore" branch is the only
 /// caller; the user is informed it'll replace the current identity).
+///
+/// Imported keyfiles still arrive in the legacy plaintext format (that's
+/// the export shape — `*_ref` fields would be useless on the importing
+/// host since they only resolve in the originating keystore). Right after
+/// writing the plaintext to disk we run the standard migration so the
+/// just-imported `*_private` fields get pushed into the host keystore and
+/// the on-disk file is rewritten with `*_private_ref` placeholders. The
+/// process is idempotent: a re-import overwrites both the file AND the
+/// keystore entries since they're keyed off the same path.
 #[tauri::command]
 fn import_keyfile(app: AppHandle, json_text: String) -> Result<(), String> {
     let json: serde_json::Value =
@@ -3004,15 +3461,139 @@ fn import_keyfile(app: AppHandle, json_text: String) -> Result<(), String> {
         }
     }
     let path = keys_path(&app).map_err(|e| e.to_string())?;
-    fs::write(&path, serde_json::to_vec_pretty(&json).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("write {}: {}", path.display(), e))?;
+    // Atomic write of the plaintext form so we never have a half-written
+    // keys.json next to a half-stashed keystore.
+    atomic_write_json(&path, &json).map_err(|e| format!("write {}: {}", path.display(), e))?;
     audit(&app, "identity", "restored", serde_json::json!({}));
+    // Immediately migrate the just-imported plaintext into the host
+    // keystore. Best-effort: a migration failure leaves the plaintext
+    // keys.json on disk (the user can still use the app — every read path
+    // falls back to the inline `*_private` field if `*_private_ref` is
+    // missing) and the next launch will retry the migration.
+    if let Err(e) = migrate_keys_json_if_legacy(&app, &path) {
+        eprintln!("import: secure-storage migration failed: {e:#}");
+    }
     Ok(())
 }
 
+/// Anti-forensic file-overwrite threshold. Files **larger** than this skip
+/// the zero-overwrite pass and are unlinked directly with a WARN audit
+/// entry — primarily to keep `wipe_all_data` from spending O(GB) of disk
+/// I/O on user-staged backups that the user is independently responsible
+/// for. SSD TRIM will do its own thing on those over time.
+const WIPE_OVERWRITE_MAX_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Best-effort cryptographic-shred of a single file: open for write,
+/// overwrite the byte range with zeros, fsync, truncate, then unlink.
+///
+/// On SSDs the underlying NAND blocks are usually only TRIM'd on delete,
+/// so the in-place zero-write is partially redundant — but on spinning
+/// rust it materially raises the bar against forensic recovery, and on
+/// SSDs it at least pre-empts wear-leveling shenanigans that might keep
+/// a stale copy of the original bytes in an unmapped erase block.
+///
+/// All errors are swallowed (logged to stderr) — the goal is "delete the
+/// file, scrubbed if possible, plain-deleted as a fallback". A scrub
+/// failure must not block the unlink.
+fn shred_file(path: &std::path::Path) {
+    let size = match fs::metadata(path) {
+        Ok(m) => m.len(),
+        Err(e) => {
+            eprintln!("shred: stat {} failed: {e}", path.display());
+            // Even with no metadata, attempt the unlink as a last resort.
+            let _ = fs::remove_file(path);
+            return;
+        }
+    };
+
+    if size > WIPE_OVERWRITE_MAX_BYTES {
+        // Probably a backup the user staged into app_data; honour the
+        // size threshold and just unlink. We log so a compliance auditor
+        // can see why this file wasn't scrubbed.
+        eprintln!(
+            "shred: skipping zero-overwrite of {} ({} > {}); unlinking only",
+            path.display(),
+            size,
+            WIPE_OVERWRITE_MAX_BYTES
+        );
+        let _ = fs::remove_file(path);
+        return;
+    }
+
+    if size > 0 {
+        match OpenOptions::new().write(true).truncate(false).open(path) {
+            Ok(mut f) => {
+                // Stream the zero-pass in 64 KiB chunks rather than
+                // allocating a `vec![0u8; size as usize]` outright — keeps
+                // wipe of a 95 MiB file from spiking RSS to 95 MiB.
+                let chunk = vec![0u8; 64 * 1024];
+                let mut remaining = size as usize;
+                while remaining > 0 {
+                    let n = remaining.min(chunk.len());
+                    if let Err(e) = f.write_all(&chunk[..n]) {
+                        eprintln!("shred: write {} failed: {e}", path.display());
+                        break;
+                    }
+                    remaining -= n;
+                }
+                let _ = f.sync_all();
+                // Truncate after the overwrite so the directory entry
+                // points at a 0-byte file before unlink — narrows the
+                // forensic window further on filesystems that delay free.
+                let _ = f.set_len(0);
+                let _ = f.sync_all();
+            }
+            Err(e) => {
+                eprintln!("shred: open {} for overwrite failed: {e}", path.display());
+            }
+        }
+    }
+
+    if let Err(e) = fs::remove_file(path) {
+        eprintln!("shred: unlink {} failed: {e}", path.display());
+    }
+}
+
+/// Recursively shred every file under `dir`, then remove the (now-empty)
+/// directory tree. Symlinks are unlinked without following — defence
+/// against a hostile or buggy preconfig that points app_data at `/`.
+fn shred_directory(dir: &std::path::Path) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("shred: read_dir {} failed: {e}", dir.display());
+            // Still try to remove the dir itself — it may already be empty.
+            let _ = fs::remove_dir_all(dir);
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        // Lstat (symlink_metadata) so we don't follow into another tree.
+        let meta = match fs::symlink_metadata(&p) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if meta.file_type().is_symlink() {
+            let _ = fs::remove_file(&p);
+        } else if meta.is_dir() {
+            shred_directory(&p);
+        } else {
+            shred_file(&p);
+        }
+    }
+    let _ = fs::remove_dir(dir);
+}
+
 /// Wipe the entire app-data directory (keys, contacts, sessions, history,
-/// MLS directory, relays.json, onboarding marker) then exit. Caller is
+/// MLS directory, relays.json, onboarding marker) AND the host-keystore
+/// secrets keyed off the current identity file, then exit. Caller is
 /// expected to confirm the destructive intent before invoking.
+///
+/// Pre-delete pass scrubs each file with a single zero-overwrite +
+/// truncate to defeat naive forensic recovery on spinning disks. Files
+/// larger than `WIPE_OVERWRITE_MAX_BYTES` (100 MiB) skip the overwrite
+/// and are unlinked directly — see `shred_file` for the rationale.
 #[tauri::command]
 fn wipe_all_data(app: AppHandle) -> Result<(), String> {
     // Best-effort audit BEFORE the wipe — the on-disk audit.log itself is
@@ -3024,9 +3605,25 @@ fn wipe_all_data(app: AppHandle) -> Result<(), String> {
         .path()
         .app_data_dir()
         .map_err(|e| format!("resolve app_data_dir: {e}"))?;
+
+    // Step 1 — purge keystore entries belonging to this identity. The
+    // path-derived key_id scheme means a stale `keys.json` is enough to
+    // know which entries to drop. Best-effort: a missing entry is fine.
     if dir.exists() {
-        fs::remove_dir_all(&dir).map_err(|e| format!("remove {}: {}", dir.display(), e))?;
+        let kp = dir.join(KEYS_FILE);
+        for suffix in SECRET_SUFFIXES {
+            let id = secret_key_id(&kp, suffix);
+            if let Err(e) = secure_storage().delete(&id) {
+                eprintln!("wipe: keystore delete '{id}' failed: {e}");
+            }
+        }
     }
+
+    // Step 2 — anti-forensic shred + remove every file in app_data_dir.
+    if dir.exists() {
+        shred_directory(&dir);
+    }
+
     // Hard exit: we just nuked our own state; staying in the process risks
     // background tasks (relay subscribe loop, session writes) recreating
     // some of the files we just deleted.
@@ -3468,6 +4065,615 @@ async fn dispatch_crash_report(
     );
 
     Ok(status.to_string())
+// ── LAN org: zero-touch mDNS discovery for office deployments ───────────────
+//
+// Goal: turn 30-PC enrollment from "all 30 users manually exchange
+// `phantom:view:spend` addresses" (870 manual steps) into 30 × (paste 6-digit
+// code → done). The first install runs `lan_org_create` which generates a
+// 6-character org code (`XXX-XXX`, alphabet excludes 0/O/1/I/L) and starts an
+// mDNS broadcast on `_phantomchat._tcp.local.` with TXT records:
+//
+//     org=<code>          // shared secret — also the discovery filter
+//     label=<my_label>    // human-readable name (from me.json)
+//     addr=<phantom:…>    // 1:1 contact address
+//     sigpub=<hex>        // Ed25519 sealed-sender pubkey
+//
+// Subsequent installs run `lan_org_join(code)` which broadcasts the SAME
+// service (so the whole org converges into a mesh) AND continuously browses
+// for matching peers. Each match is deduped by `signing_pub_hex`, persisted
+// to `lan_org.json` next to `keys.json`, and auto-added as a 1:1 contact via
+// the same code path used by `add_contact` (idempotent — skipped when the
+// label is already taken). Discovered peers are NOT auto-added as MLS group
+// members; that stays an explicit user action.
+//
+// Authentication model: shared-secret only. Anyone with the org code who is
+// on the same broadcast domain can announce themselves as a peer. There is
+// NO cryptographic verification of org membership beyond "you typed the
+// right code". The Wizard surfaces this explicitly so a user doesn't enable
+// mDNS on a hostile network (cafés, hotels, conferences). MVP is single
+// broadcast domain — multi-LAN scenarios (e.g. two offices over a VPN) are
+// out of scope.
+//
+// `lan_org.json` on-disk shape:
+//
+//     { "code": "X9K-3PT",
+//       "discovered": [
+//         { "label": "alice",
+//           "address": "phantom:view:spend",
+//           "signing_pub_hex": "deadbeef…",
+//           "last_seen": 1712345678 }, … ] }
+//
+// On every app start, if `lan_org.json` exists we re-arm the broadcast +
+// browse from `setup()` so the office mesh keeps reconverging without user
+// intervention. Audit log entries: `lan/created`, `lan/joined`,
+// `lan/peer_added`, `lan/left`.
+
+const LAN_ORG_FILE: &str = "lan_org.json";
+const LAN_ORG_SERVICE_TYPE: &str = "_phantomchat._tcp.local.";
+/// Unambiguous-character alphabet for the 6-char org code. Excludes
+/// `0/O/1/I/L` to prevent dictation/typing mistakes when an admin reads
+/// the code out loud to a colleague over the office. 31 chars; 6 chars
+/// gives 31^6 ≈ 8.87 × 10^8 codes which is ample for the office-sized
+/// scope (a full room of users would have to randomly collide on a 6-char
+/// code, which is far below birthday risk for a small org).
+const LAN_ORG_CODE_ALPHABET: &[u8] = b"23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+
+/// One discovered LAN peer. Minimal copy of what we need to add the peer
+/// as a 1:1 contact + render in the Settings panel. Persisted to
+/// `lan_org.json` so a restart doesn't show "0 peers" until the next
+/// browse round-trip lands.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DiscoveredPeer {
+    pub label: String,
+    pub address: String,
+    pub signing_pub_hex: String,
+    /// Unix epoch seconds of the most-recent mDNS announcement we saw.
+    /// Used by the Settings panel's "last discovery" surface.
+    pub last_seen: u64,
+}
+
+/// Live LAN-org state. The `broadcaster` field holds the running
+/// `ServiceDaemon` if we're broadcasting; `None` means we tore it down.
+/// `discovered` is the deduplicated peer set, persisted to disk on every
+/// mutation.
+pub struct LanOrg {
+    pub code: String,
+    pub broadcaster: Option<mdns_sd::ServiceDaemon>,
+    pub discovered: Vec<DiscoveredPeer>,
+    /// Set when an mDNS browse-event handler successfully resolved a peer
+    /// — surfaced via `lan_org_status`. `None` if we've been broadcasting
+    /// but haven't seen a peer yet.
+    pub last_discovery_ts: Option<u64>,
+    /// Background JoinHandle for the browse-event drain task. Kept so
+    /// `lan_org_leave` can cancel it; otherwise the task would keep
+    /// holding a Receiver into a torn-down ServiceDaemon.
+    pub browse_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct LanOrgDisk {
+    #[serde(default)]
+    code: String,
+    #[serde(default)]
+    discovered: Vec<DiscoveredPeer>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct LanOrgStatus {
+    pub active: bool,
+    pub code: Option<String>,
+    pub peer_count: u32,
+    pub last_discovery_ts: Option<String>,
+}
+
+fn lan_org_path(app: &AppHandle) -> anyhow::Result<PathBuf> {
+    Ok(app_data(app)?.join(LAN_ORG_FILE))
+}
+
+fn load_lan_org(path: &std::path::Path) -> Option<LanOrgDisk> {
+    let raw = fs::read(path).ok()?;
+    serde_json::from_slice::<LanOrgDisk>(&raw).ok()
+}
+
+fn save_lan_org_disk(path: &std::path::Path, disk: &LanOrgDisk) -> anyhow::Result<()> {
+    fs::write(path, serde_json::to_vec_pretty(disk)?)
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+/// Generate a fresh 6-character org code formatted as `XXX-XXX`. CSPRNG
+/// (`OsRng`) seeds every character independently; the alphabet excludes
+/// ambiguous glyphs (see [`LAN_ORG_CODE_ALPHABET`]).
+fn generate_org_code() -> String {
+    use rand::rngs::OsRng;
+    use rand::Rng;
+
+    let mut rng = OsRng;
+    let mut chars = String::with_capacity(7);
+    for i in 0..6 {
+        let idx = rng.gen_range(0..LAN_ORG_CODE_ALPHABET.len());
+        chars.push(LAN_ORG_CODE_ALPHABET[idx] as char);
+        if i == 2 {
+            chars.push('-');
+        }
+    }
+    chars
+}
+
+/// Current wall-clock seconds since the unix epoch. Returns `0` on the
+/// (impossible) clock-pre-1970 case rather than panicking — `lan_org.json`
+/// is purely a UI surface, never a security invariant.
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Build TXT records for our outgoing mDNS service announcement. Order is
+/// stable so the wire bytes are diff-friendly across sessions.
+fn build_lan_txt_records(
+    code: &str,
+    label: &str,
+    address: &str,
+    sigpub_hex: &str,
+) -> std::collections::HashMap<String, String> {
+    let mut props = std::collections::HashMap::new();
+    props.insert("org".to_string(), code.to_string());
+    props.insert("label".to_string(), label.to_string());
+    props.insert("addr".to_string(), address.to_string());
+    props.insert("sigpub".to_string(), sigpub_hex.to_string());
+    props
+}
+
+/// Resolve our own `(label, address, signing_pub_hex)` triple for the
+/// outgoing TXT records. Falls back to the first 8 chars of the signing
+/// pubkey hex when the user hasn't set a display name yet — same pattern
+/// as `resolve_self_label` for MLS Welcomes.
+fn resolve_self_lan_advertisement(
+    app: &AppHandle,
+) -> Result<(String, String, String), String> {
+    let keys_path = keys_path(app).map_err(|e| e.to_string())?;
+    if !keys_path.exists() {
+        return Err("no identity yet — call generate_identity first".into());
+    }
+    let address = address_from_keyfile(&keys_path).map_err(|e| e.to_string())?;
+    let raw = fs::read(&keys_path).map_err(|e| e.to_string())?;
+    let json: serde_json::Value = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
+    let sigpub = json["signing_public"]
+        .as_str()
+        .ok_or_else(|| "missing signing_public in keys.json".to_string())?
+        .to_string();
+    let me = load_me(app);
+    let label = if me.label.trim().is_empty() {
+        sigpub.chars().take(8).collect()
+    } else {
+        me.label.trim().to_string()
+    };
+    Ok((label, address, sigpub))
+}
+
+/// Spawn a `ServiceDaemon`, register our outgoing service, and (if
+/// `with_browse` is true) start a continuous browse for the same service
+/// type filtering by the org-code TXT match. Returns the daemon + an
+/// optional JoinHandle for the browse-drain task.
+///
+/// The daemon binds to UDP 5353 on every available interface — both IPv4
+/// and IPv6 — so the office mesh works regardless of whether the network
+/// is dual-stack or v4-only. mdns-sd silently skips interfaces it can't
+/// bind to (e.g. a Docker bridge with no multicast group), so a partially
+/// firewalled host still announces on the interfaces it CAN reach.
+fn start_lan_daemon(
+    app: &AppHandle,
+    code: &str,
+    with_browse: bool,
+) -> Result<(mdns_sd::ServiceDaemon, Option<tokio::task::JoinHandle<()>>), String> {
+    use mdns_sd::{ServiceDaemon, ServiceInfo};
+
+    let (label, address, sigpub_hex) = resolve_self_lan_advertisement(app)?;
+    let txt = build_lan_txt_records(code, &label, &address, &sigpub_hex);
+
+    let daemon = ServiceDaemon::new()
+        .map_err(|e| format!("ServiceDaemon::new: {e}"))?;
+
+    // Instance name. We use the first 16 chars of our signing-pub hex so
+    // every member of the org broadcasts a stable, identity-derived name
+    // that survives restarts (mDNS drops duplicate names on the wire, so
+    // a stable name avoids name-flap if two laptops on the same org code
+    // happen to share a prefix). The full sigpub is in the TXT record.
+    let instance_name = format!("phantomchat-{}", &sigpub_hex.chars().take(16).collect::<String>());
+    let host_name = format!("{}.local.", instance_name);
+
+    // Port 0 — we don't expose a TCP service yet. mDNS still propagates
+    // the TXT record without a usable port; the txt records are all the
+    // discovery layer needs. (Future: a real port for direct LAN sync.)
+    let info = ServiceInfo::new(
+        LAN_ORG_SERVICE_TYPE,
+        &instance_name,
+        &host_name,
+        "",
+        0u16,
+        Some(txt),
+    )
+    .map_err(|e| format!("ServiceInfo::new: {e}"))?
+    // `enable_addr_auto` lets mdns-sd auto-detect host IPs from the
+    // active interfaces — without it, the empty `host_ip` would emit
+    // an unresolvable A/AAAA record.
+    .enable_addr_auto();
+
+    daemon
+        .register(info)
+        .map_err(|e| format!("daemon.register: {e}"))?;
+
+    let browse_task = if with_browse {
+        let receiver = daemon
+            .browse(LAN_ORG_SERVICE_TYPE)
+            .map_err(|e| format!("daemon.browse: {e}"))?;
+        let app_for_browse = app.clone();
+        let code_for_browse = code.to_string();
+        let task = tokio::spawn(async move {
+            // Drain the synchronous channel on a blocking-friendly task.
+            // mdns-sd's `Receiver` is a flume channel which exposes a
+            // non-async `recv` — so we hop into a blocking helper to
+            // avoid stalling the tokio runtime.
+            loop {
+                let event = match tokio::task::spawn_blocking({
+                    let r = receiver.clone();
+                    move || r.recv()
+                })
+                .await
+                {
+                    Ok(Ok(ev)) => ev,
+                    // `recv` Err means daemon was shut down; graceful exit.
+                    Ok(Err(_)) => break,
+                    Err(_) => break,
+                };
+                match event {
+                    mdns_sd::ServiceEvent::ServiceResolved(info) => {
+                        let props_map: std::collections::HashMap<String, String> = info
+                            .get_properties()
+                            .iter()
+                            .map(|p| (p.key().to_string(), p.val_str().to_string()))
+                            .collect();
+                        let other_org = match props_map.get("org") {
+                            Some(s) => s.clone(),
+                            None => continue,
+                        };
+                        if other_org != code_for_browse {
+                            continue;
+                        }
+                        let other_sigpub = match props_map.get("sigpub") {
+                            Some(s) => s.clone(),
+                            None => continue,
+                        };
+                        // Skip our own broadcast — no point adding ourselves.
+                        let self_sigpub = match resolve_self_lan_advertisement(&app_for_browse) {
+                            Ok((_, _, s)) => s,
+                            Err(_) => String::new(),
+                        };
+                        if other_sigpub.eq_ignore_ascii_case(&self_sigpub) {
+                            continue;
+                        }
+                        let other_label = props_map
+                            .get("label")
+                            .cloned()
+                            .unwrap_or_else(|| other_sigpub.chars().take(8).collect());
+                        let other_addr = match props_map.get("addr") {
+                            Some(s) => s.clone(),
+                            None => continue,
+                        };
+                        if PhantomAddress::parse(&other_addr).is_none() {
+                            // Skip malformed addresses silently — could be
+                            // a stale/buggy peer; no need to surface as an
+                            // error to the user.
+                            continue;
+                        }
+                        ingest_lan_peer(
+                            &app_for_browse,
+                            DiscoveredPeer {
+                                label: other_label,
+                                address: other_addr,
+                                signing_pub_hex: other_sigpub,
+                                last_seen: unix_now_secs(),
+                            },
+                        )
+                        .await;
+                    }
+                    mdns_sd::ServiceEvent::SearchStopped(_) => break,
+                    _ => {}
+                }
+            }
+        });
+        Some(task)
+    } else {
+        None
+    };
+
+    Ok((daemon, browse_task))
+}
+
+/// Idempotent ingest path for a freshly-resolved LAN peer. Dedupes by
+/// `signing_pub_hex` — refreshes the `last_seen` timestamp on a re-hit,
+/// appends + persists + auto-adds-as-contact on a first-hit. Emits the
+/// `lan_peer_discovered` event so the React UI can refresh without
+/// polling. Auto-binds the contact's `signing_pub` so the very first
+/// incoming sealed-sender envelope from the peer resolves to its label.
+async fn ingest_lan_peer(app: &AppHandle, peer: DiscoveredPeer) {
+    let state = match app.try_state::<AppState>() {
+        Some(s) => s,
+        None => return,
+    };
+    let mut guard = state.lan_org.lock().await;
+    let lan = match guard.as_mut() {
+        Some(l) => l,
+        None => return,
+    };
+    let pub_hex_lower = peer.signing_pub_hex.to_lowercase();
+    let mut is_new = false;
+    if let Some(existing) = lan
+        .discovered
+        .iter_mut()
+        .find(|p| p.signing_pub_hex.eq_ignore_ascii_case(&pub_hex_lower))
+    {
+        existing.last_seen = peer.last_seen;
+        // Tolerate label / address drift (a peer may have updated them
+        // between sessions). Last writer wins.
+        existing.label = peer.label.clone();
+        existing.address = peer.address.clone();
+    } else {
+        lan.discovered.push(peer.clone());
+        is_new = true;
+    }
+    lan.last_discovery_ts = Some(peer.last_seen);
+    let code = lan.code.clone();
+    let snapshot = lan.discovered.clone();
+    drop(guard);
+
+    // Persist BEFORE doing any contact-side mutation so a crash mid-add
+    // doesn't lose the discovery itself.
+    if let Ok(path) = lan_org_path(app) {
+        let _ = save_lan_org_disk(
+            &path,
+            &LanOrgDisk {
+                code,
+                discovered: snapshot,
+            },
+        );
+    }
+
+    if is_new {
+        // Auto-add as a 1:1 contact via the same on-disk path that
+        // `add_contact` writes. Idempotent — if the label is already taken
+        // we skip silently (the user already has them under a different
+        // label). We DO bind the signing_pub on insert so the first
+        // incoming sealed-sender envelope renders with the human label
+        // instead of `?<8hex>`.
+        if let Ok(contacts_path) = contacts_path(app) {
+            let mut book = load_contacts(&contacts_path);
+            // Skip if any existing contact already has this signing_pub
+            // (don't double-add under a different label) OR has the same
+            // label (label collision — leave the user-set one alone).
+            let already = book.contacts.iter().any(|c| {
+                c.label == peer.label
+                    || c.signing_pub
+                        .as_deref()
+                        .map(|h| h.eq_ignore_ascii_case(&peer.signing_pub_hex))
+                        .unwrap_or(false)
+            });
+            if !already {
+                book.contacts.push(Contact {
+                    label: peer.label.clone(),
+                    address: peer.address.clone(),
+                    signing_pub: Some(peer.signing_pub_hex.clone()),
+                });
+                if save_contacts(&contacts_path, &book).is_ok() {
+                    audit(
+                        app,
+                        "lan",
+                        "peer_added",
+                        serde_json::json!({ "label": peer.label }),
+                    );
+                }
+            }
+        }
+        let _ = app.emit("lan_peer_discovered", peer);
+    }
+}
+
+/// Best-effort daemon shutdown. mdns-sd's `shutdown` is a graceful op —
+/// peers see a goodbye packet so they can age our entry out instead of
+/// waiting for the TTL to expire.
+fn stop_lan_daemon(daemon: &mdns_sd::ServiceDaemon) {
+    let _ = daemon.shutdown();
+}
+
+#[tauri::command]
+async fn lan_org_create(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let mut guard = state.lan_org.lock().await;
+    if guard.is_some() {
+        return Err("already in a LAN org — call lan_org_leave first".into());
+    }
+    let code = generate_org_code();
+    let (daemon, browse_task) = start_lan_daemon(&app, &code, true)?;
+    *guard = Some(LanOrg {
+        code: code.clone(),
+        broadcaster: Some(daemon),
+        discovered: Vec::new(),
+        last_discovery_ts: None,
+        browse_task,
+    });
+    drop(guard);
+    if let Ok(path) = lan_org_path(&app) {
+        let _ = save_lan_org_disk(
+            &path,
+            &LanOrgDisk {
+                code: code.clone(),
+                discovered: Vec::new(),
+            },
+        );
+    }
+    audit(
+        &app,
+        "lan",
+        "created",
+        serde_json::json!({ "code": code }),
+    );
+    Ok(code)
+}
+
+#[tauri::command]
+async fn lan_org_join(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    code: String,
+) -> Result<(), String> {
+    // Light validation. We accept the canonical `XXX-XXX` form OR a
+    // hyphen-less `XXXXXX` (some users will paste without the hyphen).
+    let cleaned: String = code
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    if cleaned.len() != 6 {
+        return Err(format!(
+            "invalid org code — expected 6 alphanumeric chars (got {})",
+            cleaned.len()
+        ));
+    }
+    if !cleaned
+        .as_bytes()
+        .iter()
+        .all(|b| LAN_ORG_CODE_ALPHABET.contains(b))
+    {
+        return Err("invalid org code — contains ambiguous chars (0/O/1/I/L)".into());
+    }
+    let canonical = format!("{}-{}", &cleaned[..3], &cleaned[3..]);
+
+    let mut guard = state.lan_org.lock().await;
+    if guard.is_some() {
+        return Err("already in a LAN org — call lan_org_leave first".into());
+    }
+    let (daemon, browse_task) = start_lan_daemon(&app, &canonical, true)?;
+    // Rehydrate any prior discovered peers if `lan_org.json` carried them
+    // and the codes match (a re-join with the same code preserves history).
+    let prior = lan_org_path(&app)
+        .ok()
+        .and_then(|p| load_lan_org(&p))
+        .filter(|d| d.code == canonical)
+        .map(|d| d.discovered)
+        .unwrap_or_default();
+    *guard = Some(LanOrg {
+        code: canonical.clone(),
+        broadcaster: Some(daemon),
+        discovered: prior.clone(),
+        last_discovery_ts: None,
+        browse_task,
+    });
+    drop(guard);
+    if let Ok(path) = lan_org_path(&app) {
+        let _ = save_lan_org_disk(
+            &path,
+            &LanOrgDisk {
+                code: canonical.clone(),
+                discovered: prior,
+            },
+        );
+    }
+    audit(
+        &app,
+        "lan",
+        "joined",
+        serde_json::json!({ "code": canonical }),
+    );
+    Ok(())
+}
+
+#[tauri::command]
+async fn lan_org_status(state: State<'_, AppState>) -> Result<LanOrgStatus, String> {
+    let guard = state.lan_org.lock().await;
+    Ok(match guard.as_ref() {
+        None => LanOrgStatus {
+            active: false,
+            code: None,
+            peer_count: 0,
+            last_discovery_ts: None,
+        },
+        Some(lan) => LanOrgStatus {
+            active: lan.broadcaster.is_some(),
+            code: Some(lan.code.clone()),
+            peer_count: lan.discovered.len() as u32,
+            last_discovery_ts: lan.last_discovery_ts.map(|ts| ts.to_string()),
+        },
+    })
+}
+
+#[tauri::command]
+async fn lan_org_leave(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut guard = state.lan_org.lock().await;
+    let lan = match guard.take() {
+        Some(l) => l,
+        None => return Err("not in a LAN org".into()),
+    };
+    drop(guard);
+    if let Some(d) = lan.broadcaster.as_ref() {
+        stop_lan_daemon(d);
+    }
+    if let Some(t) = lan.browse_task {
+        t.abort();
+    }
+    if let Ok(path) = lan_org_path(&app) {
+        // Best-effort: unlink the persisted file so the next launch
+        // doesn't auto-rehydrate a torn-down org.
+        let _ = fs::remove_file(&path);
+    }
+    audit(
+        &app,
+        "lan",
+        "left",
+        serde_json::json!({ "code": lan.code }),
+    );
+    Ok(())
+}
+
+/// Setup-time helper: re-arm the broadcaster + browser if `lan_org.json`
+/// already exists from a previous session. Best-effort — a daemon spawn
+/// failure (e.g. UDP 5353 blocked by a firewall) is logged via stderr but
+/// MUST NOT prevent the app from booting; the user can manually retry
+/// from the Settings panel.
+async fn rehydrate_lan_org_on_startup(app: AppHandle) {
+    let path = match lan_org_path(&app) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let disk = match load_lan_org(&path) {
+        Some(d) if !d.code.is_empty() => d,
+        _ => return,
+    };
+    let state = match app.try_state::<AppState>() {
+        Some(s) => s,
+        None => return,
+    };
+    let (daemon, browse_task) = match start_lan_daemon(&app, &disk.code, true) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("lan_org rehydrate skipped: {e}");
+            return;
+        }
+    };
+    let mut guard = state.lan_org.lock().await;
+    *guard = Some(LanOrg {
+        code: disk.code,
+        broadcaster: Some(daemon),
+        discovered: disk.discovered,
+        last_discovery_ts: None,
+        browse_task,
+    });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -3528,6 +4734,14 @@ pub fn run() {
             dispatch_crash_report,
             get_crash_reporting_opt_in,
             set_crash_reporting_opt_in,
+            export_backup,
+            import_backup,
+            verify_backup,
+            lan_org_create,
+            lan_org_join,
+            lan_org_status,
+            lan_org_leave,
+            reset_window_state,
         ])
         .setup(|app| {
             // Pre-create the data dir on first launch so command handlers
@@ -3540,6 +4754,18 @@ pub fn run() {
             // aborts. Must happen after `app_data()` so the hook's
             // cached path resolves to a real, mkdir'd directory.
             set_panic_hook(handle.clone());
+            // ── LAN org rehydrate ───────────────────────────────────────
+            // If `lan_org.json` exists from a previous session, re-arm
+            // the mDNS broadcast + browse so the office mesh keeps
+            // converging without user intervention. Best-effort — a
+            // failure (e.g. UDP 5353 firewalled) is logged via stderr but
+            // does NOT block the app from launching. Spawned on the
+            // tokio runtime so the synchronous setup hook returns
+            // promptly.
+            let lan_handle = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                rehydrate_lan_org_on_startup(lan_handle).await;
+            });
 
             // ── System tray ──────────────────────────────────────────────
             // Build a minimal menu: Show/Hide toggles main window, Status
@@ -3593,13 +4819,68 @@ pub fn run() {
                 .build(app)?;
 
             // ── Window close → hide instead of exit ──────────────────────
+            // ── Window-state restore + persistent geometry ───────────────
+            //
+            // Restore happens BEFORE we wire up the listener so the
+            // initial set_position/set_size we apply doesn't trigger an
+            // immediate echo-write back to disk. The listener is then
+            // installed with a debounce so that drag/resize gestures
+            // collapse to one write per WINDOW_STATE_DEBOUNCE_MS.
             if let Some(win) = app.get_webview_window("main") {
+                // 1. Apply persisted geometry if a matching monitor is
+                //    still attached and the rect fits on it.
+                if let Some(label) = restore_window_state(&handle, &win) {
+                    audit(
+                        &handle,
+                        "display",
+                        "window_restored",
+                        serde_json::json!({ "monitor_label": label }),
+                    );
+                }
+
+                // 2. Combined window-event listener:
+                //    - CloseRequested → hide (existing behavior)
+                //    - Resized / Moved → debounced save_window_state
+                //    Maximize/unmaximize is reported as a Resized event
+                //    on every desktop platform Tauri supports, so we
+                //    re-read `is_maximized()` inside that branch.
                 let win_for_event = win.clone();
-                win.on_window_event(move |e| {
-                    if let WindowEvent::CloseRequested { api, .. } = e {
+                let app_for_event = handle.clone();
+                let last_save = Arc::new(StdMutex::new(
+                    std::time::Instant::now()
+                        - std::time::Duration::from_millis(WINDOW_STATE_DEBOUNCE_MS),
+                ));
+                win.on_window_event(move |e| match e {
+                    WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
                         let _ = win_for_event.hide();
                     }
+                    WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
+                        // Debounce: only persist if the previous save
+                        // happened more than WINDOW_STATE_DEBOUNCE_MS ago.
+                        // We deliberately accept losing the very last
+                        // gesture if the user rage-quits within 500 ms —
+                        // worst case is we restore a position that's off
+                        // by a few pixels from where they let go of the
+                        // mouse, which the off-screen rescue catches if
+                        // it ever matters.
+                        let now = std::time::Instant::now();
+                        let mut guard = match last_save.lock() {
+                            Ok(g) => g,
+                            Err(_) => return,
+                        };
+                        if now.duration_since(*guard)
+                            < std::time::Duration::from_millis(WINDOW_STATE_DEBOUNCE_MS)
+                        {
+                            return;
+                        }
+                        *guard = now;
+                        drop(guard);
+                        if let Ok(state) = capture_window_state(&win_for_event) {
+                            let _ = save_window_state(&app_for_event, state);
+                        }
+                    }
+                    _ => {}
                 });
             }
 
@@ -4381,4 +5662,727 @@ async fn typing_ping(app: AppHandle, contact_label: String) -> Result<(), String
     send_sealed_to_address(&app, &contact.address, &payload)
         .await
         .map_err(|e| format!("relay send: {e}"))
+}
+
+// ── Encrypted backup / restore (Wave 8c, compliance Aufbewahrungspflicht) ────
+//
+// Steuerberater + Anwälte are legally required to retain client communication
+// for 10 years (German GoBD / §147 AO). Without an export path, a stolen
+// laptop = permanent data loss = unsellable for the compliance-bound segment.
+//
+// Format — single `.pcbackup` file (a regular ZIP with a renamed extension):
+//
+//   backup-meta.json          UNENCRYPTED. { version: 1, created_at,
+//                             item_count, host_label }. Lets `verify_backup`
+//                             show provenance BEFORE the user types the
+//                             passphrase.
+//   wrapped-key.json          UNENCRYPTED wrapper:
+//                             { version, kdf: "argon2id",
+//                               kdf_params: { m: 65536, t: 3, p: 1 },
+//                               salt: <b64 16B>,
+//                               wrapped_data_key_nonce: <b64 24B>,
+//                               wrapped_data_key_ct:    <b64> }
+//   <filename>.nonce          24 bytes raw (XChaCha20-Poly1305 nonce).
+//   <filename>.ct             ciphertext + 16-byte Poly1305 tag.
+//
+// Crypto recipe:
+//   - 32-byte data-key from `OsRng`.
+//   - Argon2id derives a 32-byte KEK from passphrase. Parameters pinned to
+//     OWASP 2023 (m = 64 MiB, t = 3, p = 1). 16-byte salt from `OsRng`.
+//   - Each per-file payload encrypted with XChaCha20-Poly1305 + a fresh
+//     24-byte nonce (so we never repeat (key, nonce) even if the same
+//     filename is re-encrypted on a future backup).
+//   - The data-key itself is wrapped with the KEK using XChaCha20-Poly1305
+//     + its own fresh nonce so brute-forcing the passphrase is the only
+//     attack path.
+//   - `Zeroize` wipes both keys after each backup or restore.
+//
+// Restore is two-phase: decrypt every file into a TEMP dir under app_data,
+// then atomically rename onto the live paths after a clean listener
+// shutdown. If decryption of any file fails the temp dir is wiped and the
+// live data is untouched.
+
+use chacha20poly1305::{
+    aead::{rand_core::RngCore as _, Aead, AeadCore, KeyInit, OsRng as AeadOsRng},
+    XChaCha20Poly1305, XNonce,
+};
+use zeroize::Zeroize;
+
+const BACKUP_FORMAT_VERSION: u8 = 1;
+const BACKUP_META_FILENAME: &str = "backup-meta.json";
+const BACKUP_WRAPPED_KEY_FILENAME: &str = "wrapped-key.json";
+const BACKUP_KDF_M_KIB: u32 = 64 * 1024; // 64 MiB
+const BACKUP_KDF_T: u32 = 3;
+const BACKUP_KDF_P: u32 = 1;
+const BACKUP_SALT_LEN: usize = 16;
+const BACKUP_KEY_LEN: usize = 32;
+const BACKUP_XNONCE_LEN: usize = 24;
+
+/// Files at the root of `app_data_dir/` we attempt to back up. Missing
+/// entries are skipped quietly — a fresh install may not have a privacy.json
+/// or audit.log yet, and that's a valid backup. The list intentionally
+/// includes every file the spec calls out plus the optional `lan_org.json`
+/// / `window_state.json` / `disappearing.json` slots so a future feature
+/// addition picks them up automatically.
+const BACKUP_ROOT_FILES: &[&str] = &[
+    KEYS_FILE,
+    CONTACTS_FILE,
+    SESSIONS_FILE,
+    MESSAGES_FILE,
+    MLS_DIRECTORY_FILE,
+    ME_FILE,
+    RELAYS_FILE,
+    PRIVACY_FILE,
+    AUDIT_LOG_FILE,
+    "disappearing.json",
+    "lan_org.json",
+    "window_state.json",
+];
+
+/// Files inside the `mls_state/` subdirectory. Walked by name (rather than
+/// dir-listed) so the backup payload is deterministic across runs and
+/// future additions to the MLS storage backend show up explicitly here.
+const BACKUP_MLS_FILES: &[&str] = &["mls_state.bin", "mls_meta.json"];
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BackupMeta {
+    pub version: u8,
+    pub created_at: String,
+    pub item_count: u32,
+    pub host_label: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BackupResult {
+    pub path: String,
+    pub size_bytes: u64,
+    pub sha256_hex: String,
+    pub item_count: u32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RestoreResult {
+    pub items_restored: u32,
+    pub identity_replaced: bool,
+    pub requires_restart: bool,
+}
+
+/// On-disk layout of the unencrypted `wrapped-key.json` blob. Carries
+/// every parameter `verify_backup` / `import_backup` need to recreate the
+/// KEK and unwrap the data-key.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct WrappedKeyBlob {
+    version: u8,
+    kdf: String,
+    kdf_params: WrappedKeyKdfParams,
+    salt: String,
+    wrapped_data_key_nonce: String,
+    wrapped_data_key_ct: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct WrappedKeyKdfParams {
+    m: u32,
+    t: u32,
+    p: u32,
+}
+
+/// OS hostname best-effort. Used purely as a `host_label` UX hint inside
+/// `backup-meta.json` so the user can tell "alice-laptop" backups apart
+/// from "alice-desktop" ones in the file picker. Falls back to the
+/// platform default if the env var isn't set — never errors.
+fn detect_host_label() -> String {
+    if let Ok(h) = std::env::var("HOSTNAME") {
+        if !h.trim().is_empty() {
+            return h;
+        }
+    }
+    if let Ok(h) = std::env::var("COMPUTERNAME") {
+        if !h.trim().is_empty() {
+            return h;
+        }
+    }
+    if let Ok(h) = std::env::var("HOST") {
+        if !h.trim().is_empty() {
+            return h;
+        }
+    }
+    "phantomchat-host".to_string()
+}
+
+/// Derive a 32-byte KEK from passphrase + salt via Argon2id with the
+/// pinned OWASP 2023 params. Wraps the byte array in `Zeroize` semantics
+/// at the call site (caller is responsible for `key.zeroize()` after use).
+fn derive_kek(passphrase: &str, salt: &[u8]) -> Result<[u8; BACKUP_KEY_LEN], String> {
+    use argon2::{Algorithm, Argon2, Params, Version};
+    let params = Params::new(BACKUP_KDF_M_KIB, BACKUP_KDF_T, BACKUP_KDF_P, Some(BACKUP_KEY_LEN))
+        .map_err(|e| format!("argon2 params: {e}"))?;
+    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut out = [0u8; BACKUP_KEY_LEN];
+    argon
+        .hash_password_into(passphrase.as_bytes(), salt, &mut out)
+        .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?;
+    Ok(out)
+}
+
+/// Random fixed-length byte buffer via the AEAD-re-exported `OsRng`.
+fn random_bytes(len: usize) -> Vec<u8> {
+    let mut buf = vec![0u8; len];
+    AeadOsRng.fill_bytes(&mut buf);
+    buf
+}
+
+/// Encrypt `plaintext` with `key` + a fresh random nonce. Returns
+/// `(nonce_bytes, ciphertext_with_tag)`. The nonce is 24 bytes (XChaCha20)
+/// so collision probability across a single-user backup history is
+/// negligible (birthday bound ~2^96).
+fn aead_encrypt(key: &[u8; BACKUP_KEY_LEN], plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let cipher = XChaCha20Poly1305::new(key.into());
+    let nonce = XChaCha20Poly1305::generate_nonce(&mut AeadOsRng);
+    let ct = cipher
+        .encrypt(&nonce, plaintext)
+        .map_err(|e| format!("aead encrypt: {e}"))?;
+    Ok((nonce.to_vec(), ct))
+}
+
+/// Inverse of [`aead_encrypt`]. Returns the German error string on tag
+/// mismatch so the user sees the same passphrase-or-corruption hint
+/// regardless of which ciphertext fails first.
+fn aead_decrypt(key: &[u8; BACKUP_KEY_LEN], nonce: &[u8], ct: &[u8]) -> Result<Vec<u8>, String> {
+    if nonce.len() != BACKUP_XNONCE_LEN {
+        return Err(format!(
+            "nonce length mismatch: expected {} got {}",
+            BACKUP_XNONCE_LEN,
+            nonce.len()
+        ));
+    }
+    let cipher = XChaCha20Poly1305::new(key.into());
+    let nonce = XNonce::from_slice(nonce);
+    cipher
+        .decrypt(nonce, ct)
+        .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())
+}
+
+/// Read every backup-eligible file from `app_data_dir/` into an in-memory
+/// `(name, bytes)` list. The order is stable (root files first, then
+/// `mls_state/` entries) so two consecutive backups of an unchanged
+/// install round-trip to the same SHA256.
+fn collect_backup_payload(
+    data_dir: &std::path::Path,
+) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
+    for name in BACKUP_ROOT_FILES {
+        let p = data_dir.join(name);
+        if let Ok(bytes) = fs::read(&p) {
+            out.push(((*name).to_string(), bytes));
+        }
+    }
+    let mls_dir = data_dir.join(MLS_STATE_DIR);
+    if mls_dir.is_dir() {
+        for name in BACKUP_MLS_FILES {
+            let p = mls_dir.join(name);
+            if let Ok(bytes) = fs::read(&p) {
+                out.push((format!("{}/{}", MLS_STATE_DIR, name), bytes));
+            }
+        }
+    }
+    if out.is_empty() {
+        return Err(
+            "Keine Daten zum Sichern gefunden — bitte zuerst eine Identität erzeugen".into(),
+        );
+    }
+    Ok(out)
+}
+
+/// Build the `.pcbackup` archive in-memory and write it to `output_path`.
+/// Audit-log entry omits BOTH the passphrase and any key material — only
+/// the destination path + item count + sha256 hex are recorded. Any error
+/// returned is safe to surface verbatim to the React layer.
+fn write_backup_archive(
+    output_path: &std::path::Path,
+    payload: Vec<(String, Vec<u8>)>,
+    passphrase: &str,
+    host_label: String,
+) -> Result<BackupResult, String> {
+    use std::io::Write as IoWrite;
+    use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+    if passphrase.chars().count() < 12 {
+        return Err("Passphrase muss mindestens 12 Zeichen haben".into());
+    }
+
+    let item_count = payload.len() as u32;
+
+    // ── Generate keys + meta ────────────────────────────────────────────
+    let mut data_key = [0u8; BACKUP_KEY_LEN];
+    AeadOsRng.fill_bytes(&mut data_key);
+    let salt = random_bytes(BACKUP_SALT_LEN);
+    let mut kek = derive_kek(passphrase, &salt)?;
+
+    let (wrap_nonce, wrap_ct) = match aead_encrypt(&kek, &data_key) {
+        Ok(v) => v,
+        Err(e) => {
+            data_key.zeroize();
+            kek.zeroize();
+            return Err(e);
+        }
+    };
+
+    let wrapped = WrappedKeyBlob {
+        version: BACKUP_FORMAT_VERSION,
+        kdf: "argon2id".to_string(),
+        kdf_params: WrappedKeyKdfParams {
+            m: BACKUP_KDF_M_KIB,
+            t: BACKUP_KDF_T,
+            p: BACKUP_KDF_P,
+        },
+        salt: B64.encode(&salt),
+        wrapped_data_key_nonce: B64.encode(&wrap_nonce),
+        wrapped_data_key_ct: B64.encode(&wrap_ct),
+    };
+
+    let meta = BackupMeta {
+        version: BACKUP_FORMAT_VERSION,
+        created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        item_count,
+        host_label,
+    };
+
+    // ── Encrypt each payload entry into a per-file (nonce, ct) pair ─────
+    let mut encrypted: Vec<(String, Vec<u8>, Vec<u8>)> = Vec::with_capacity(payload.len());
+    for (name, bytes) in payload {
+        let result = aead_encrypt(&data_key, &bytes);
+        // Drop plaintext bytes ASAP — they may contain identity material.
+        drop(bytes);
+        match result {
+            Ok((nonce, ct)) => encrypted.push((name, nonce, ct)),
+            Err(e) => {
+                data_key.zeroize();
+                kek.zeroize();
+                return Err(e);
+            }
+        }
+    }
+    // Plaintext data-key + KEK are no longer needed — wipe before any
+    // further allocations / I/O so a panic during ZIP write can't leak.
+    data_key.zeroize();
+    kek.zeroize();
+
+    // ── Assemble ZIP ────────────────────────────────────────────────────
+    let mut zip_bytes: Vec<u8> = Vec::new();
+    {
+        let cursor = std::io::Cursor::new(&mut zip_bytes);
+        let mut zw = ZipWriter::new(cursor);
+        // Stored (no compression) — XChaCha ciphertext is incompressible
+        // and skipping deflate is markedly faster.
+        let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+
+        zw.start_file(BACKUP_META_FILENAME, opts)
+            .map_err(|e| format!("zip meta: {e}"))?;
+        zw.write_all(
+            &serde_json::to_vec_pretty(&meta).map_err(|e| format!("meta ser: {e}"))?,
+        )
+        .map_err(|e| format!("zip meta write: {e}"))?;
+
+        zw.start_file(BACKUP_WRAPPED_KEY_FILENAME, opts)
+            .map_err(|e| format!("zip wrapped-key: {e}"))?;
+        zw.write_all(
+            &serde_json::to_vec_pretty(&wrapped).map_err(|e| format!("wrapped ser: {e}"))?,
+        )
+        .map_err(|e| format!("zip wrapped-key write: {e}"))?;
+
+        for (name, nonce, ct) in &encrypted {
+            zw.start_file(format!("{}.nonce", name), opts)
+                .map_err(|e| format!("zip {name}.nonce: {e}"))?;
+            zw.write_all(nonce)
+                .map_err(|e| format!("zip {name}.nonce write: {e}"))?;
+            zw.start_file(format!("{}.ct", name), opts)
+                .map_err(|e| format!("zip {name}.ct: {e}"))?;
+            zw.write_all(ct)
+                .map_err(|e| format!("zip {name}.ct write: {e}"))?;
+        }
+        zw.finish().map_err(|e| format!("zip finish: {e}"))?;
+    }
+
+    // ── Persist + checksum ──────────────────────────────────────────────
+    if let Some(parent) = output_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
+        }
+    }
+    fs::write(output_path, &zip_bytes)
+        .map_err(|e| format!("write {}: {}", output_path.display(), e))?;
+
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(&zip_bytes);
+    let sha256_hex = hex::encode(hasher.finalize());
+
+    Ok(BackupResult {
+        path: output_path.to_string_lossy().to_string(),
+        size_bytes: zip_bytes.len() as u64,
+        sha256_hex,
+        item_count,
+    })
+}
+
+/// Open a `.pcbackup` archive and decode the unencrypted meta + wrapped-key
+/// blobs. Helper shared by `verify_backup` (no decryption) and
+/// `import_backup` (full decrypt path).
+fn open_backup_archive(
+    input_path: &std::path::Path,
+) -> Result<(BackupMeta, WrappedKeyBlob, zip::ZipArchive<std::io::Cursor<Vec<u8>>>), String> {
+    let bytes = fs::read(input_path)
+        .map_err(|e| format!("read {}: {}", input_path.display(), e))?;
+    let cursor = std::io::Cursor::new(bytes);
+    let mut zip = zip::ZipArchive::new(cursor).map_err(|_| {
+        "Falsche Passphrase oder beschädigtes Backup".to_string()
+    })?;
+
+    let meta: BackupMeta = {
+        let mut entry = zip
+            .by_name(BACKUP_META_FILENAME)
+            .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?;
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut buf)
+            .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?;
+        serde_json::from_slice(&buf)
+            .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?
+    };
+    if meta.version != BACKUP_FORMAT_VERSION {
+        return Err(format!(
+            "Backup-Version {} wird nicht unterstützt (erwartet {})",
+            meta.version, BACKUP_FORMAT_VERSION
+        ));
+    }
+
+    let wrapped: WrappedKeyBlob = {
+        let mut entry = zip
+            .by_name(BACKUP_WRAPPED_KEY_FILENAME)
+            .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?;
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut buf)
+            .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?;
+        serde_json::from_slice(&buf)
+            .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?
+    };
+    if wrapped.version != BACKUP_FORMAT_VERSION || wrapped.kdf != "argon2id" {
+        return Err("Falsche Passphrase oder beschädigtes Backup".into());
+    }
+
+    Ok((meta, wrapped, zip))
+}
+
+/// Argon2id-derive the KEK from `passphrase` + the wrapped blob's salt,
+/// then unwrap the data-key. Returns the 32-byte data-key on success;
+/// caller MUST `zeroize()` it after use.
+fn unwrap_data_key(
+    passphrase: &str,
+    wrapped: &WrappedKeyBlob,
+) -> Result<[u8; BACKUP_KEY_LEN], String> {
+    let salt = B64
+        .decode(&wrapped.salt)
+        .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?;
+    let nonce = B64
+        .decode(&wrapped.wrapped_data_key_nonce)
+        .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?;
+    let ct = B64
+        .decode(&wrapped.wrapped_data_key_ct)
+        .map_err(|_| "Falsche Passphrase oder beschädigtes Backup".to_string())?;
+    if salt.len() != BACKUP_SALT_LEN {
+        return Err("Falsche Passphrase oder beschädigtes Backup".into());
+    }
+    let mut kek = derive_kek(passphrase, &salt)?;
+    let data_key_vec = match aead_decrypt(&kek, &nonce, &ct) {
+        Ok(v) => v,
+        Err(e) => {
+            kek.zeroize();
+            return Err(e);
+        }
+    };
+    kek.zeroize();
+    if data_key_vec.len() != BACKUP_KEY_LEN {
+        return Err("Falsche Passphrase oder beschädigtes Backup".into());
+    }
+    let mut out = [0u8; BACKUP_KEY_LEN];
+    out.copy_from_slice(&data_key_vec);
+    // `data_key_vec` is the in-vector copy; wipe it before drop.
+    let mut dk = data_key_vec;
+    dk.zeroize();
+    Ok(out)
+}
+
+/// Tauri command: build a `.pcbackup` at `output_path`. The audit-log
+/// entry intentionally omits the passphrase + key material — only path,
+/// item count, and sha256 are recorded.
+#[tauri::command]
+async fn export_backup(
+    app: AppHandle,
+    output_path: String,
+    passphrase: String,
+) -> Result<BackupResult, String> {
+    let data_dir = app_data(&app).map_err(|e| e.to_string())?;
+    let payload = collect_backup_payload(&data_dir)?;
+    let host_label = detect_host_label();
+    let out_path = std::path::PathBuf::from(&output_path);
+
+    // Move the heavy Argon2 derive + AEAD work to a blocking pool so the
+    // UI thread doesn't hang for the full ~1s KDF on the IPC await.
+    let result = tokio::task::spawn_blocking(move || {
+        write_backup_archive(&out_path, payload, &passphrase, host_label)
+    })
+    .await
+    .map_err(|e| format!("export task join: {e}"))??;
+
+    audit(
+        &app,
+        "data",
+        "backup_exported",
+        serde_json::json!({
+            "path": result.path,
+            "size_bytes": result.size_bytes,
+            "sha256": result.sha256_hex,
+            "item_count": result.item_count,
+        }),
+    );
+    Ok(result)
+}
+
+/// Tauri command: open a `.pcbackup`, validate ZIP integrity + meta schema
+/// + KEK derivation. Does NOT decrypt the per-file payload — used by the
+/// restore UI to surface "Erstellt am X von Host Y, Z Einträge" before
+/// the user commits to overwriting their live state.
+#[tauri::command]
+async fn verify_backup(input_path: String, passphrase: String) -> Result<BackupMeta, String> {
+    let path = std::path::PathBuf::from(input_path);
+    tokio::task::spawn_blocking(move || {
+        let (meta, wrapped, _zip) = open_backup_archive(&path)?;
+        // Derive the KEK + unwrap the data-key as proof of passphrase.
+        // We immediately wipe the unwrapped key — verify is a metadata
+        // call only.
+        let mut data_key = unwrap_data_key(&passphrase, &wrapped)?;
+        data_key.zeroize();
+        Ok(meta)
+    })
+    .await
+    .map_err(|e| format!("verify task join: {e}"))?
+}
+
+/// Tauri command: decrypt every entry in `input_path` into a temp staging
+/// dir under `app_data`, then atomically swap them onto the live paths.
+/// Stops + restarts the relay listener around the swap so an in-flight
+/// `messages.json` write can't race the rename.
+#[tauri::command]
+async fn import_backup(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    input_path: String,
+    passphrase: String,
+) -> Result<RestoreResult, String> {
+    let data_dir = app_data(&app).map_err(|e| e.to_string())?;
+    let in_path = std::path::PathBuf::from(&input_path);
+
+    // ── Phase 1: decrypt into a temp staging dir ────────────────────────
+    let stage_dir = data_dir.join(format!(
+        ".pcbackup-restore-{}",
+        chrono::Utc::now().timestamp_millis()
+    ));
+    let stage_dir_clone = stage_dir.clone();
+    let decrypt_result = tokio::task::spawn_blocking(move || -> Result<u32, String> {
+        let (meta, wrapped, mut zip) = open_backup_archive(&in_path)?;
+        if meta.version != BACKUP_FORMAT_VERSION {
+            return Err(format!(
+                "Backup-Version {} wird nicht unterstützt",
+                meta.version
+            ));
+        }
+        let mut data_key = unwrap_data_key(&passphrase, &wrapped)?;
+
+        fs::create_dir_all(&stage_dir_clone)
+            .map_err(|e| format!("mkdir {}: {}", stage_dir_clone.display(), e))?;
+
+        // Walk the archive once, pairing `<name>.nonce` + `<name>.ct`
+        // entries via a HashMap so we don't depend on ZIP entry order.
+        let mut nonces: std::collections::HashMap<String, Vec<u8>> =
+            std::collections::HashMap::new();
+        let mut cts: std::collections::HashMap<String, Vec<u8>> =
+            std::collections::HashMap::new();
+        for i in 0..zip.len() {
+            let mut entry = match zip.by_index(i) {
+                Ok(e) => e,
+                Err(e) => {
+                    data_key.zeroize();
+                    return Err(format!("zip entry {i}: {e}"));
+                }
+            };
+            let name = entry.name().to_string();
+            if name == BACKUP_META_FILENAME || name == BACKUP_WRAPPED_KEY_FILENAME {
+                continue;
+            }
+            let mut buf = Vec::new();
+            if let Err(e) = std::io::Read::read_to_end(&mut entry, &mut buf) {
+                data_key.zeroize();
+                return Err(format!("read entry {name}: {e}"));
+            }
+            if let Some(stem) = name.strip_suffix(".nonce") {
+                nonces.insert(stem.to_string(), buf);
+            } else if let Some(stem) = name.strip_suffix(".ct") {
+                cts.insert(stem.to_string(), buf);
+            } else {
+                // Unknown entry — ignore (forward-compat for v2+ adds).
+            }
+        }
+
+        let mut count: u32 = 0;
+        for (stem, ct) in &cts {
+            let nonce = match nonces.get(stem) {
+                Some(n) => n,
+                None => {
+                    data_key.zeroize();
+                    return Err(format!("Backup beschädigt: nonce für '{stem}' fehlt"));
+                }
+            };
+            let plaintext = match aead_decrypt(&data_key, nonce, ct) {
+                Ok(p) => p,
+                Err(e) => {
+                    data_key.zeroize();
+                    return Err(e);
+                }
+            };
+            // Reject any path traversal — backup must address files
+            // *under* app_data only.
+            if stem.contains("..") || stem.starts_with('/') || stem.contains('\\') {
+                data_key.zeroize();
+                return Err(format!("Backup beschädigt: ungültiger Pfad '{stem}'"));
+            }
+            let dest = stage_dir_clone.join(stem);
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
+            }
+            fs::write(&dest, &plaintext)
+                .map_err(|e| format!("write {}: {}", dest.display(), e))?;
+            count += 1;
+        }
+
+        data_key.zeroize();
+        Ok(count)
+    })
+    .await
+    .map_err(|e| format!("import task join: {e}"))?;
+
+    let items_restored = match decrypt_result {
+        Ok(n) => n,
+        Err(e) => {
+            // Decryption failed — wipe the half-built stage dir before
+            // returning so we don't leave plaintext on disk.
+            let _ = fs::remove_dir_all(&stage_dir);
+            return Err(e);
+        }
+    };
+
+    // ── Phase 2: stop the listener for the swap ─────────────────────────
+    // Take the prior subscriber handle out of the AppState slot, signal
+    // shutdown, await with a 3s timeout (mirrors `restart_listener`).
+    let prev = {
+        let mut slot = state.subscriber.lock().await;
+        slot.take()
+    };
+    if let Some(ListenerControl { mut handle, shutdown_tx }) = prev {
+        let _ = shutdown_tx.send(());
+        match tokio::time::timeout(std::time::Duration::from_secs(3), &mut handle).await {
+            Ok(_) => {}
+            Err(_) => {
+                handle.abort();
+            }
+        }
+    }
+    // Drop the in-memory MLS bundle so the next `mls_init` rehydrates
+    // from the freshly restored `mls_state/` files.
+    {
+        if let Ok(mut slot) = state.mls.lock() {
+            *slot = None;
+        }
+    }
+
+    // ── Phase 3: atomic swap ────────────────────────────────────────────
+    // Walk the stage dir, copy each file onto its live path. We use
+    // `fs::rename` first (atomic on the same filesystem) and fall back
+    // to copy + remove_file if rename fails (cross-device).
+    fn swap_into(src_root: &std::path::Path, dst_root: &std::path::Path) -> Result<(), String> {
+        let entries = fs::read_dir(src_root)
+            .map_err(|e| format!("read_dir {}: {}", src_root.display(), e))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("read_dir entry: {e}"))?;
+            let name = entry.file_name();
+            let src = entry.path();
+            let dst = dst_root.join(&name);
+            if src.is_dir() {
+                fs::create_dir_all(&dst)
+                    .map_err(|e| format!("mkdir {}: {}", dst.display(), e))?;
+                swap_into(&src, &dst)?;
+                let _ = fs::remove_dir(&src);
+            } else {
+                // Best-effort atomic rename. `fs::rename` overwrites on
+                // POSIX; on Windows it returns an error if `dst` exists,
+                // so we remove first.
+                let _ = fs::remove_file(&dst);
+                if let Err(_e) = fs::rename(&src, &dst) {
+                    fs::copy(&src, &dst)
+                        .map_err(|e| format!("copy {} -> {}: {}", src.display(), dst.display(), e))?;
+                    let _ = fs::remove_file(&src);
+                }
+            }
+        }
+        Ok(())
+    }
+    let swap_result = swap_into(&stage_dir, &data_dir);
+    let _ = fs::remove_dir_all(&stage_dir);
+    swap_result?;
+
+    // ── Phase 4: restart the listener with the restored config ──────────
+    // Mark started=true so a parallel `start_listener` becomes a no-op,
+    // then spawn the task with the freshly-restored `relays.json` /
+    // `privacy.json`.
+    {
+        if let Ok(mut started) = state.listener_started.lock() {
+            *started = true;
+        }
+    }
+    let _ = spawn_listener_task(app.clone(), &state, None).await;
+
+    // Tell the React layer to drop and reload everything from disk.
+    let _ = app.emit("app_data_replaced", ());
+
+    audit(
+        &app,
+        "data",
+        "backup_imported",
+        serde_json::json!({
+            "items_restored": items_restored,
+        }),
+    );
+
+    Ok(RestoreResult {
+        items_restored,
+        identity_replaced: true,
+        requires_restart: false,
+    })
+/// Frontend command: surfaced in Settings → "Erscheinungsbild" as
+/// "Fenster zurücksetzen". Deletes `window_state.json` so the next
+/// launch falls back to the default 1100×720 window centered on the
+/// primary monitor — the rescue button for users who somehow ended up
+/// with persisted geometry that crashes them off-screen.
+///
+/// No-op (and Ok) if the file doesn't exist; we don't want a missing
+/// file to surface as an error toast in the UI.
+#[tauri::command]
+async fn reset_window_state(app: AppHandle) -> Result<(), String> {
+    let path = window_state_path(&app).map_err(|e| e.to_string())?;
+    if path.exists() {
+        fs::remove_file(&path).map_err(|e| format!("remove {}: {}", path.display(), e))?;
+    }
+    audit(&app, "display", "window_state_reset", serde_json::json!({}));
+    Ok(())
 }

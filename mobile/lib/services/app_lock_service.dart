@@ -29,11 +29,16 @@ class AppLockService {
   static const _storage = FlutterSecureStorage();
 
   // Secure-storage keys
-  static const _kPinHash   = 'phantom_pin_hash';
-  static const _kPinSalt   = 'phantom_pin_salt';
-  static const _kBioEnable = 'phantom_biometric_enabled';
-  static const _kAutoLock  = 'phantom_autolock_seconds';
-  static const _kFailCount = 'phantom_pin_fail_count';
+  static const _kPinHash       = 'phantom_pin_hash';
+  static const _kPinSalt       = 'phantom_pin_salt';
+  static const _kBioEnable     = 'phantom_biometric_enabled';
+  static const _kAutoLock      = 'phantom_autolock_seconds';
+  static const _kFailCount     = 'phantom_pin_fail_count';
+  // Lightweight "biometric on app start" opt-in. Independent of the PIN
+  // path: when ON, every app-resume prompts a biometric check before the
+  // shell becomes interactive again, even if no PIN has been configured.
+  // Default OFF — biometric prompts on launch surprise new users.
+  static const _kBioOnLaunch   = 'phantom_biometric_on_launch';
 
   /// After this many consecutive wrong PINs the device self-wipes.
   static const int maxFailedAttempts = 10;
@@ -45,6 +50,9 @@ class AppLockService {
 
   // Process-local state
   static DateTime? _unlockedAt;
+  // True while a biometric-on-launch prompt is in-flight or has succeeded for
+  // this foreground session. Cleared on every paused/inactive lifecycle event.
+  static bool _bioSessionUnlocked = false;
 
   // ── PIN setup / verification ───────────────────────────────────────────────
 
@@ -122,6 +130,40 @@ class AppLockService {
 
   static Future<void> setBiometricEnabled(bool enabled) async {
     await _storage.write(key: _kBioEnable, value: enabled ? '1' : '0');
+  }
+
+  // ── Biometric-on-launch quick-lock ─────────────────────────────────────────
+
+  /// Whether the user opted into the lightweight "prompt biometric every
+  /// time the app comes to the foreground" gate. Independent of [hasPin].
+  static Future<bool> bioOnLaunchEnabled() async =>
+      (await _storage.read(key: _kBioOnLaunch)) == '1';
+
+  /// Persist the biometric-on-launch toggle. Setting it to `false` also
+  /// clears the in-process "session unlocked" flag so the next resume
+  /// returns immediately without prompting.
+  static Future<void> setBioOnLaunchEnabled(bool enabled) async {
+    await _storage.write(key: _kBioOnLaunch, value: enabled ? '1' : '0');
+    if (!enabled) _bioSessionUnlocked = false;
+  }
+
+  /// Marks the current foreground session as biometrically unlocked. Called
+  /// after a successful [authenticateBiometric] from the launch gate.
+  static void markBioSessionUnlocked() {
+    _bioSessionUnlocked = true;
+  }
+
+  /// Drop the in-process unlock flag — call from `paused`/`inactive`
+  /// lifecycle events so the next resume re-prompts.
+  static void clearBioSession() {
+    _bioSessionUnlocked = false;
+  }
+
+  /// True when the launch gate should currently render the lock overlay.
+  /// Reads opt-in state lazily so callers don't need to cache it.
+  static Future<bool> bioOnLaunchPending() async {
+    if (_bioSessionUnlocked) return false;
+    return bioOnLaunchEnabled();
   }
 
   /// Prompt the OS for biometric authentication. Returns `true` on success.
