@@ -5,6 +5,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [desktop 3.0.6] — 2026-04-27 — Persistent signCommand on Nexus
+
+Cleans up the per-build `signCommand` strip that 3.0.3 / 3.0.4 / 3.0.5
+needed because the original `scripts\sign-windows.cmd` requires
+`PHANTOMCHAT_PFX_PATH` + `PHANTOMCHAT_PFX_PASSWORD` env vars (for the
+v1 cert whose password isn't on disk anywhere). On every build I had
+to remove the signCommand from `tauri.conf.json`, build, restore.
+
+### Desktop 3.0.6
+- New wrapper `scripts\sign-windows-v2.cmd`: hard-codes the v2 cert
+  path (`E:\phantomchat-pilot-cert-v2.pfx`) with empty password, so
+  Tauri's `bundle.windows.signCommand` can stay enabled at all times
+  on Nexus. Auto-locates `signtool.exe` by walking the Win 10 SDK
+  install tree (`C:\Program Files (x86)\Windows Kits\10\bin\<ver>\x64`)
+  and picks the newest version, falling back to PATH if the SDK bin
+  is on PATH already.
+- `desktop/src-tauri/tauri.conf.json` `signCommand` now points at
+  `sign-windows-v2.cmd` (was `sign-windows.cmd`).
+- The original `scripts\sign-windows.cmd` is preserved verbatim for
+  the day someone onboards an OV/EV cert with a real password.
+- Build verified end-to-end: Tauri auto-signed both MSI and
+  NSIS-EXE during `cargo tauri build`; smoke install + launch + 8 s
+  mem check passed (28 MB, responsive).
+
+No user-visible behaviour change — pure release-pipeline cleanup.
+
+---
+
 ## [chore/deps] — 2026-04-27 — Dependency-bump batch
 
 Worked through the 27 open Dependabot PRs in three risk tiers.
