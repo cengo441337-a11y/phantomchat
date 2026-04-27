@@ -120,12 +120,24 @@ class AppLockService {
     if (pin.length < 4) {
       throw ArgumentError('PIN must be at least 4 digits');
     }
+    // Timing instrumentation — surfaced via `debugPrint` so logcat shows
+    // exactly where the time goes on real devices. The integration_test
+    // emulator reports 50k PBKDF2 in ~3.9 s including isolate spawn, but
+    // user-reports of "freeze on PIN confirm" persist on real arm64 —
+    // either the cryptography_flutter native KDF auto-registration isn't
+    // firing (silent fall back to pure-Dart) or secure-storage is the
+    // bottleneck. The four labels below pin down which.
+    final t0 = DateTime.now().millisecondsSinceEpoch;
     final salt = _randomBytes(16);
+    final t1 = DateTime.now().millisecondsSinceEpoch;
     final hash = await _derivePinHash(pin, salt, currentPbkdf2Iters);
+    final t2 = DateTime.now().millisecondsSinceEpoch;
     await _storage.write(key: _kPinSalt, value: base64Encode(salt));
     await _storage.write(key: _kPinHash, value: base64Encode(hash));
     await _storage.write(key: _kPinIters, value: '$currentPbkdf2Iters');
     await _storage.write(key: _kFailCount, value: '0');
+    final t3 = DateTime.now().millisecondsSinceEpoch;
+    debugPrint('[setPin] salt=${t1 - t0}ms pbkdf2($currentPbkdf2Iters)=${t2 - t1}ms storage=${t3 - t2}ms total=${t3 - t0}ms');
     _unlockedAt = DateTime.now();
   }
 

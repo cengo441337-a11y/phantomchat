@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-// ignore: unused_import
 import 'package:cryptography_flutter/cryptography_flutter.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'services/background_service_config.dart';
@@ -76,12 +75,17 @@ Future<RustBootState> _bootRust() async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Importing cryptography_flutter is enough — Flutter's plugin
-  // auto-registration installs FlutterCryptography as the default
-  // Cryptography instance, so PBKDF2 / HKDF / AES-GCM all use JNI
-  // (Android Keystore) or ObjC (iOS CommonCrypto) without an explicit
-  // enable() call. The unused_import lint above is intentional: we
-  // need the side-effect of plugin registration, not any symbol.
+  // Force-install the native PBKDF2 / HKDF / AES-GCM impls. The
+  // package's own deprecation message claims plugin auto-registration
+  // makes this unnecessary, but real-device reports of "PIN-confirm
+  // freezes for 10+ s" suggest the auto-registration isn't reliably
+  // firing on every Android build — the calls fall back to pure-Dart
+  // PBKDF2 which on emulator-class CPUs takes seconds for 50k iters.
+  // Calling enable() explicitly costs nothing on devices where the
+  // plugin already registered, and rescues us on the ones where it
+  // didn't. The deprecation lint is suppressed below.
+  // ignore: deprecated_member_use
+  FlutterCryptography.enable();
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
