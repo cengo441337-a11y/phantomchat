@@ -5,6 +5,138 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [desktop 3.0.4] — 2026-04-27 — `delete_contact`
+
+Hard-delete a contact from `contacts.json`. Until 3.0.4 the desktop only
+had archive/unarchive, so when a peer rotated identity (panic-wipe,
+fresh install, app-data clear) the stale entry was unrecoverable and
+PC→peer sends silently dropped — `receive_full_v3` returns `None` for
+envelopes addressed to an old view-pubkey.
+
+### Desktop 3.0.4
+- Backend: new `delete_contact(label)` Tauri command — load
+  `contacts.json`, retain-not-equal, save, audit. Returns `bool` so the
+  front-end distinguishes "row removed" from "label not found" without
+  a hard error. Conversation history is left intact (purging that is a
+  separate user action).
+- `ContactsPane`: extends the right-click / kebab context menu with a
+  **🗑 Kontakt löschen** entry (red, separator-divided from archive).
+  Native confirm dialog before invoking. After success calls
+  `onContactsChanged` so the parent re-fetches `list_contacts` and
+  clears the active conversation if the deleted row was selected.
+- Authenticode-signed with `phantomchat-pilot-cert-v2` (same chain as
+  3.0.3). Tauri-Updater minisig verified against the pubkey pinned in
+  `tauri.conf.json`. Smoke-installed on Nexus, launch + 8 s mem check
+  passed (28 MB, responsive).
+
+---
+
+## [mobile 1.0.8] — 2026-04-27 — `signing key not loaded` send error
+
+Real-device retest revealed every mobile send was failing with:
+
+    signing key not loaded — call load_local_identity_v3 first
+
+The send path uses sealed-sender v3 (`sendSealedV3`) which requires an
+Ed25519 signing seed loaded into the Rust core's `LOCAL_SIGN` slot via
+`load_local_identity_v3`. The FRB binding was generated and the API was
+reachable from Dart, but **no caller ever invoked it** — and
+`PhantomIdentity` didn't even have a signing-key field.
+
+### Mobile 1.0.8
+- `PhantomIdentity` model: nullable `privateSigningKey` (32-byte hex).
+  Nullable so JSON-deserialising a pre-1.0.7 record on disk doesn't
+  throw — those records get migrated at boot.
+- `OnboardingScreen._generateIdentity`: generates a fresh 32-byte
+  Ed25519 seed via `CryptoService.generateSigningSeedHex` alongside the
+  view + spend keys. Stores it in the identity record AND pushes it
+  into the Rust core via `loadLocalIdentityV3` immediately, so the
+  very first send from the home screen has the slot filled.
+- `main._bootRust`: after `RustLib.init()`, loads any existing identity
+  into the Rust core. If the stored record predates 1.0.7 (no signing
+  seed), generates one and rewrites the file — one-shot migration so
+  subsequent launches behave like a clean install. View + spend keys
+  are preserved unchanged, so the public phantom-ID stays the same.
+- pubspec 1.0.7+8 → 1.0.8+9.
+
+---
+
+## [mobile 1.0.7] — 2026-04-27 — QR camera, keyboard double-resize, version label
+
+Three regressions from real-device testing the x86_64 emulator could not
+catch.
+
+### Mobile 1.0.7
+- **QR-Scan opened a black surface forever.** `mobile_scanner` claims
+  to auto-request CAMERA on Android 6+, but on real devices the prompt
+  never fires and the surface stays opaque-black with no error path.
+  Drives the permission flow ourselves (`permission_handler.request`),
+  shows a rationale + "open settings" fallback for permanently-denied
+  state, and keeps a `CircularProgressIndicator` while we await the OS
+  prompt — never an unexplained black view again.
+- **Chat + channels input bar floated halfway up the screen above the
+  keyboard.** `Scaffold.resizeToAvoidBottomInset` (default `true`)
+  already shrinks the body by `viewInsets.bottom`; the manual padding of
+  the same value double-counted. Removed the manual padding from
+  `chat.dart:_buildInput` and `channels.dart:_buildInput`.
+- **Visible version label** in the rust-core banner so "I updated and
+  the bug is still there" is debuggable at a glance — was the manifest
+  pointing at the new APK or did the user install the wrong one?
+  Format: `v1.0.7+8 · rust core ACTIVE · phantom:…`.
+- pubspec 1.0.6+7 → 1.0.7+8.
+
+---
+
+## [mobile 1.0.6] — 2026-04-26 — RenderFlex overflows so integration_test is green
+
+The 1.0.5 integration_test exit code was 1 even though all assertions
+passed: two pre-existing layout overflows raised exceptions which the
+test framework treats as failures.
+
+### Mobile 1.0.6
+- `home.dart:327` header Row: `PHANTOM` title + 3 trailing icon buttons
+  + optional `NODE` count badge totalled ~370 dp on a 392 dp viewport,
+  no flex-shrinking. Wrapped the title Column in `Expanded`; the
+  `SECURE · ONLINE` status text uses `TextOverflow.fade + softWrap: false`
+  so it never pushes the trailing buttons off-screen.
+- `onboarding.dart` steps welcome / name-input / done: Column + Spacer
+  totals exceeded ~777 dp on Pixel-4-class viewports; the Spacer
+  collapsed but children still overflowed by ~45 dp. Replaced with a
+  scroll-aware `ConstrainedBox(minHeight: viewport)` + `Column`
+  with `mainAxisAlignment: spaceBetween` wrapping a top group and a
+  bottom group: CTA still sticks to the bottom on tall viewports,
+  content scrolls on short ones.
+- `flutter test integration_test/app_smoke_test.dart` now exits 0 with
+  `All tests passed!` — all 4 user-facing paths green, no RenderFlex
+  exceptions, PIN setup elapsed 3971 ms.
+- pubspec 1.0.5+6 → 1.0.6+7.
+
+---
+
+## [mobile 1.0.5] — 2026-04-26 — Nav crash after PIN setup + integration_test
+
+The 1.0.4 PBKDF2 fix unmasked a nav bug: `onboarding._finish` captured
+the State's `context` in the `onUnlocked` closure, which is dead by the
+time the user finishes PIN entry (`pushReplacement` disposes
+`_OnboardingScreenState` first). The 600k-iter hang in 1.0.3 had hidden
+this; once PBKDF2 returned quickly the navigation crashed with:
+
+    Looking up a deactivated widget's ancestor is unsafe
+
+### Mobile 1.0.5
+- `onboarding._finish` wraps `LockScreen` in a `Builder` so
+  `onUnlocked` navigates from a context that lives inside the new
+  route (LockScreen's own subtree), not the disposed onboarding
+  subtree.
+- Added `mobile/integration_test/app_smoke_test.dart` driving
+  onboarding → PIN setup → home → add contact → QR button on a real
+  device via WidgetTester. This is what surfaced the deactivated-context
+  bug — pure unit tests can't catch lifecycle issues like this. Run
+  with `flutter test integration_test/` against a connected emulator.
+- pubspec 1.0.4+5 → 1.0.5+6.
+
+---
+
 ## [3.0.3 / mobile 1.0.4] — 2026-04-26 — Updater UX + PIN-confirm hang fix
 
 ### Desktop 3.0.3
@@ -35,6 +167,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Both shipped to `https://updates.dc-infosec.de/` — manifests,
   SHA-256, and minisign signatures all verified end-to-end against the
   pubkey pinned in `tauri.conf.json`.
+- The 3.0.3 MSI was originally pushed unsigned (Authenticode), then
+  re-signed in-place with a freshly generated `phantomchat-pilot-cert-v2`
+  (RSA-2048 / SHA-256, 2-year validity, DigiCert-timestamped). Old
+  `phantomchat-pilot-cert.cer` (used by 3.0.0 / 3.0.1 / 3.0.2) was
+  retired because its PFX password wasn't recoverable. Both certs live
+  in `keys/` for reproducibility; pilot users import the new `.cer`
+  into Trusted Root + Trusted Publishers once and SmartScreen accepts
+  the install.
 
 ---
 
