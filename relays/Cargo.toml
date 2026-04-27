@@ -23,7 +23,7 @@ secp256k1      = { version = "0.27", features = ["rand-std", "global-context"] }
 sha2           = "0.10"
 hex            = "0.4"
 base64         = "0.21"
-rand           = "0.8"
+rand           = "0.10"
 
 [features]
 default = []
