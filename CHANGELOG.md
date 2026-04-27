@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [mobile 1.1.1] — 2026-04-27 — Swipe-to-delete contacts on the home screen
+
+Same gap as desktop pre-3.0.4: contacts could be added but the only
+removal path was a panic-wipe of the entire device. Critical UX bug
+that should have been mirrored when the desktop got `delete_contact`
+in 3.0.4 — wasn't.
+
+### Mobile 1.1.1
+- `home.dart`: every contact row in the list is wrapped in a
+  `Dismissible(direction: endToStart)`. Left-swipe reveals a magenta
+  delete affordance; before destruction, an `AlertDialog` confirms
+  with "Kontakt 'X' wird endgültig aus deiner Liste entfernt. Verlauf
+  bleibt erhalten — der Eintrag kann nur durch erneutes Hinzufügen
+  wiederhergestellt werden." (Cancel / Delete buttons.)
+- On confirm, removes from the in-memory list, then persists
+  `_contacts` via `StorageService.saveContacts`. Save failure rolls
+  back the in-memory state and surfaces a SnackBar — never a silent
+  partial state.
+- Conversation history left intact (separate user action; same
+  semantics as desktop's `delete_contact`).
+- pubspec 1.1.0+10 → 1.1.1+11.
+
+---
+
 ## [desktop 3.0.6] — 2026-04-27 — Persistent signCommand on Nexus
 
 Cleans up the per-build `signCommand` strip that 3.0.3 / 3.0.4 / 3.0.5
