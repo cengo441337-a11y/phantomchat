@@ -1,10 +1,15 @@
 name: CI
 
+# Trigger model — manual / on-demand only.
+#
+# 2026-04-28: Auto-CI on every push emailed Deniz on each transient
+# failure (dependabot rebases breaking clippy, flaky cargo-fuzz smoke,
+# tauri-windows-smoke timing out). User-facing signal: "ich will die
+# mails nicht mehr". Disabled auto-trigger entirely. CI runs only via:
+#   - `workflow_dispatch` (Actions tab → Run workflow)
+#   - re-introducing `push:` once the base is green AND we have a
+#     curated allowlist of jobs allowed to fail on a PR.
 on:
-  push:
-    branches: ["**"]
-  pull_request:
-    branches: ["**"]
   workflow_dispatch:
 
 # Cancel superseded runs on the same branch to save minutes.
