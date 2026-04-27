@@ -5,6 +5,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [tests/mobile] — 2026-04-27 — Send-path integration test
+
+The `signing key not loaded` regression that shipped in mobile 1.0.4
+through 1.0.7 went undetected because `app_smoke_test.dart` only
+covered onboarding → PIN → home → add-contact → QR-button. The send
+button was never tapped in test, so the missing
+`loadLocalIdentityV3` wiring went unnoticed until real-device retest.
+
+### Tests / mobile
+- Extends `integration_test/app_smoke_test.dart` with steps 7 + 8: open
+  chat with the freshly-added contact, type into the input field, tap
+  the send button. Asserts no `signing key not loaded` text appears on
+  screen, regardless of whether the send actually reaches a relay
+  (emulator may have no network — what we're catching is the FRB-side
+  identity-load regression class, not transport).
+- After tap, verifies the input field is empty — `chat.dart` only
+  restores the text on send-error, so an empty field implies
+  `sendSealedV3` succeeded.
+- Test now reports `all 5 user-facing paths verified end-to-end`.
+
+---
+
+## [desktop 3.0.5] — 2026-04-27 — Bind-modal: create-new-contact in one step
+
+Closes the UX gap where `BindContactModal` was useless if the user had
+no existing contact matching the unknown sender — they had to cancel
+the modal, open Add-Contact, paste the address, submit, then re-open
+Bind and click the row. Now it's a single form inside the bind modal.
+
+### Desktop 3.0.5
+- Backend: new `add_contact_from_unbound_sender(label, address)`
+  Tauri command — atomically creates a contact row with `signing_pub`
+  pre-set from the pending unbound-sender slot. Validates address +
+  label-uniqueness BEFORE consuming the pending pubkey, so a bad input
+  doesn't burn the bind opportunity. On save failure restores the
+  pubkey to the slot for retry.
+- `BindContactModal`: inline "Anlegen + Binden" form (nickname +
+  phantom-address) under the bind-to-existing list. Always visible —
+  useful both when there are zero existing contacts AND when none of
+  them match the unknown sender. After success, `onContactsChanged`
+  re-fetches `list_contacts`, relabels any prior `?<hex>` rows in the
+  message history that match the freshly-created contact, and clears
+  the pending-pub state.
+- Authenticode-signed with `phantomchat-pilot-cert-v2` (same chain as
+  3.0.3 / 3.0.4). Tauri-Updater minisig verified against the pubkey
+  pinned in `tauri.conf.json`.
+
+---
+
 ## [desktop 3.0.4] — 2026-04-27 — `delete_contact`
 
 Hard-delete a contact from `contacts.json`. Until 3.0.4 the desktop only

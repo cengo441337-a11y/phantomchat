@@ -1344,6 +1344,32 @@ export default function App() {
           contacts={contacts}
           onClose={() => setShowBindModal(false)}
           onBind={handleBindToContact}
+          onContactsChanged={async () => {
+            const cs = await invoke<Contact[]>("list_contacts");
+            setContacts(cs);
+            // Mirror handleBindToContact's history-relabel: if the new
+            // contact's signing-pub matches any "?<hex>" rows already on
+            // screen, swap them to the contact's label so the user sees
+            // an immediate join across past + future messages.
+            setMessages(prev =>
+              prev.map(m => {
+                if (
+                  m.kind === "incoming" &&
+                  m.label.startsWith("?") &&
+                  m.sender_pub_hex
+                ) {
+                  const match = cs.find(
+                    c =>
+                      c.signing_pub?.toLowerCase() ===
+                      (m.sender_pub_hex ?? "").toLowerCase(),
+                  );
+                  if (match) return { ...m, label: match.label };
+                }
+                return m;
+              }),
+            );
+            setPendingUnboundPub(null);
+          }}
         />
       )}
 
