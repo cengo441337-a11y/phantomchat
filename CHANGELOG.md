@@ -5,6 +5,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [mobile 1.1.2] — 2026-04-28 — PIN-confirm freeze diagnostic + force-enable native KDF
+
+User reports the PIN-confirm freeze that 1.0.4 fixed (PBKDF2 600k →
+50k) is back on real arm64 devices, even though `flutter test
+integration_test/` reports `setPin` totals 302 ms on the x86_64
+emulator. Hypothesis: `cryptography_flutter`'s plugin auto-registration
+(the `enable()`-is-deprecated path the package recommends) doesn't
+reliably fire on every Android build, so PBKDF2 silently falls back to
+pure-Dart and 50k iters costs seconds on slower CPUs.
+
+### Mobile 1.1.2
+- `main.dart`: re-introduces an explicit `FlutterCryptography.enable()`
+  call. Deprecated by the package — but the package's own deprecation
+  message is wrong about auto-registration always working. Costs
+  nothing on devices where it already registered, rescues us on
+  devices where it didn't.
+- `app_lock_service.dart::setPin`: emits a `[setPin]` `debugPrint`
+  with four timings — salt-gen, PBKDF2, storage writes, total. Lands
+  in logcat under the `flutter` tag. `adb logcat -d | grep setPin`
+  after a PIN-setup attempt pins down which step is slow.
+- pubspec 1.1.1+11 → 1.1.2+12.
+
+### Followup
+If user reports `pbkdf2(50000)=N ms` with N > 1000 on their phone,
+the native KDF isn't engaging and we drop iters or move PBKDF2 into
+the Rust core (which has Argon2id available). Logcat output drives
+the next step — no more guessing.
+
+---
+
 ## [mobile 1.1.1] — 2026-04-27 — Swipe-to-delete contacts on the home screen
 
 Same gap as desktop pre-3.0.4: contacts could be added but the only
