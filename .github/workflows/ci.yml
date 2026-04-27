@@ -21,7 +21,7 @@ jobs:
     name: cargo build (cli) + selftest 30/30
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -53,7 +53,7 @@ jobs:
     name: cargo test (core, mls)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -79,7 +79,7 @@ jobs:
     name: cargo clippy (deny warnings)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain (stable + clippy)
         uses: dtolnay/rust-toolchain@stable
@@ -104,7 +104,7 @@ jobs:
     name: desktop frontend (TS + Vite)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Node 20
         uses: actions/setup-node@v6
@@ -130,7 +130,7 @@ jobs:
     name: tauri build (windows smoke)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -168,7 +168,7 @@ jobs:
     name: flutter analyze (touched dirs only)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -190,7 +190,7 @@ jobs:
     name: cargo-fuzz smoke (30s per target)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install nightly + cargo-fuzz
         uses: dtolnay/rust-toolchain@nightly
