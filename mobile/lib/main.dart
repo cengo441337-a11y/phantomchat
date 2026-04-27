@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:cryptography_flutter/cryptography_flutter.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'services/background_service_config.dart';
+import 'services/crypto_service.dart';
 import 'services/storage_service.dart';
 import 'screens/onboarding.dart';
 import 'screens/home.dart';
@@ -39,6 +40,33 @@ Future<RustBootState> _bootRust() async {
   } catch (_) { /* best-effort; the banner just shows '?' */ }
   try {
     await RustLib.init();
+    // Load any existing identity into the Rust core so the v3 sealed-
+    // sender send path has the signing seed available. Without this
+    // step, every `sendSealedV3` errors with "signing key not loaded —
+    // call load_local_identity_v3 first" and no message ever leaves the
+    // device. (This was the regression in 1.0.x: the FRB binding was
+    // generated, the Rust API existed, but the Dart side never invoked
+    // it.)
+    //
+    // Pre-1.0.7 identities don't carry a signing seed — generate one
+    // and rewrite the stored record so the migration is one-shot.
+    var identity = await StorageService.loadIdentity();
+    if (identity != null) {
+      if (identity.privateSigningKey == null) {
+        final seed = await CryptoService.generateSigningSeedHex();
+        identity = identity.copyWith(privateSigningKey: seed);
+        await StorageService.saveIdentity(identity);
+      }
+      try {
+        await rust_api.loadLocalIdentityV3(
+          viewSecretHex: identity.privateViewKey,
+          spendSecretHex: identity.privateSpendKey,
+          signingSecretHex: identity.privateSigningKey!,
+        );
+      } catch (_) { /* not fatal — first-launch users hit this before
+                       onboarding completes. The home flow re-loads
+                       after identity creation. */ }
+    }
     final id = rust_api.generatePhantomId();
     return RustBootState(initialised: true, phantomId: id, version: version);
   } catch (e) {

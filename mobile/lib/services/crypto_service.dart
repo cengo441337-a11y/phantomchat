@@ -23,6 +23,7 @@ import 'package:cryptography/cryptography.dart';
 class CryptoService {
   static final _x25519 = X25519();
   static final _chacha = Chacha20.poly1305Aead();
+  static final _ed25519 = Ed25519();
 
   // Generate a new X25519 key pair, returns {private: hex, public: hex}
   static Future<Map<String, String>> generateKeyPair() async {
@@ -33,6 +34,26 @@ class CryptoService {
       'private': _hex(Uint8List.fromList(privBytes)),
       'public': _hex(Uint8List.fromList(pubKey.bytes)),
     };
+  }
+
+  /// Generate a fresh Ed25519 signing seed (32 random bytes). Returned
+  /// hex-encoded so it slots straight into [PhantomIdentity.privateSigningKey]
+  /// and the FRB `loadLocalIdentityV3` arg. The Rust core's
+  /// `PhantomSigningKey::from_bytes` rehydrates the `ed25519_dalek::SigningKey`
+  /// on demand, so we only need to ship the 32-byte seed across the bridge —
+  /// not a full SigningKey serialisation.
+  ///
+  /// Note: `Ed25519().newKeyPair()` returns a 64-byte expanded private key in
+  /// some `cryptography` builds; we always extract the FIRST 32 bytes which
+  /// is the seed. This matches what `PhantomSigningKey::generate` produces
+  /// on the Rust side (raw OsRng bytes).
+  static Future<String> generateSigningSeedHex() async {
+    final pair = await _ed25519.newKeyPair();
+    final priv = await pair.extractPrivateKeyBytes();
+    final seed = priv.length >= 32
+        ? Uint8List.fromList(priv.sublist(0, 32))
+        : Uint8List.fromList(priv);
+    return _hex(seed);
   }
 
   // ECDH: given our private key (hex) and their public key (hex) → shared secret bytes

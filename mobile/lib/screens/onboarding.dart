@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../models/identity.dart';
 import '../services/crypto_service.dart';
 import '../services/storage_service.dart';
+import '../src/rust/api.dart' as rust_api;
 import '../theme.dart';
 import '../widgets/glitch_text.dart';
 import '../widgets/cyber_card.dart';
@@ -83,6 +84,9 @@ class _OnboardingScreenState extends State<OnboardingScreen>
 
     final viewKeys = await CryptoService.generateKeyPair();
     final spendKeys = await CryptoService.generateKeyPair();
+    // Sealed-sender attribution seed for sendSealedV3 — without this
+    // every send would error out with "signing key not loaded".
+    final signingSeed = await CryptoService.generateSigningSeedHex();
 
     final identity = PhantomIdentity(
       id: spendKeys['public']!,
@@ -91,10 +95,22 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       publicViewKey: viewKeys['public']!,
       privateSpendKey: spendKeys['private']!,
       publicSpendKey: spendKeys['public']!,
+      privateSigningKey: signingSeed,
       createdAt: DateTime.now(),
     );
 
     await StorageService.saveIdentity(identity);
+    // Push the freshly-generated identity into the Rust core right
+    // away so the very first `sendSealedV3` from the home screen has
+    // a signing seed to use. Without this the user would have to
+    // restart the app once before they can send anything.
+    try {
+      await rust_api.loadLocalIdentityV3(
+        viewSecretHex: identity.privateViewKey,
+        spendSecretHex: identity.privateSpendKey,
+        signingSecretHex: identity.privateSigningKey!,
+      );
+    } catch (_) { /* best-effort; main.dart's boot path retries on next launch */ }
     if (mounted) setState(() { _identity = identity; _step = 3; });
   }
 
