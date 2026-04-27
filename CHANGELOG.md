@@ -5,6 +5,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [mobile 1.1.0] — 2026-04-27 — Production keystore (BREAKING — uninstall+reinstall required)
+
+Switched APK signing from the auto-generated debug keystore (used by
+1.0.x) to a fresh production keystore. **Breaking** for existing
+installs because Android refuses package upgrades whose signing
+certificate doesn't match the originally installed version's.
+
+### Mobile 1.1.0
+- New keystore generated via `mobile/scripts/generate-release-keystore.sh`:
+  RSA-4096, 27-year validity (Play-Store-recommended ≥25), CSPRNG-
+  generated 32-char password, JKS format, alias `phantomchat`. Stored
+  at `~/.android/phantomchat-release.jks` + `.password.txt` (mode
+  0600). `mobile/android/key.properties` (gitignored) glues the
+  keystore path + password into the `release` `signingConfig` already
+  declared in `mobile/android/app/build.gradle.kts`.
+- `apksigner verify` now reports cert SHA-256
+  `1dfd3096…7ed7c0a081` (was `a126459…d200a5d` debug-keystore).
+- pubspec 1.0.8+9 → 1.1.0+10 (minor bump signals the BREAKING install
+  path).
+
+### Migration for users on 1.0.x
+- The in-app update banner WILL fail to install 1.1.0 — Android will
+  show "App not installed: package signatures do not match the previously
+  installed version". Workaround: long-press PhantomChat icon →
+  Uninstall → download 1.1.0 from
+  `https://updates.dc-infosec.de/download/app-arm64-v8a-release.apk`
+  → install.
+- Identity material is wiped on uninstall — the PIN, view+spend keys,
+  and contacts are gone. Users have to re-onboard (generate a new
+  identity) and re-add their contacts. This is a one-time cost; from
+  1.1.0 onwards the prod-keystore signature is stable, so 1.1.x →
+  1.x.y in-place upgrades work normally.
+
+### Why now
+B2B pilots can't ship from a debug keystore — that's the same
+auto-generated key shared by every Flutter dev's machine, with no
+authenticity guarantee. The prod keystore is also the gating
+prerequisite for any future Play Store listing.
+
+---
+
 ## [tests/mobile] — 2026-04-27 — Send-path integration test
 
 The `signing key not loaded` regression that shipped in mobile 1.0.4
