@@ -2702,6 +2702,74 @@ fn bind_last_unbound_sender(
     Ok(())
 }
 
+/// Single-shot "create new contact AND bind the pending unbound sender
+/// to it" — closes the UX gap where `BindContactModal` was useless if
+/// the user had no existing contact matching the unknown sender. With
+/// this command the user can create a contact entry directly from the
+/// "?<hex>" affordance, skipping the two-step add-then-bind dance.
+///
+/// Atomic: if the address parse, label-uniqueness, or pending-pubkey
+/// check fails, contacts.json is left untouched. The pubkey is taken
+/// from the same `last_unbound_sender` slot `bind_last_unbound_sender`
+/// reads from, so this only works while an unbound sender is pending.
+#[tauri::command]
+fn add_contact_from_unbound_sender(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    label: String,
+    address: String,
+) -> Result<(), String> {
+    // Validate address format up-front so we don't consume the pending
+    // pubkey just to fail on bad input.
+    if PhantomAddress::parse(&address).is_none() {
+        return Err(format!(
+            "invalid address — expected 'phantom:view:spend' (got {} chars)",
+            address.len()
+        ));
+    }
+    let path = contacts_path(&app).map_err(|e| e.to_string())?;
+    let book_for_check = load_contacts(&path);
+    if book_for_check.contacts.iter().any(|c| c.label == label) {
+        return Err(format!("contact '{}' already exists", label));
+    }
+
+    // Now consume the pending pubkey (take, not peek — once we commit,
+    // the slot is cleared so an accidental retry can't bind twice).
+    let pub_bytes = {
+        let mut slot = state
+            .last_unbound_sender
+            .lock()
+            .map_err(|e| e.to_string())?;
+        slot.take().ok_or_else(|| {
+            "no unbound sender pending — wait for an incoming sealed message tagged ?<hex>"
+                .to_string()
+        })?
+    };
+    let pub_hex = hex::encode(pub_bytes);
+
+    let mut book = load_contacts(&path);
+    let label_for_audit = label.clone();
+    book.contacts.push(Contact {
+        label,
+        address,
+        signing_pub: Some(pub_hex),
+    });
+    save_contacts(&path, &book).map_err(|e| {
+        // Restore the pubkey on save failure so the user can retry.
+        if let Ok(mut slot) = state.last_unbound_sender.lock() {
+            *slot = Some(pub_bytes);
+        }
+        e.to_string()
+    })?;
+    audit(
+        &app,
+        "contact",
+        "added_and_bound",
+        serde_json::json!({ "label": label_for_audit }),
+    );
+    Ok(())
+}
+
 /// Permanently remove a contact from `contacts.json`. Used when the user
 /// wants to wipe a stale entry (e.g. peer rotated their identity, the
 /// stored pubkey no longer decrypts incoming envelopes from them) and
@@ -5960,6 +6028,7 @@ pub fn run() {
             send_message,
             start_listener,
             bind_last_unbound_sender,
+            add_contact_from_unbound_sender,
             delete_contact,
             mls_init,
             mls_publish_key_package,
