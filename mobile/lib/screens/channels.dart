@@ -484,12 +484,16 @@ class _ChannelsScreenState extends State<ChannelsScreen> {
   }
 
   Widget _buildInput() {
+    // Scaffold(resizeToAvoidBottomInset: true) already shrinks the body
+    // by viewInsets.bottom; reading it again here would double-count and
+    // float the input bar a keyboard-height above the keyboard. See
+    // chat.dart:_buildInput for the same fix.
     return Container(
-      padding: EdgeInsets.only(
+      padding: const EdgeInsets.only(
         left: 12,
         right: 12,
         top: 8,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 12,
+        bottom: 12,
       ),
       decoration: BoxDecoration(
         color: kBgCard,

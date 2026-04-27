@@ -707,10 +707,14 @@ class _ChatScreenState extends State<ChatScreen> {
   Offset? _pressStart;
 
   Widget _buildInput() {
+    // Scaffold(resizeToAvoidBottomInset: true) already shrinks the body
+    // by MediaQuery.viewInsets.bottom (the keyboard height), so reading
+    // viewInsets here and adding it as padding double-counts — the input
+    // bar floats halfway up the screen with a keyboard-sized gap above
+    // the keyboard. Just use a fixed bottom margin.
     return Container(
-      padding: EdgeInsets.only(
-        left: 14, right: 14, top: 10,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 14,
+      padding: const EdgeInsets.only(
+        left: 14, right: 14, top: 10, bottom: 14,
       ),
       decoration: BoxDecoration(
         color: kBgCard,

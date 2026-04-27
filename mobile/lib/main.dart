@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 // ignore: unused_import
 import 'package:cryptography_flutter/cryptography_flutter.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'services/background_service_config.dart';
 import 'services/storage_service.dart';
 import 'screens/onboarding.dart';
@@ -16,16 +17,32 @@ class RustBootState {
   final bool initialised;
   final String? phantomId;
   final String? error;
-  const RustBootState({required this.initialised, this.phantomId, this.error});
+  // Installed-app version + build number, surfaced in the rust-core
+  // banner so we can confirm at a glance which APK someone is running
+  // (e.g. when debugging "I updated and the bug is still there" — was
+  // the manifest pointing at the new APK or did they install the wrong
+  // one?).
+  final String version;
+  const RustBootState({
+    required this.initialised,
+    required this.version,
+    this.phantomId,
+    this.error,
+  });
 }
 
 Future<RustBootState> _bootRust() async {
+  String version = '?';
+  try {
+    final pkg = await PackageInfo.fromPlatform();
+    version = '${pkg.version}+${pkg.buildNumber}';
+  } catch (_) { /* best-effort; the banner just shows '?' */ }
   try {
     await RustLib.init();
     final id = rust_api.generatePhantomId();
-    return RustBootState(initialised: true, phantomId: id);
+    return RustBootState(initialised: true, phantomId: id, version: version);
   } catch (e) {
-    return RustBootState(initialised: false, error: e.toString());
+    return RustBootState(initialised: false, error: e.toString(), version: version);
   }
 }
 
@@ -88,8 +105,8 @@ class _RustCoreBanner extends StatelessWidget {
     final bg = ok ? const Color(0xCC003321) : const Color(0xCC3B0014);
     final fg = ok ? const Color(0xFF00F0A0) : const Color(0xFFFF5060);
     final label = ok
-        ? 'rust core ACTIVE · ${rust.phantomId ?? "(no id)"}'
-        : 'rust core FAILED · ${(rust.error ?? "").split("\n").first}';
+        ? 'v${rust.version} · rust core ACTIVE · ${rust.phantomId ?? "(no id)"}'
+        : 'v${rust.version} · rust core FAILED · ${(rust.error ?? "").split("\n").first}';
     return SafeArea(
       child: Align(
         alignment: Alignment.bottomCenter,

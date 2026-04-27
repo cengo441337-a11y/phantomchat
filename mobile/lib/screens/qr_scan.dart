@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../theme.dart';
 import '../widgets/cyber_card.dart';
@@ -39,6 +40,29 @@ class _QrScanScreenState extends State<QrScanScreen> {
 
   bool _torchOn = false;
   bool _handled = false;
+  // Permission state — `null` while we're awaiting the system prompt,
+  // `true` once granted (camera shows live), `false` if the user denied
+  // (we render the rationale + "open settings" CTA instead of an opaque
+  // black view, which was 1.0.6's silent failure mode).
+  bool? _camGranted;
+
+  @override
+  void initState() {
+    super.initState();
+    _ensureCameraPermission();
+  }
+
+  /// Explicitly request CAMERA at runtime. `mobile_scanner` claims to do
+  /// this on Android 6+ but on real devices the surface stays opaque
+  /// black if the permission was never granted — no prompt, no error,
+  /// no recovery. We drive the permission flow ourselves so the user
+  /// always gets the OS dialog, and on permanent-denial we link out to
+  /// app-settings.
+  Future<void> _ensureCameraPermission() async {
+    final status = await Permission.camera.request();
+    if (!mounted) return;
+    setState(() => _camGranted = status.isGranted);
+  }
 
   @override
   void dispose() {
@@ -99,11 +123,31 @@ class _QrScanScreenState extends State<QrScanScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          MobileScanner(
-            controller: _controller,
-            onDetect: _onDetect,
-            errorBuilder: (ctx, err, _) => _ScannerError(message: err.errorDetails?.message ?? err.errorCode.name),
-          ),
+          // Camera surface — only mounted once the OS has granted the
+          // CAMERA permission. While we await the prompt we show a
+          // loading hint; on denial we fall back to an explanatory
+          // panel + an "app settings" CTA so the user never sees an
+          // unexplained black surface (which is what 1.0.6 did when
+          // mobile_scanner's implicit permission request was missed).
+          if (_camGranted == true)
+            MobileScanner(
+              controller: _controller,
+              onDetect: _onDetect,
+              errorBuilder: (ctx, err, _) => _ScannerError(
+                message: err.errorDetails?.message ?? err.errorCode.name,
+              ),
+            )
+          else if (_camGranted == false)
+            _CameraPermissionDenied(
+              onRetry: _ensureCameraPermission,
+            )
+          else
+            const Center(
+              child: CircularProgressIndicator(
+                strokeWidth: 1.6,
+                valueColor: AlwaysStoppedAnimation<Color>(kCyan),
+              ),
+            ),
           // Reticle + cyberpunk frame overlay
           IgnorePointer(child: _Reticle()),
           // Bottom hint card
@@ -192,6 +236,78 @@ class _ReticlePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_) => false;
+}
+
+/// Rendered in place of the camera surface when the user denied (or the
+/// system silently denied) the CAMERA permission. Offers a retry button —
+/// `permission_handler` returns `permanentlyDenied` after the user taps
+/// "don't allow" twice, so the retry path also opens app-settings so
+/// they can re-grant manually.
+class _CameraPermissionDenied extends StatelessWidget {
+  final Future<void> Function() onRetry;
+  const _CameraPermissionDenied({required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black,
+      padding: const EdgeInsets.all(32),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.no_photography, color: kMagenta, size: 48),
+            const SizedBox(height: 16),
+            Text(
+              'KAMERA-FREIGABE FEHLT',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.orbitron(
+                fontSize: 14,
+                color: kMagenta,
+                letterSpacing: 2,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'PhantomChat braucht Kamera-Zugriff zum Scannen von Phantom-IDs. Sonst nichts — die Bilddaten verlassen das Gerät nie.',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.spaceMono(
+                fontSize: 11,
+                color: kGrayText,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 24),
+            GestureDetector(
+              onTap: () async {
+                await onRetry();
+                final stillDenied = !(await Permission.camera.isGranted);
+                if (stillDenied) {
+                  // Permanently-denied — only Settings can flip it.
+                  await openAppSettings();
+                }
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                decoration: BoxDecoration(
+                  border: Border.all(color: kCyan, width: 1.4),
+                  color: kCyan.withValues(alpha: 0.1),
+                ),
+                child: Text(
+                  'KAMERA FREIGEBEN',
+                  style: GoogleFonts.orbitron(
+                    fontSize: 12,
+                    color: kCyan,
+                    letterSpacing: 2,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _ScannerError extends StatelessWidget {
