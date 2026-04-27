@@ -502,21 +502,93 @@ class _HomeScreenState extends State<HomeScreen> {
     return ListView.builder(
       padding: const EdgeInsets.only(top: 4, bottom: 80),
       itemCount: _contacts.length,
-      itemBuilder: (ctx, i) => _ContactTile(
-        contact: _contacts[i],
-        onTap: () async {
-          await Navigator.push(
-            context,
-            PageRouteBuilder(
-              pageBuilder: (_, _, _) => ChatScreen(contact: _contacts[i], identity: _identity!),
-              transitionDuration: const Duration(milliseconds: 300),
-              transitionsBuilder: (_, anim, _, child) => FadeTransition(opacity: anim, child: child),
-            ),
-          );
-          _load();
-        },
+      itemBuilder: (ctx, i) {
+        final c = _contacts[i];
+        // Each row is wrapped in a Dismissible so a left-swipe reveals
+        // a "delete" affordance — same gesture every native messenger
+        // uses, no extra long-press/tap-and-hold modal needed.
+        // `confirmDismiss` shows an AlertDialog so a stray swipe can't
+        // wipe a contact silently. After confirmation we remove from
+        // both the in-memory list AND `contacts.json`; conversation
+        // history is left intact (a future "wipe history" toggle can
+        // chain off this if needed).
+        return Dismissible(
+          key: ValueKey('contact-${c.id}'),
+          direction: DismissDirection.endToStart,
+          background: Container(
+            color: kMagenta.withValues(alpha: 0.18),
+            alignment: Alignment.centerRight,
+            padding: const EdgeInsets.symmetric(horizontal: 28),
+            child: Icon(Icons.delete_outline, color: kMagenta),
+          ),
+          confirmDismiss: (_) => _confirmDeleteContact(c),
+          onDismissed: (_) => _deleteContact(c),
+          child: _ContactTile(
+            contact: c,
+            onTap: () async {
+              await Navigator.push(
+                context,
+                PageRouteBuilder(
+                  pageBuilder: (_, _, _) => ChatScreen(contact: c, identity: _identity!),
+                  transitionDuration: const Duration(milliseconds: 300),
+                  transitionsBuilder: (_, anim, _, child) => FadeTransition(opacity: anim, child: child),
+                ),
+              );
+              _load();
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  /// Native confirm dialog before destroying a contact entry. Returns
+  /// the boolean `Dismissible.confirmDismiss` expects.
+  Future<bool> _confirmDeleteContact(PhantomContact c) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kBgCard,
+        title: Text(
+          'Kontakt löschen?',
+          style: TextStyle(color: kMagenta, fontFamily: 'monospace', letterSpacing: 1),
+        ),
+        content: Text(
+          'Kontakt "${c.nickname}" wird endgültig aus deiner Liste entfernt. '
+          'Verlauf bleibt erhalten — der Eintrag kann nur durch erneutes '
+          'Hinzufügen wiederhergestellt werden.',
+          style: TextStyle(color: kWhite),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('ABBRECHEN', style: TextStyle(color: kGrayText)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('LÖSCHEN', style: TextStyle(color: kMagenta)),
+          ),
+        ],
       ),
     );
+    return ok ?? false;
+  }
+
+  Future<void> _deleteContact(PhantomContact c) async {
+    final removed = c;
+    setState(() {
+      _contacts.removeWhere((x) => x.id == c.id);
+    });
+    try {
+      await StorageService.saveContacts(_contacts);
+    } catch (e) {
+      // Persist failure: revert in-memory state so the row pops back.
+      if (!mounted) return;
+      setState(() => _contacts.add(removed));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Löschen fehlgeschlagen: $e')),
+      );
+    }
   }
 }
 
