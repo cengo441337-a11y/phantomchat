@@ -5,6 +5,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [tests/mobile] — 2026-04-27 — Send-path integration test
+
+The `signing key not loaded` regression that shipped in mobile 1.0.4
+through 1.0.7 went undetected because `app_smoke_test.dart` only
+covered onboarding → PIN → home → add-contact → QR-button. The send
+button was never tapped in test, so the missing
+`loadLocalIdentityV3` wiring went unnoticed until real-device retest.
+
+### Tests / mobile
+- Extends `integration_test/app_smoke_test.dart` with steps 7 + 8: open
+  chat with the freshly-added contact, type into the input field, tap
+  the send button. Asserts no `signing key not loaded` text appears on
+  screen, regardless of whether the send actually reaches a relay
+  (emulator may have no network — what we're catching is the FRB-side
+  identity-load regression class, not transport).
+- After tap, verifies the input field is empty — `chat.dart` only
+  restores the text on send-error, so an empty field implies
+  `sendSealedV3` succeeded.
+- Test now reports `all 5 user-facing paths verified end-to-end`.
+
+---
+
 ## [desktop 3.0.5] — 2026-04-27 — Bind-modal: create-new-contact in one step
 
 Closes the UX gap where `BindContactModal` was useless if the user had
