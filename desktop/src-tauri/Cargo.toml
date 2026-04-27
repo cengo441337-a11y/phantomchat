@@ -101,7 +101,7 @@ symphonia  = { version = "0.5", optional = true, default-features = false, featu
 # watcher scheduler to compute the next fire timestamp for
 # `WatcherSchedule::Cron` entries. Not feature-gated — watchers are core
 # and stay available even in `cargo check --no-default-features` builds.
-cron = "0.12"
+cron = "0.16"
 
 [features]
 default = ["custom-protocol", "stt"]
