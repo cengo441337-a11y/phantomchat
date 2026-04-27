@@ -55,7 +55,7 @@ tls_codec = { version = "0.4", features = ["derive", "serde", "mls"], optional =
 # only compile when the `net` feature (default) is on; WASM builds turn it
 # off and get a crypto-only core.
 bs58 = { version = "0.5", optional = true }
-tokio = { version = "1.40", features = ["full"], optional = true }
+tokio = { version = "1.52", features = ["full"], optional = true }
 futures-util = { version = "0.3", optional = true }
 libp2p = { version = "0.56.0", features = ["tcp", "dns", "noise", "yamux", "kad", "request-response", "json", "tokio", "macros", "gossipsub"], optional = true }
 tracing = { version = "0.1", optional = true }
