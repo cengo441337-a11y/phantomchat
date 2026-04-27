@@ -1,65 +1,109 @@
 version: 2
+# Dependabot tuning — minimise notification noise. Original config opened
+# one PR per bumped dep, weekly across 4 ecosystems → ~30 inbox events
+# per week. We now:
+#   1. Schedule monthly instead of weekly (12× per year, not 52×).
+#   2. Group minor + patch bumps into ONE PR per ecosystem so the
+#      "23 mergeable bumps" sweep is one notification, not 23.
+#   3. Ignore major-version bumps — they almost always need API
+#      migration work (rand 0.10 / hkdf 0.13 / tokio-tungstenite 0.29
+#      class) and clog the queue while sitting unmergeable. Manual
+#      sweep when someone has bandwidth.
+#   4. Drop the per-ecosystem PR cap from 10 → 3; with grouping enabled
+#      it's effectively 1 grouped PR + at most 2 standalone (security
+#      advisories override grouping by design).
 updates:
   # ── Cargo: workspace root pulls all member crates' deps in one Cargo.lock
   - package-ecosystem: cargo
     directory: "/"
     schedule:
-      interval: weekly
+      interval: monthly
       day: monday
       time: "06:00"
       timezone: "Europe/Berlin"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 3
     commit-message:
       prefix: "chore(cargo)"
       include: scope
     labels:
       - dependencies
       - rust
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
 
   # ── Cargo: fuzz workspace lives outside the main workspace
   - package-ecosystem: cargo
     directory: "/fuzz"
     schedule:
-      interval: weekly
+      interval: monthly
       day: monday
       time: "06:00"
       timezone: "Europe/Berlin"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 2
     commit-message:
       prefix: "chore(fuzz)"
       include: scope
     labels:
       - dependencies
       - fuzz
+    groups:
+      fuzz-minor-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
 
   # ── npm: Tauri desktop frontend
   - package-ecosystem: npm
     directory: "/desktop"
     schedule:
-      interval: weekly
+      interval: monthly
       day: monday
       time: "06:00"
       timezone: "Europe/Berlin"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 3
     commit-message:
       prefix: "chore(npm)"
       include: scope
     labels:
       - dependencies
       - desktop
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
 
   # ── GitHub Actions: keep workflow action versions current
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
+      interval: monthly
       day: monday
       time: "06:00"
       timezone: "Europe/Berlin"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 2
     commit-message:
       prefix: "chore(actions)"
       include: scope
     labels:
       - dependencies
       - github-actions
+    groups:
+      actions-all:
+        patterns:
+          - "*"
