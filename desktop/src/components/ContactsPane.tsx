@@ -18,6 +18,10 @@ interface Props {
   ///   - shunt archived contacts into the collapsible "Archiv (N)" section
   ///   - draw a 📌 icon on pinned rows
   conversationState?: Record<string, ConversationState>;
+  /// Called after a destructive mutation (currently delete-contact) so
+  /// the parent can re-fetch `list_contacts` and clear the active
+  /// conversation if the deleted row was selected.
+  onContactsChanged?: () => Promise<void> | void;
 }
 
 function shortAddr(s: string): string {
@@ -35,6 +39,7 @@ export default function ContactsPane({
   hasUnboundSender,
   onBindClick,
   conversationState,
+  onContactsChanged,
 }: Props) {
   const { t } = useTranslation();
 
@@ -104,6 +109,38 @@ export default function ContactsPane({
       console.warn(`${cmd} failed:`, err),
     );
     setMenu(null);
+  }
+
+  /// Hard-delete the contact. Distinct from archive — irreversible.
+  /// Confirms via a native dialog so a misclick on the "..." kebab can't
+  /// silently destroy a contact entry. After success, refreshes the
+  /// parent's contact list via `onContactsChanged` so the row disappears
+  /// immediately.
+  async function deleteContact(contactLabel: string) {
+    setMenu(null);
+    const confirmed = window.confirm(
+      t("contacts_pane.delete_confirm", {
+        label: contactLabel,
+        defaultValue:
+          'Kontakt "{{label}}" endgültig löschen? Verlauf bleibt erhalten, ' +
+          "aber der Kontakt-Eintrag wird aus contacts.json entfernt — der " +
+          "kann danach nur durch erneutes Hinzufügen wiederhergestellt werden.",
+      }),
+    );
+    if (!confirmed) return;
+    try {
+      await invoke<boolean>("delete_contact", { contactLabel });
+    } catch (err) {
+      console.warn("delete_contact failed:", err);
+      window.alert(
+        t("contacts_pane.delete_failed", {
+          error: String(err),
+          defaultValue: "Löschen fehlgeschlagen: {{error}}",
+        }),
+      );
+      return;
+    }
+    if (onContactsChanged) await onContactsChanged();
   }
 
   function renderContactRow(c: Contact) {
@@ -282,6 +319,17 @@ export default function ContactsPane({
             {menuArchived
               ? t("conversation.archive.unarchive_button")
               : t("conversation.archive.archive_button")}
+          </button>
+          {/* Hard-delete — irreversible, confirms via native dialog. */}
+          <div className="border-t border-neon-magenta/20 my-1" />
+          <button
+            onClick={() => void deleteContact(menu.label)}
+            className="w-full text-left px-3 py-1.5 hover:bg-red-900/30 text-red-300"
+          >
+            {"\u{1F5D1} "}
+            {t("contacts_pane.delete_button", {
+              defaultValue: "Kontakt löschen",
+            })}
           </button>
         </div>
       )}

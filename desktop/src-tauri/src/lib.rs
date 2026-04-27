@@ -2702,6 +2702,36 @@ fn bind_last_unbound_sender(
     Ok(())
 }
 
+/// Permanently remove a contact from `contacts.json`. Used when the user
+/// wants to wipe a stale entry (e.g. peer rotated their identity, the
+/// stored pubkey no longer decrypts incoming envelopes from them) and
+/// re-add with a fresh phantom-ID. Distinct from
+/// [`archive_conversation`] — archived contacts are still searchable +
+/// can be unarchived; deleted contacts are gone for good.
+///
+/// Returns `true` if a contact was removed, `false` if no row matched
+/// the label (so the front-end can surface "already deleted" without a
+/// hard error). The conversation history pinned to that label is NOT
+/// touched here — purging history is a separate user action.
+#[tauri::command]
+fn delete_contact(app: AppHandle, contact_label: String) -> Result<bool, String> {
+    let path = contacts_path(&app).map_err(|e| e.to_string())?;
+    let mut book = load_contacts(&path);
+    let before = book.contacts.len();
+    book.contacts.retain(|c| c.label != contact_label);
+    let removed = book.contacts.len() != before;
+    if removed {
+        save_contacts(&path, &book).map_err(|e| e.to_string())?;
+        audit(
+            &app,
+            "contact",
+            "deleted",
+            serde_json::json!({ "label": contact_label }),
+        );
+    }
+    Ok(removed)
+}
+
 // ── MLS commands ─────────────────────────────────────────────────────────────
 //
 // All wire bytes (key packages, welcomes, application messages, commits)
@@ -5930,6 +5960,7 @@ pub fn run() {
             send_message,
             start_listener,
             bind_last_unbound_sender,
+            delete_contact,
             mls_init,
             mls_publish_key_package,
             mls_create_group,

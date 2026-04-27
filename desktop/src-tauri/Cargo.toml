@@ -1,6 +1,6 @@
 [package]
 name = "phantomchat_desktop"
-version = "3.0.3"
+version = "3.0.4"
 edition = "2021"
 description = "PhantomChat desktop app (Tauri 2)"
 publish = false

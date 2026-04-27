@@ -1212,6 +1212,17 @@ export default function App() {
               hasUnboundSender={pendingUnboundPub !== null}
               onBindClick={() => setShowBindModal(true)}
               conversationState={conversationState}
+              onContactsChanged={async () => {
+                const cs = await invoke<Contact[]>("list_contacts");
+                setContacts(cs);
+                // If the active conversation's contact just got deleted,
+                // clear the selection so the chat pane doesn't render a
+                // stale label header. The user can pick a new contact
+                // (or re-add the deleted one) from the list.
+                if (activeLabel && !cs.some(c => c.label === activeLabel)) {
+                  setActiveLabel(null);
+                }
+              }}
             />
           </div>
         ) : (
