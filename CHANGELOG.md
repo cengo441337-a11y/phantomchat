@@ -5,6 +5,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [chore/deps] — 2026-04-27 — Dependency-bump batch
+
+Worked through the 27 open Dependabot PRs in three risk tiers.
+
+### Merged automatically (low-risk, 11 PRs)
+- 9× GitHub Actions version bumps (#17-#25): `setup-java 4→5`,
+  `download-artifact 4→8`, `setup-android 3→4`, `upload-artifact 4→7`,
+  `setup-node 4→6`, `checkout 4→6`, `cache 4→5`, `action-gh-release 2→3`,
+  `ssh-agent 0.9→0.10`.
+- `tokio 1.50.0 → 1.52.1` (#33) — semver-compatible patch.
+- `postcss 8.5.10 → 8.5.12` (#34) — patch.
+
+### Merged after `cargo check` workspace verification (8 PRs)
+- `crossterm 0.28 → 0.29` (#35), `cron 0.12 → 0.16` (#37),
+  `thiserror 1 → 2` (#40), `indicatif 0.17 → 0.18` (#43).
+- `ratatui 0.28 → 0.30` + `dirs 5 → 6` (#41/#42) — manually rebased
+  via PR #48 because Cargo.lock conflicted after the indicatif merge.
+
+### Merged after `npm run build` verification (4 PRs)
+- `react / @types/react` (#26), `tailwindcss 3 → 4` (#28),
+  `@vitejs/plugin-react 4 → 6` (#29), `marked 14 → 18` (#30).
+- Manual rebase batch on top: `vite 5 → 8` + `marked 18` + react-dom
+  pinned to 18 (react-dom 19 broke `JSX` namespace resolution under
+  TypeScript 5; that's a follow-up). Adds explicit `esbuild` dep
+  because Vite 8 deprecated the bundled `transformWithEsbuild` and
+  expects callers to install esbuild themselves.
+- `tailwindcss 4` was reverted to 3.x in the rebase batch — Tailwind 4
+  splits the PostCSS adapter into `@tailwindcss/postcss` AND moves
+  custom-theme config from `tailwind.config.js` to a `@theme` directive
+  inside the CSS, which our `dim-green/60` etc. utilities need migrated.
+  That's a real engineering task; staying on 3 for now.
+
+### Deferred (need API migration work)
+- `rand 0.8 → 0.10` (#36) — 5 errors in core (OsRng API change).
+- `tokio-tungstenite 0.21 → 0.29` (#38) — 10 errors in relays.
+- `hkdf 0.12 → 0.13` (#39) — 57 errors in core (Hmac<Sha256> API).
+- `typescript 5 → 6` (#32) — TS6 stricter side-effect-import rule.
+
+These four stay open as standing technical debt; closed-with-comment
+would just have Dependabot re-open. Real fix is a per-crate migration
+PR when someone has bandwidth.
+
+---
+
 ## [mobile 1.1.0] — 2026-04-27 — Production keystore (BREAKING — uninstall+reinstall required)
 
 Switched APK signing from the auto-generated debug keystore (used by
