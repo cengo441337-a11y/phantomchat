@@ -43,14 +43,21 @@ if [[ ! -f "$PUBSPEC" ]]; then
     exit 1
 fi
 
-# Extract `version: X.Y.Z[+build]` and drop any +build metadata.
-VERSION=$(grep -E '^version:' "$PUBSPEC" | head -n1 | awk '{print $2}' | cut -d'+' -f1)
-if [[ -z "$VERSION" ]]; then
-    echo "error: could not parse version from $PUBSPEC" >&2
+# Extract `version: X.Y.Z[+build]`. The Flutter convention is
+# `<semver>+<buildNumber>` and Gradle wires `+N` straight into Android's
+# `versionCode`. The mobile client's UpdateService.checkForUpdate REQUIRES
+# `version_code` per ABI in the manifest — without it AbiVariant.fromJson
+# throws and the banner silently drops (caught at line 184). 1.0.4 through
+# 1.1.1 shipped without this field; banner never showed for any user.
+VERSION_RAW=$(grep -E '^version:' "$PUBSPEC" | head -n1 | awk '{print $2}')
+VERSION="${VERSION_RAW%%+*}"
+VERSION_CODE="${VERSION_RAW##*+}"
+if [[ -z "$VERSION" || -z "$VERSION_CODE" || "$VERSION" == "$VERSION_CODE" ]]; then
+    echo "error: could not parse 'X.Y.Z+N' version from $PUBSPEC (got '$VERSION_RAW')" >&2
     exit 1
 fi
 
-echo "[manifest] version = $VERSION"
+echo "[manifest] version = $VERSION (build = $VERSION_CODE)"
 
 REMOTE_DIR="/var/www/updates/download"
 # nginx config for updates.dc-infosec.de rewrites
@@ -96,8 +103,13 @@ ABIS_JSON=""
 while read -r abi sha size; do
     [[ -z "$abi" ]] && continue
     url="https://updates.dc-infosec.de/download/app-${abi}-release.apk"
-    entry=$(printf '"%s":{"url":"%s","sha256":"%s","size_bytes":%s}' \
-        "$abi" "$url" "$sha" "$size")
+    # `version_code` is REQUIRED by mobile/lib/services/update_service.dart's
+    # AbiVariant.fromJson — omitting it makes the in-app update-banner
+    # silently drop the manifest. We use the same VERSION_CODE for every
+    # ABI because Gradle bakes the same +N from pubspec into all three
+    # APK variants in build-android.sh.
+    entry=$(printf '"%s":{"url":"%s","sha256":"%s","size_bytes":%s,"version_code":%s}' \
+        "$abi" "$url" "$sha" "$size" "$VERSION_CODE")
     if [[ -z "$ABIS_JSON" ]]; then
         ABIS_JSON="$entry"
     else
