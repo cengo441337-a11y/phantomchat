@@ -67,11 +67,24 @@ rm -f "/tmp/$MSI_NAME" "/tmp/$MSI_NAME.sig"
 cd "$HOSTINGER_DOWNLOAD_DIR"
 for f in PhantomChat_*_x64_en-US.msi PhantomChat_*_x64-setup.exe; do
     [ -e "\$f" ] || continue
+    # Skip the latest-* symlinks below — they're not stale, they're the
+    # stable-URL we WANT to keep. Same for the version we just shipped.
     case "\$f" in
         "$MSI_NAME"|"$MSI_NAME."*) ;;
+        PhantomChat_latest_*) ;;
         *) sudo rm -f "\$f" "\$f.sig" "\$f.sha256" ;;
     esac
 done
+
+# Stable-URL symlink: PhantomChat_latest_x64_en-US.msi (+ .sig + .sha256)
+# always points at the version we just shipped. Closes the
+# stale-bookmark / old-GH-release-page hole that 3.0.6's prune opened —
+# any link pointing at "PhantomChat_latest_x64_en-US.msi" keeps
+# resolving to the current MSI without manual update on the linker's
+# side.
+sudo ln -sfn "$MSI_NAME"          PhantomChat_latest_x64_en-US.msi
+sudo ln -sfn "$MSI_NAME.sig"      PhantomChat_latest_x64_en-US.msi.sig
+sudo ln -sfn "$MSI_NAME.sha256"   PhantomChat_latest_x64_en-US.msi.sha256
 EOF
 
 echo "[5/6] Updating manifest JSON + SHA256 …"
