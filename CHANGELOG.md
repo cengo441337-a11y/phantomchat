@@ -5,6 +5,77 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [3.0.7 + mobile 1.1.3] — 2026-04-28 — Messaging-pipeline observability + listener-from-boot
+
+User reported: "vom PC senden dauert 10-15 Sekunden 'wird versiegelt',
+am Phone kommt nichts an, im PC-Verlauf ist die Nachricht raus."
+Methodical 7-phase debug (no guessing, code + logs first) found three
+real bugs across desktop + mobile + secure_storage that have been
+sitting since the 1.0.x line shipped.
+
+### Root causes
+1. **Mobile listener never started from boot**
+   `RelayService.instance.connect()` was only invoked from
+   `chat.dart:115` and `channels.dart:71`, never from `main.dart` or
+   `home.dart`. A user who opened the app and stayed on the contact
+   list received zero messages because no WebSocket was ever
+   connected. (Class B — Listener Failure.)
+
+2. **No per-relay timeout on desktop publish**
+   `MultiRelay::publish` used `join_all` over the 3 default relays
+   AND `connect_async` had no per-call timeout. One flaky relay
+   hanging on TCP/TLS handshake could stall the whole publish for
+   the OS-default 30 s. The "wird versiegelt" UI lockup was exactly
+   this. (Class A — Transport Failure.)
+
+3. **Silent receive errors on mobile**
+   `feedEnvelope` caught `receive_full_v3` exceptions and emitted
+   `RelayEvent('error', …)` to the events stream — but no global
+   subscriber listened, so "view key not loaded" / "envelope decode
+   failed" / etc. dropped invisibly. (Class D — UI/State.)
+
+4. **Bonus: `secure_storage.rs` cfg-gate severed by the clippy
+   `--fix` pass.** The auto-fix inserted an `impl Default for
+   KeyringStorage` block between the original `#[cfg(...)]` attribute
+   and the `impl KeyringStorage` block it was supposed to gate, so
+   the cfg latched onto Default and the impl block lost its guard.
+   Android target then couldn't resolve `KeyringStorage` — the bug
+   only surfaced on the next mobile build because cargo check on
+   host-target stayed clean.
+
+### Desktop 3.0.7
+- `MultiRelay::publish` wraps each underlying `r.publish(env)` in
+  `tokio::time::timeout(Duration::from_secs(5), …)`. Per-relay
+  failures are still tolerated by the existing `any_ok` logic — the
+  fan-out semantics don't change, only the worst-case wall time.
+- Per-relay debug logging now identifies which relay succeeded /
+  failed by id, so a flaky URL is identifiable from `RUST_LOG=debug`
+  output without guessing.
+
+### Mobile 1.1.3
+- `main.dart` calls `RelayService.instance.connect()` once after
+  identity load, before `runApp`. Listener now active from app boot,
+  not from first-chat-tap.
+- `main.dart` subscribes to `RelayService.instance.events` and
+  `debugPrint`s every `RelayEvent('error', …)` so logcat picks up
+  receive-path failures that pre-1.1.3 dropped silently.
+- `core/src/secure_storage.rs`: `impl KeyringStorage { … }` re-gated
+  with the same `#[cfg(any(linux, macos, windows), not(wasm32))]`
+  attribute that `cargo clippy --fix` accidentally orphaned. Android
+  build is green again.
+- pubspec 1.1.2+12 → 1.1.3+13.
+
+### Verified
+- `cargo check --workspace`: exit 0
+- `cargo test -p phantomchat_core --lib`: 31/31
+- `flutter test integration_test/app_smoke_test.dart`: green
+  (PIN setup 3967 ms, all 5 paths, setPin 295 ms)
+- `apksigner verify`: prod-keystore cert SHA-256 unchanged
+- Authenticode + minisign on 3.0.7 MSI: both verified against pinned
+  pubkey, sha256 round-trip 0651208a…
+
+---
+
 ## [mobile 1.1.2] — 2026-04-28 — PIN-confirm freeze diagnostic + force-enable native KDF
 
 User reports the PIN-confirm freeze that 1.0.4 fixed (PBKDF2 600k →

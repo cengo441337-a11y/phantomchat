@@ -106,6 +106,15 @@ impl Default for KeyringStorage {
     }
 }
 
+// Re-gate after the `impl Default` insert — clippy's `--fix` pass put the
+// Default impl between the original cfg attribute and `impl KeyringStorage`,
+// so the cfg ended up on Default and this block lost its guard. Without
+// the cfg the Android build can't resolve `KeyringStorage` (the type
+// itself IS gated, line 93-97).
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    not(target_arch = "wasm32"),
+))]
 impl KeyringStorage {
     /// Service identifier passed to `keyring::Entry::new(SERVICE, key_id)`.
     /// Lets the user audit our entries with `secret-tool search service
