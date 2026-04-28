@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cryptography_flutter/cryptography_flutter.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'services/background_service_config.dart';
 import 'services/crypto_service.dart';
+import 'services/relay_service.dart';
 import 'services/storage_service.dart';
 import 'screens/onboarding.dart';
 import 'screens/home.dart';
@@ -100,6 +103,27 @@ void main() async {
   // Wave 8B — register the background relay-listener config (does not
   // start the service; that requires explicit opt-in in Settings).
   await PhantomBackgroundService.initialize();
+
+  // Kick the relay listener as soon as we have an identity loaded into
+  // the Rust core. Pre-1.1.3 this was only fired from chat.dart +
+  // channels.dart, so a user who opened the app and stayed on the home
+  // contact list received nothing — the WebSockets never connected.
+  // Idempotent guard inside `RelayService.connect` makes this safe to
+  // call multiple times.
+  if (hasIdentity && rust.initialised) {
+    unawaited(RelayService.instance.connect());
+    // Surface receive-path errors that `feedEnvelope` emits to its
+    // event stream. Pre-1.1.3 these went into a controller no global
+    // subscriber listened to — "view key not loaded" / "envelope
+    // decode failed" / etc. dropped silently. We log via debugPrint
+    // so logcat picks them up; per-screen UIs can still subscribe for
+    // visual surfaces.
+    RelayService.instance.events.listen((evt) {
+      if (evt.kind == 'error') {
+        debugPrint('[relay] error: ${evt.payload}');
+      }
+    });
+  }
 
   runApp(PhantomApp(hasIdentity: hasIdentity, rust: rust));
 }

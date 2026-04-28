@@ -664,21 +664,45 @@ impl BridgeProvider for MultiRelay {
 
     /// Fan out to every underlying relay in parallel. Success if AT LEAST
     /// ONE succeeds — only return Err if every underlying failed.
+    ///
+    /// Each underlying `publish` is wrapped in a 5 s timeout. Without
+    /// this, `connect_async`'s default behaviour was "wait until the OS
+    /// gives up the TCP/TLS handshake" — typically 30+ s on a flaky
+    /// relay — and `join_all` waits for the slowest, so one stalled
+    /// relay would block the whole publish for half a minute. The
+    /// "wird versiegelt" UI lockup users reported was exactly this:
+    /// nominally a single send, actually waiting on `relay.snort.social`
+    /// to time out before returning.
     async fn publish(&self, env: Envelope) -> anyhow::Result<()> {
-        let futs = self.inners.iter().map(|r| {
+        let futs = self.inners.iter().enumerate().map(|(i, r)| {
             let r = Arc::clone(r);
             let env = env.clone();
-            async move { r.publish(env).await }
+            async move {
+                let id = r.id().to_string();
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    r.publish(env),
+                )
+                .await
+                {
+                    Ok(Ok(())) => Ok(id),
+                    Ok(Err(e)) => Err((i, id, format!("{e}"))),
+                    Err(_) => Err((i, id, "timeout (5 s)".to_string())),
+                }
+            }
         });
         let results = futures::future::join_all(futs).await;
         let mut last_err: Option<String> = None;
         let mut any_ok = false;
-        for (i, r) in results.into_iter().enumerate() {
+        for r in results {
             match r {
-                Ok(()) => any_ok = true,
-                Err(e) => {
-                    tracing::debug!("MultiRelay publish: relay #{} failed: {}", i, e);
-                    last_err = Some(format!("relay #{}: {}", i, e));
+                Ok(id) => {
+                    tracing::debug!("MultiRelay publish: relay {} ok", id);
+                    any_ok = true;
+                }
+                Err((i, id, e)) => {
+                    tracing::debug!("MultiRelay publish: relay #{} ({}) failed: {}", i, id, e);
+                    last_err = Some(format!("relay #{} ({}): {}", i, id, e));
                 }
             }
         }
