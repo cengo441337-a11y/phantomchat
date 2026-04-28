@@ -57,7 +57,7 @@ impl NostrEvent {
     /// pseudonymous author to relay operators.
     pub fn new(payload: &[u8], keypair: &KeyPair) -> Self {
         let secp = Secp256k1::new();
-        let pubkey_hex = hex::encode(keypair.public_key().serialize()[1..].to_vec()); // x-only
+        let pubkey_hex = hex::encode(&keypair.public_key().serialize()[1..]); // x-only
         let created_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()

@@ -126,9 +126,11 @@ struct Cli {
     /// Output artifact path. May end in `.msi` (kept for CLI ergonomics
     /// even though we emit a directory of artifacts next to it). The tool
     /// writes:
-    ///   * `<out>.bootstrap.json`
-    ///   * `<out>.deploy.ps1`
-    ///   * `<out>.README.txt`
+    ///
+    /// * `<out>.bootstrap.json`
+    /// * `<out>.deploy.ps1`
+    /// * `<out>.README.txt`
+    ///
     /// alongside (i.e. in the same parent dir as) `<out>` itself.
     #[arg(long)]
     out: PathBuf,

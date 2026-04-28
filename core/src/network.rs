@@ -207,7 +207,7 @@ fn publish_with_phase(
                 // subscribes to.  If the peer has disconnected, fall back to fluff.
                 let stem_topic_name = format!("{}{}", STEM_TOPIC_PREFIX, stem_peer);
                 let stem_topic = gossipsub::IdentTopic::new(&stem_topic_name);
-                if let Err(_) = swarm.behaviour_mut().gossipsub.publish(stem_topic, data.clone()) {
+                if swarm.behaviour_mut().gossipsub.publish(stem_topic, data.clone()).is_err() {
                     // Stem failed — fall back to fluff rather than dropping the message.
                     tracing::debug!("Dandelion++: stem fallback → fluff (peer unreachable)");
                     let topic = gossipsub::IdentTopic::new(fluff_topic);

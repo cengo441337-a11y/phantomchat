@@ -48,7 +48,7 @@ impl SignedPrekey {
     /// *and* the matching X25519 secret (the recipient holds onto the
     /// secret and exposes only the public half).
     pub fn generate(id: u64, identity: &PhantomSigningKey) -> (Self, StaticSecret) {
-        let secret = StaticSecret::random_from_rng(&mut OsRng);
+        let secret = StaticSecret::random_from_rng(OsRng);
         let public = PublicKey::from(&secret);
         let signature = identity.sign(public.as_bytes());
         (
@@ -89,7 +89,7 @@ pub struct OneTimePrekey {
 
 impl OneTimePrekey {
     pub fn generate(id: u64) -> (Self, StaticSecret) {
-        let secret = StaticSecret::random_from_rng(&mut OsRng);
+        let secret = StaticSecret::random_from_rng(OsRng);
         let public = PublicKey::from(&secret);
         (
             Self { id, public: hex::encode(public.as_bytes()) },

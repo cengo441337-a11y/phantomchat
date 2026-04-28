@@ -127,7 +127,7 @@ pub struct SpendKey {
 }
 
 fn generate_secret() -> StaticSecret {
-    StaticSecret::random_from_rng(&mut OsRng)
+    StaticSecret::random_from_rng(OsRng)
 }
 
 impl IdentityKey {
@@ -146,7 +146,7 @@ impl IdentityKey {
 impl ViewKey {
     /// Erzeugt ein neues View‑Keypair.
     pub fn generate() -> Self {
-        let secret = StaticSecret::random_from_rng(&mut OsRng);
+        let secret = StaticSecret::random_from_rng(OsRng);
         let public = PublicKey::from(&secret);
         Self { secret, public }
     }
@@ -161,7 +161,7 @@ impl ViewKey {
 impl SpendKey {
     /// Erzeugt ein neues Spend‑Keypair.
     pub fn generate() -> Self {
-        let secret = StaticSecret::random_from_rng(&mut OsRng);
+        let secret = StaticSecret::random_from_rng(OsRng);
         let public = PublicKey::from(&secret);
         Self { secret, public }
     }
@@ -238,7 +238,7 @@ pub struct PqxdhSendResult {
 impl HybridKeyPair {
     /// Generiert ein neues PQXDH-Keypair.
     pub fn generate() -> Self {
-        let x25519_secret = StaticSecret::random_from_rng(&mut OsRng);
+        let x25519_secret = StaticSecret::random_from_rng(OsRng);
         let x25519_public = PublicKey::from(&x25519_secret);
         let (mlkem_pub, mlkem_sec) = mlkem1024::keypair();
         Self {
@@ -276,7 +276,7 @@ impl HybridPublicKey {
     /// Generiert ephemeres X25519-Keypair + ML-KEM-Kapselung → Session-Key.
     pub fn encapsulate(&self) -> PqxdhSendResult {
         // 1. Ephemeres X25519 Keypair
-        let eph_secret = StaticSecret::random_from_rng(&mut OsRng);
+        let eph_secret = StaticSecret::random_from_rng(OsRng);
         let eph_public = PublicKey::from(&eph_secret);
 
         // 2. X25519 ECDH mit Empfänger-X25519-Public

@@ -10,6 +10,15 @@ path = "src/lib.rs"
 # `staticlib` + `cdylib` are used by the Flutter bridge build on mobile.
 crate-type = ["rlib", "staticlib", "cdylib"]
 
+# `frb_expand` is set by `flutter_rust_bridge_codegen` during codegen-time
+# parses to drive the codegen's macro expansion. It's never set during a
+# normal `cargo build`, but the macro guards it with `#[cfg(frb_expand)]`
+# in the api.rs surface. Without this declaration `rustc 1.80+` warns
+# "unexpected cfg condition name: frb_expand" on every `cargo check`. The
+# clippy/build-script equivalent is `[lints.rust] unexpected_cfgs.check-cfg`.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(frb_expand)"] }
+
 [dependencies]
 rand = "0.8"
 rand_core = "0.6"

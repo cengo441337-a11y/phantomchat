@@ -5731,6 +5731,7 @@ fn ai_bridge_add_watcher(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // 1:1 wrapper around update_watcher; arg count comes from the WatcherSpec wire shape
 fn ai_bridge_update_watcher(
     app: AppHandle,
     id: String,
@@ -8751,6 +8752,7 @@ fn write_backup_archive(
 /// Open a `.pcbackup` archive and decode the unencrypted meta + wrapped-key
 /// blobs. Helper shared by `verify_backup` (no decryption) and
 /// `import_backup` (full decrypt path).
+#[allow(clippy::type_complexity)] // 3-tuple is the natural shape; aliasing it would obscure the call sites' destructuring
 fn open_backup_archive(
     input_path: &std::path::Path,
 ) -> Result<(BackupMeta, WrappedKeyBlob, zip::ZipArchive<std::io::Cursor<Vec<u8>>>), String> {

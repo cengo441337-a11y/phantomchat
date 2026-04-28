@@ -51,18 +51,15 @@ const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 120;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ProviderKind {
     Ollama,
+    #[default]
     ClaudeCli,
     OpenAiCompat,
     ClaudeApi,
 }
 
-impl Default for ProviderKind {
-    fn default() -> Self {
-        ProviderKind::ClaudeCli
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiBridgeConfig {
@@ -204,7 +201,7 @@ pub fn effective_config<'a>(
                 // the user can still append flags after this in the base
                 // config (last-arg-wins is claude's behaviour).
                 let mut new_args = vec!["--model".to_string(), m.clone()];
-                new_args.extend(effective.claude_cli_extra_args.drain(..));
+                new_args.append(&mut effective.claude_cli_extra_args);
                 effective.claude_cli_extra_args = new_args;
             }
         }
@@ -495,7 +492,7 @@ async fn claude_cli_complete(
         prompt.push_str(&fence);
         prompt.push_str("\nrole: system\n");
         prompt.push_str(&strip_role_prefix_lines(&cfg.system_prompt));
-        prompt.push_str("\n");
+        prompt.push('\n');
     }
     for t in history {
         prompt.push_str(&fence);
@@ -504,14 +501,14 @@ async fn claude_cli_complete(
             Role::User => "user",
             Role::Assistant => "assistant",
         });
-        prompt.push_str("\n");
+        prompt.push('\n');
         prompt.push_str(&strip_role_prefix_lines(&t.content));
-        prompt.push_str("\n");
+        prompt.push('\n');
     }
     prompt.push_str(&fence);
     prompt.push_str("\nrole: user\n");
     prompt.push_str(&strip_role_prefix_lines(user_message));
-    prompt.push_str("\n");
+    prompt.push('\n');
     prompt.push_str(&fence);
     prompt.push_str("\nrole: assistant\n");
 

@@ -57,24 +57,12 @@ fn banner(cfg: &PrivacyConfig) {
         PrivacyMode::MaximumStealth => format!("{}[ MAXIMUM STEALTH ]{}", M, R),
     };
     eprintln!();
-    eprintln!("{}", format!(
-"{}{}██████╗ ██╗  ██╗ █████╗ ███╗   ██╗████████╗ ██████╗ ███╗   ███╗{}",
-    B, G, R));
-    eprintln!("{}", format!(
-"{}{}██╔══██╗██║  ██║██╔══██╗████╗  ██║╚══██╔══╝██╔═══██╗████╗ ████║{}",
-    B, G, R));
-    eprintln!("{}", format!(
-"{}{}██████╔╝███████║███████║██╔██╗ ██║   ██║   ██║   ██║██╔████╔██║{}",
-    B, G, R));
-    eprintln!("{}", format!(
-"{}{}██╔═══╝ ██╔══██║██╔══██║██║╚██╗██║   ██║   ██║   ██║██║╚██╔╝██║{}",
-    B, M, R));
-    eprintln!("{}", format!(
-"{}{}██║     ██║  ██║██║  ██║██║ ╚████║   ██║   ╚██████╔╝██║ ╚═╝ ██║{}",
-    B, M, R));
-    eprintln!("{}", format!(
-"{}{}╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝ ╚═╝     ╚═╝{}",
-    B, M, R));
+    eprintln!("{B}{G}██████╗ ██╗  ██╗ █████╗ ███╗   ██╗████████╗ ██████╗ ███╗   ███╗{R}");
+    eprintln!("{B}{G}██╔══██╗██║  ██║██╔══██╗████╗  ██║╚══██╔══╝██╔═══██╗████╗ ████║{R}");
+    eprintln!("{B}{G}██████╔╝███████║███████║██╔██╗ ██║   ██║   ██║   ██║██╔████╔██║{R}");
+    eprintln!("{B}{M}██╔═══╝ ██╔══██║██╔══██║██║╚██╗██║   ██║   ██║   ██║██║╚██╔╝██║{R}");
+    eprintln!("{B}{M}██║     ██║  ██║██║  ██║██║ ╚████║   ██║   ╚██████╔╝██║ ╚═╝ ██║{R}");
+    eprintln!("{B}{M}╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝ ╚═╝     ╚═╝{R}");
     eprintln!();
     eprintln!(
         "{}{}  C H A T  {}{}│{} DC INFOSEC 2026 {}│{} {}",
@@ -354,7 +342,7 @@ fn cmd_selftest() -> anyhow::Result<()> {
     match frank_store.receive_full(&sealed_env, &frank_view, &frank_spend, None) {
         Ok(Some(msg)) => {
             let plaintext_ok = msg.plaintext == b"signed hello";
-            let (attr, sig_ok) = msg.sender.clone().unwrap_or_else(|| (
+            let (attr, sig_ok) = msg.sender.clone().unwrap_or((
                 phantomchat_core::SealedSender { sender_pub: [0u8; 32], signature: [0u8; 64] },
                 false,
             ));
@@ -363,7 +351,7 @@ fn cmd_selftest() -> anyhow::Result<()> {
                 println!(
                     "  {}{}✓ sealed-sender round-trip{}              plaintext ok · sig ok · identity={}",
                     B, G, R,
-                    &hex::encode(&attr.sender_pub)[..8],
+                    &hex::encode(attr.sender_pub)[..8],
                 );
                 passed += 1;
             } else {
@@ -504,9 +492,9 @@ fn cmd_selftest() -> anyhow::Result<()> {
     println!();
     dimline("Phase 7 — Onion mixnet (3-hop layered AEAD)");
 
-    let h1_sec = MixnetSecret::random_from_rng(&mut OsRng);
-    let h2_sec = MixnetSecret::random_from_rng(&mut OsRng);
-    let h3_sec = MixnetSecret::random_from_rng(&mut OsRng);
+    let h1_sec = MixnetSecret::random_from_rng(OsRng);
+    let h2_sec = MixnetSecret::random_from_rng(OsRng);
+    let h3_sec = MixnetSecret::random_from_rng(OsRng);
 
     let h1 = MixnetHop { public: (&h1_sec).into() };
     let h2 = MixnetHop { public: (&h2_sec).into() };
@@ -536,7 +524,7 @@ fn cmd_selftest() -> anyhow::Result<()> {
     }
 
     // Peel with the wrong secret must fail.
-    let impostor_sec = MixnetSecret::random_from_rng(&mut OsRng);
+    let impostor_sec = MixnetSecret::random_from_rng(OsRng);
     let rogue = peel_onion(&packet, &impostor_sec);
     if rogue.is_err() {
         println!("  {}{}✓ wrong-key peel correctly refused{}", B, G, R);

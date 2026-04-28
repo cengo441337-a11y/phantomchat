@@ -151,7 +151,7 @@ fn aead_open(key: &[u8; 32], blob: &[u8]) -> Result<Vec<u8>, MixnetError> {
 pub fn pack_onion(hops: &[MixnetHop], final_payload: &[u8]) -> MixnetPacket {
     assert!(!hops.is_empty(), "mixnet route must have at least one hop");
 
-    let eph_secret = StaticSecret::random_from_rng(&mut OsRng);
+    let eph_secret = StaticSecret::random_from_rng(OsRng);
     let eph_pub = PublicKey::from(&eph_secret);
 
     // Build innermost (delivery) layer.

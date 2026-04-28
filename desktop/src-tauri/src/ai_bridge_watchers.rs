@@ -226,6 +226,7 @@ pub fn remove_watcher(app_data_dir: &Path, id: &str) -> Result<bool> {
 /// Update the mutable fields of a watcher. `id` is immutable and used as
 /// the lookup key; everything else is replaced wholesale. Returns the
 /// updated record so the caller can echo it back to the UI.
+#[allow(clippy::too_many_arguments)] // mirrors WatcherSpec field-for-field; bundling into a struct just shifts the count one level
 pub fn update_watcher(
     app_data_dir: &Path,
     id: &str,

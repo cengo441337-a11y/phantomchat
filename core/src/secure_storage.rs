@@ -100,6 +100,12 @@ pub struct KeyringStorage;
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     not(target_arch = "wasm32"),
 ))]
+impl Default for KeyringStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KeyringStorage {
     /// Service identifier passed to `keyring::Entry::new(SERVICE, key_id)`.
     /// Lets the user audit our entries with `secret-tool search service

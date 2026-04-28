@@ -4,9 +4,9 @@
 //!
 //! - `view_pub`  — lets the sender build the stealth tag
 //! - `spend_pub` — derives the envelope encryption key (classic) and serves
-//!                 as the bootstrap peer-ratchet public for session init
+//!   as the bootstrap peer-ratchet public for session init
 //! - `mlkem_pub` — optional ML-KEM-1024 public key; presence triggers the
-//!                 PQXDH-hybrid envelope path
+//!   PQXDH-hybrid envelope path
 //!
 //! Wire format:
 //! - **Classic**: `"phantom:<view_hex>:<spend_hex>"` (32-byte keys)

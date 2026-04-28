@@ -119,7 +119,7 @@ impl RatchetState {
         initial_shared: [u8; 32],
         recipient_spend_pub: PublicKey,
     ) -> Self {
-        let ratchet_secret = StaticSecret::random_from_rng(&mut OsRng);
+        let ratchet_secret = StaticSecret::random_from_rng(OsRng);
         let ratchet_secret_bytes = ratchet_secret.to_bytes();
 
         let dh_out = ratchet_secret.diffie_hellman(&recipient_spend_pub);
@@ -165,7 +165,7 @@ impl RatchetState {
         let (rk1, recv_chain) = kdf_rk(&initial_shared, dh_recv.as_bytes());
 
         // Schritt 2 — eigenes Ratchet-Secret + Sende-Kette.
-        let ratchet_secret = StaticSecret::random_from_rng(&mut OsRng);
+        let ratchet_secret = StaticSecret::random_from_rng(OsRng);
         let dh_send = ratchet_secret.diffie_hellman(&peer_ratchet_pub);
         let (root_key, send_chain) = kdf_rk(&rk1, dh_send.as_bytes());
 
@@ -203,7 +203,7 @@ impl RatchetState {
         self.recv_initialised = true;
 
         // Rotate our own ratchet secret, then re-derive the send chain.
-        self.ratchet_secret = StaticSecret::random_from_rng(&mut OsRng);
+        self.ratchet_secret = StaticSecret::random_from_rng(OsRng);
         self.ratchet_secret_bytes = self.ratchet_secret.to_bytes();
         self.send_count = 0;
 

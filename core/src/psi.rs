@@ -57,8 +57,8 @@ pub enum PsiError {
 fn hash_to_point(addr: &PhantomAddress) -> RistrettoPoint {
     let mut h = Sha512::new();
     h.update(PSI_DOMAIN);
-    h.update(&addr.view_pub);
-    h.update(&addr.spend_pub);
+    h.update(addr.view_pub);
+    h.update(addr.spend_pub);
     if let Some(mlkem) = &addr.mlkem_pub {
         h.update(mlkem);
     }

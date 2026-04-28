@@ -285,7 +285,7 @@ impl Envelope {
         pow_difficulty: u32,
     ) -> Self {
         // 1. Ephemerer Schlüssel
-        let eph_secret = StaticSecret::random_from_rng(&mut OsRng);
+        let eph_secret = StaticSecret::random_from_rng(OsRng);
         let eph_public = PublicKey::from(&eph_secret);
         let epk_bytes  = *eph_public.as_bytes();
 
@@ -348,6 +348,7 @@ impl Envelope {
     /// public key plus a signature over `ratchet_header || encrypted_body`.
     /// Only the recipient sees the attribution (after successful AEAD
     /// decrypt) and can cryptographically verify it.
+    #[allow(clippy::too_many_arguments)] // 8 distinct cryptographic inputs; refactoring into a builder hides the wire-format mapping
     pub fn new_sealed(
         recipient_view_pub: &PublicKey,
         recipient_spend_pub: &PublicKey,
@@ -384,7 +385,7 @@ impl Envelope {
         ttl: u32,
         pow_difficulty: u32,
     ) -> Self {
-        let eph_secret = StaticSecret::random_from_rng(&mut OsRng);
+        let eph_secret = StaticSecret::random_from_rng(OsRng);
         let eph_public = PublicKey::from(&eph_secret);
         let epk_bytes  = *eph_public.as_bytes();
 
@@ -464,6 +465,7 @@ impl Envelope {
     /// Sealed-Sender PQXDH-hybrid envelope. Same wire shape as
     /// [`new_hybrid`], but the inner [`Payload`] carries a [`SealedSender`]
     /// signed with the caller's Ed25519 [`PhantomSigningKey`].
+    #[allow(clippy::too_many_arguments)] // mirrors new_sealed; same cryptographic-input rationale
     pub fn new_hybrid_sealed(
         recipient_view_pub: &PublicKey,
         recipient_hybrid_pub: &HybridPublicKey,
@@ -499,7 +501,7 @@ impl Envelope {
         ttl: u32,
         pow_difficulty: u32,
     ) -> Self {
-        let eph_secret = StaticSecret::random_from_rng(&mut OsRng);
+        let eph_secret = StaticSecret::random_from_rng(OsRng);
         let eph_public = PublicKey::from(&eph_secret);
         let epk_bytes  = *eph_public.as_bytes();
 
