@@ -172,16 +172,17 @@ class UpdateService {
         return null;
       }
 
-      // Wave TBD — proper minisign-style signature verification using the
-      // `ed25519` Dart package + a baked-in pubkey. For now we only flag
-      // the presence of the field so we can start populating it on the
-      // server side without breaking older clients.
-      // TODO(wave-tbd): verify variant.signature against manifest digest.
-      if (variant.signature != null) {
-        // ignore: avoid_print
-        print('UpdateService: signature field present but verification '
-            'not yet implemented — value=${variant.signature}');
-      }
+      // The current threat model is defended by HTTPS (TLS to
+      // dc-infosec.de), origin-pin (URL must match `isOriginAllowed`),
+      // sha256 (APK content), version_code bump-protection (can't
+      // downgrade), and Android's keystore-signature match (cannot
+      // install an APK signed by a different keystore than the one
+      // currently installed). Adding minisign on top closes the
+      // HTTPS-MITM-with-compromised-CA hole specifically — useful but
+      // not blocking for the pilot. Reserve the field; verification
+      // implementation tracked separately. The `signature` field is
+      // populated server-side optimistically so older clients
+      // accepting the manifest aren't broken once verification lands.
 
       return UpdateInfo(
         currentVersion: installed,
