@@ -57,6 +57,21 @@ tauri signer sign --private-key "\${TAURI_SIGNING_PRIVATE_KEY:-\$HOME/.tauri/pha
 sudo install -m 0644 "/tmp/$MSI_NAME"     "$HOSTINGER_DOWNLOAD_DIR/$MSI_NAME"
 sudo install -m 0644 "/tmp/$MSI_NAME.sig" "$HOSTINGER_DOWNLOAD_DIR/$MSI_NAME.sig"
 rm -f "/tmp/$MSI_NAME" "/tmp/$MSI_NAME.sig"
+
+# Auto-prune: drop every prior PhantomChat_*.msi (+ sidecars) that
+# isn't the version we just published. Per Deniz: "ich möchte das
+# immer nur die neusten versionen zum download bereit stehen". The
+# updater channel resolves via the manifest, not the directory
+# listing, so removing old MSIs has no functional impact — but it
+# keeps the public /download/ index from accumulating cruft.
+cd "$HOSTINGER_DOWNLOAD_DIR"
+for f in PhantomChat_*_x64_en-US.msi PhantomChat_*_x64-setup.exe; do
+    [ -e "\$f" ] || continue
+    case "\$f" in
+        "$MSI_NAME"|"$MSI_NAME."*) ;;
+        *) sudo rm -f "\$f" "\$f.sig" "\$f.sha256" ;;
+    esac
+done
 EOF
 
 echo "[5/6] Updating manifest JSON + SHA256 …"
