@@ -114,6 +114,9 @@ sudo install -m 0644 "\$TMP_MANIFEST" "$HOSTINGER_MANIFEST_PATH"
 rm -f "\$TMP_MANIFEST"
 EOF
 
+echo "[5b/6] Re-deploying /download/index.html with live version strings …"
+bash "$(dirname "${BASH_SOURCE[0]}")/deploy-download-page.sh"
+
 echo "[6/6] Optional: git tag + gh release create …"
 if [[ "${GH_RELEASE:-0}" == "1" ]]; then
     git tag -a "v$VERSION" -m "Windows desktop $VERSION"

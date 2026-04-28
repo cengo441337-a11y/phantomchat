@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PhantomChat — Downloads · DC INFOSEC</title>
+<link rel="icon" type="image/x-icon" href="/download/favicon.ico">
+<link rel="icon" type="image/png" sizes="32x32" href="/download/favicon-32.png">
+<link rel="icon" type="image/png" sizes="256x256" href="/download/favicon-256.png">
+<link rel="apple-touch-icon" href="/download/favicon-256.png">
+<meta name="theme-color" content="#00FF9F">
+<meta property="og:title" content="PhantomChat — Sovereign Encrypted Messenger">
+<meta property="og:description" content="Quantum-safe E2E. Metadata-blind. MLS group chat. Multi-relay. By DC INFOSEC.">
+<meta property="og:image" content="https://updates.dc-infosec.de/download/favicon-256.png">
+<meta property="og:type" content="website">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Orbitron:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --neon-green: #00FF9F;
+    --neon-magenta: #FF00FF;
+    --cyber-cyan: #00FFFF;
+    --bg: #070710;
+    --panel: #0A0A14;
+    --dim: rgba(150, 150, 160, 0.7);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'JetBrains Mono', monospace;
+    background: var(--bg);
+    color: #DDD;
+    min-height: 100vh;
+    padding: 40px 20px;
+    background-image:
+      repeating-linear-gradient(0deg, rgba(0,255,159,0.05) 0px, transparent 1px, transparent 4px),
+      linear-gradient(rgba(0,255,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,255,255,0.03) 1px, transparent 1px);
+    background-size: 100% 4px, 60px 60px, 60px 60px;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  h1 {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 2.8em;
+    color: var(--neon-green);
+    text-shadow: 0 0 16px rgba(0,255,159,0.5);
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+  }
+  .subtitle {
+    color: var(--cyber-cyan);
+    font-size: 1.05em;
+    margin-bottom: 32px;
+    letter-spacing: 0.04em;
+  }
+  .lead {
+    color: #BBB;
+    margin-bottom: 40px;
+    line-height: 1.6;
+    border-left: 2px solid var(--neon-magenta);
+    padding-left: 16px;
+  }
+  .download-card {
+    background: var(--panel);
+    border: 1px solid rgba(0,255,159,0.3);
+    padding: 28px;
+    margin-bottom: 24px;
+    box-shadow: 0 0 20px rgba(0,255,159,0.08), inset 0 0 6px rgba(0,255,159,0.1);
+    transition: all 0.2s;
+  }
+  .download-card:hover {
+    border-color: var(--neon-green);
+    box-shadow: 0 0 28px rgba(0,255,159,0.2), inset 0 0 10px rgba(0,255,159,0.15);
+  }
+  .platform {
+    font-family: 'Orbitron', sans-serif;
+    color: var(--neon-magenta);
+    font-size: 0.85em;
+    letter-spacing: 0.15em;
+    margin-bottom: 8px;
+  }
+  .download-card h2 {
+    font-family: 'Orbitron', sans-serif;
+    color: var(--neon-green);
+    font-size: 1.5em;
+    margin-bottom: 8px;
+    letter-spacing: 0.04em;
+  }
+  .desc {
+    color: #AAA;
+    margin-bottom: 18px;
+    line-height: 1.5;
+    font-size: 0.95em;
+  }
+  .download-btn {
+    display: inline-block;
+    background: var(--neon-green);
+    color: var(--bg);
+    text-decoration: none;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    padding: 12px 24px;
+    border: none;
+    letter-spacing: 0.06em;
+    transition: all 0.15s;
+    margin-right: 10px;
+    margin-bottom: 8px;
+  }
+  .download-btn:hover {
+    background: var(--cyber-cyan);
+    box-shadow: 0 0 16px rgba(0,255,255,0.6);
+    transform: translateY(-1px);
+  }
+  .download-btn.secondary {
+    background: transparent;
+    color: var(--cyber-cyan);
+    border: 1px solid var(--cyber-cyan);
+  }
+  .download-btn.secondary:hover {
+    background: rgba(0,255,255,0.1);
+  }
+  .meta {
+    margin-top: 14px;
+    font-size: 0.78em;
+    color: var(--dim);
+    word-break: break-all;
+  }
+  .meta strong { color: #888; }
+  .install-block {
+    margin-top: 16px;
+    background: rgba(0,0,0,0.4);
+    border-left: 2px solid var(--cyber-cyan);
+    padding: 12px 16px;
+    font-size: 0.88em;
+    color: #CCC;
+  }
+  .install-block code {
+    color: var(--neon-green);
+    background: rgba(0,255,159,0.05);
+    padding: 1px 5px;
+  }
+  .footer {
+    margin-top: 60px;
+    padding-top: 24px;
+    border-top: 1px solid rgba(150,150,160,0.2);
+    color: var(--dim);
+    font-size: 0.85em;
+    text-align: center;
+    line-height: 1.7;
+  }
+  .footer a {
+    color: var(--neon-green);
+    text-decoration: none;
+  }
+  .footer a:hover {
+    text-decoration: underline;
+    color: var(--cyber-cyan);
+  }
+  .warn {
+    background: rgba(255,0,255,0.08);
+    border-left: 2px solid var(--neon-magenta);
+    padding: 14px 18px;
+    margin: 24px 0;
+    color: #DDD;
+    font-size: 0.92em;
+  }
+  .warn strong { color: var(--neon-magenta); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>PHANTOMCHAT</h1>
+<div class="subtitle">DC INFOSEC · Sovereign Encrypted Messenger</div>
+
+<div class="lead">
+  Quantum-safe E2E messaging. Metadata-blind via stealth-addressing. MLS group
+  chat. Multi-relay redundant. Tor-mode optional. Replaces email + Slack for
+  Kanzleien, Steuerberater und SMEs mit harten Vertraulichkeitspflichten.
+</div>
+
+<div class="warn">
+  <strong>⚠ Pre-Audit Pilot.</strong> Krypto-Stack ist spec-implementiert
+  und integrationstest-abgedeckt (selftest 30/30 · MLS-Tests 6/6 · mobile
+  flutter-test 38/38), aber noch nicht extern auditiert. Für
+  Hochrisiko-Kommunikation auf den Audit warten oder DC INFOSEC für
+  Enterprise-Begleitung kontaktieren.
+</div>
+
+<div class="download-card">
+  <div class="platform">WINDOWS · 64-BIT · DESKTOP-VERSION-PLACEHOLDER</div>
+  <h2>PhantomChat Desktop (MSI Installer)</h2>
+  <div class="desc">
+    Vollwertige GUI mit System-Tray, Native Notifications, MLS-Gruppenchat,
+    File-Transfer, Tor-Mode, Audit-Log. Onboarding-Wizard generiert beim
+    ersten Start eine Identität. Auto-Updater läuft via dieser Domain.
+    Authenticode-signiert mit
+    <a href="/download/phantomchat-pilot-cert-v2.cer" style="color:var(--cyber-cyan);">phantomchat-pilot-cert-v2</a>.
+  </div>
+  <a href="/download/PhantomChat_latest_x64_en-US.msi" class="download-btn">⬇ PhantomChat (Windows MSI)</a>
+  <a href="/download/PhantomChat_latest_x64_en-US.msi.sig" class="download-btn secondary">.minisig</a>
+  <a href="/download/phantomchat-pilot-cert-v2.cer" class="download-btn secondary">Trust Cert (.cer)</a>
+  <div class="meta">
+    <strong>Aktuell:</strong> DESKTOP-VERSION-PLACEHOLDER ·
+    <strong>SHA-256:</strong> <a href="/download/PhantomChat_latest_x64_en-US.msi.sha256" style="color:var(--cyber-cyan);text-decoration:none;">…msi.sha256</a>
+  </div>
+  <div class="install-block">
+    <strong>Install:</strong> Doppelklick → ggf. SmartScreen "Trotzdem ausführen"
+    (Self-signed Pilot-Cert; einmalig <code>phantomchat-pilot-cert-v2.cer</code>
+    in Trusted Root + Trusted Publishers importieren um die Warnung loszuwerden).
+    Silent install: <code>msiexec /i PhantomChat_latest_x64_en-US.msi /qb</code>.
+  </div>
+</div>
+
+<div class="download-card">
+  <div class="platform">ANDROID · APK · MOBILE-VERSION-PLACEHOLDER</div>
+  <h2>PhantomChat Mobile (Android APK)</h2>
+  <div class="desc">
+    Native Android-App mit Sealed-Sender Attribution + MLS-Gruppen-Chat,
+    Voice-Messages und in-app Auto-Updater. Wire-kompatibel mit Desktop —
+    gleicher Krypto-Stack (PQXDH + ML-KEM-1024 + Double Ratchet). Seit 1.1.0
+    mit Production-Keystore signiert (RSA-4096, 27&nbsp;Jahre gültig).
+  </div>
+  <a href="/download/PhantomChat_latest_android.apk" class="download-btn">⬇ Android (modern, empfohlen)</a>
+  <a href="/download/PhantomChat_latest_android_arm32.apk" class="download-btn secondary">32-bit ARM (alte Phones)</a>
+  <a href="/download/PhantomChat_latest_android_x86_64.apk" class="download-btn secondary">x86_64 (Emulator)</a>
+  <div class="meta">
+    <strong>Aktuell:</strong> MOBILE-VERSION-PLACEHOLDER ·
+    <strong>SHA-256:</strong> <a href="/download/PhantomChat_latest_android.apk.sha256" style="color:var(--cyber-cyan);text-decoration:none;">…apk.sha256</a>
+  </div>
+  <div class="install-block">
+    <strong>Install:</strong> APK auf dem Phone öffnen, Android fragt nach
+    <em>"Apps aus unbekannten Quellen"</em>-Freigabe für den Browser, dann
+    Install. <strong>Welche Variante:</strong> Der Standard-Button (ARM64) ist
+    die richtige Wahl für jedes Android-Phone seit 2014.
+    <strong>Update:</strong> Spätere Versionen kommen automatisch via in-app
+    Banner, kein erneuter Browser-Download nötig.
+  </div>
+</div>
+
+<div class="footer">
+  © 2026 <a href="https://dc-infosec.de">DC INFOSEC</a> ·
+  Source: <a href="https://github.com/cengo441337-a11y/phantomchat">github.com/cengo441337-a11y/phantomchat</a> ·
+  Security disclosure: <a href="mailto:admin@dc-infosec.de">admin@dc-infosec.de</a>
+</div>
+
+</div>
+</body>
+</html>

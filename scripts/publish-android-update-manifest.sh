@@ -168,3 +168,10 @@ REMOTE
 echo "[manifest] done. URL: https://updates.dc-infosec.de/phantomchat/android/latest.json"
 echo "[manifest] friendly direct-download:"
 echo "    https://updates.dc-infosec.de/download/PhantomChat_latest_android.apk"
+
+# Refresh /download/index.html so the human-facing page shows the
+# version we just published. Without this the page stays pinned at
+# whatever version it was when first deployed — the trap that broke
+# Deniz's testing for two days (page said v3.0.2 / linked to a
+# 3.0.2 MSI even though the manifest had moved on to 3.0.6).
+bash "$(dirname "${BASH_SOURCE[0]}")/deploy-download-page.sh"
