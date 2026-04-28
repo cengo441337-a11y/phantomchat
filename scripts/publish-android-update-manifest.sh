@@ -141,6 +141,30 @@ EOF
 mv "\$tmp" "$REMOTE_MANIFEST_PATH"
 chmod 0644 "$REMOTE_MANIFEST_PATH"
 echo "[manifest] published $REMOTE_MANIFEST_PATH"
+
+# Friendly-named stable-URL symlinks. The canonical APK filenames
+# (\`app-<abi>-release.apk\`) are Flutter-codegen and unreadable for
+# users sharing a download link. The symlinks below give every
+# version a clickable URL that doesn't 404 across deploys AND that
+# reads as "obviously the Android build of PhantomChat":
+#
+#   PhantomChat_latest_android.apk            → arm64-v8a (modern phones)
+#   PhantomChat_latest_android_arm64.apk      → arm64-v8a (explicit)
+#   PhantomChat_latest_android_arm32.apk      → armeabi-v7a (legacy)
+#   PhantomChat_latest_android_x86_64.apk     → x86_64 (emulators)
+#
+# APK filenames are constant per-ABI (no version suffix) so the
+# symlinks survive every deploy without re-pointing — but ln -sfn
+# is idempotent, doesn't hurt to refresh.
+cd /var/www/updates/download
+sudo ln -sfn app-arm64-v8a-release.apk         PhantomChat_latest_android.apk
+sudo ln -sfn app-arm64-v8a-release.apk.sha256  PhantomChat_latest_android.apk.sha256
+sudo ln -sfn app-arm64-v8a-release.apk         PhantomChat_latest_android_arm64.apk
+sudo ln -sfn app-armeabi-v7a-release.apk       PhantomChat_latest_android_arm32.apk
+sudo ln -sfn app-x86_64-release.apk            PhantomChat_latest_android_x86_64.apk
+echo "[manifest] friendly symlinks refreshed"
 REMOTE
 
 echo "[manifest] done. URL: https://updates.dc-infosec.de/phantomchat/android/latest.json"
+echo "[manifest] friendly direct-download:"
+echo "    https://updates.dc-infosec.de/download/PhantomChat_latest_android.apk"
