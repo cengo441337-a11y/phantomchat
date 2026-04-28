@@ -5,6 +5,7 @@ import '../services/app_lock_service.dart';
 import '../services/battery_opt_service.dart';
 import '../theme.dart';
 import '../widgets/cyber_card.dart';
+import 'diagnostics.dart';
 
 /// PhantomChat settings panel — Wave 8a.
 ///
@@ -112,7 +113,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _sectionHeader('HINTERGRUND-AKTIVITÄT'),
                     const SizedBox(height: 12),
                     _batteryOptCard(),
+                    const SizedBox(height: 32),
                   ],
+                  _sectionHeader('DIAGNOSE'),
+                  const SizedBox(height: 12),
+                  _diagnosticsCard(),
                 ],
               ),
       ),
@@ -264,6 +269,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ],
         ],
+      ),
+    );
+  }
+
+  /// Tappable card that opens the in-app diagnostics screen. The
+  /// screen surfaces the LogService ring buffer + a state snapshot
+  /// (version, listener status, contact count) and gives the user a
+  /// "Kopieren" button to share the dump via an encrypted channel.
+  ///
+  /// Replaces the prior path of "user opens Linux box, runs adb
+  /// logcat over USB, pipes to me" — which was a non-starter for any
+  /// non-developer user reporting a real-device bug.
+  Widget _diagnosticsCard() {
+    return GestureDetector(
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const DiagnosticsScreen()),
+      ),
+      child: CyberCard(
+        borderColor: kCyan,
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            const Icon(Icons.bug_report_outlined, color: kCyan, size: 22),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Diagnose & Logs',
+                    style: GoogleFonts.spaceGrotesk(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: kWhite,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'App-Status, Relay-Verbindung, in-app Log-Buffer · '
+                    'kopierbar für Bug-Reports.',
+                    style: GoogleFonts.spaceMono(
+                      fontSize: 11,
+                      color: kGrayText,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: kCyan, size: 20),
+          ],
+        ),
       ),
     );
   }

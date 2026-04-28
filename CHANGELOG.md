@@ -5,6 +5,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [mobile 1.1.4] — 2026-04-28 — In-app diagnostics screen
+
+User: "wieso baust du nicht ne log funktion ein? dann kann man direkt
+dir oder auf nen server die log daten senden". Right — `adb logcat`
+over USB is a non-starter for any non-developer user reporting a real-
+device bug.
+
+### Mobile 1.1.4
+- **`services/log_service.dart`** — singleton ring buffer (last 500
+  lines) that intercepts `debugPrint` via tee. Every existing
+  `debugPrint(...)` call (relay events, setPin timings, FRB binding
+  noise, etc.) lands in the buffer transparently. Idempotent install,
+  forwards to the previous callback so `flutter run` console parity
+  stays intact.
+- **`screens/diagnostics.dart`** — full-screen surface accessed from
+  Settings → "Diagnose & Logs". Shows app version, relay-listener
+  status (connected? how many WS open?), buffer length, and the
+  scrollable log dump itself. Two action buttons:
+   * **KOPIEREN** — composes header + buffer into a single string,
+     drops it on the clipboard, surfaces a SnackBar warning that the
+     dump can include phantom-IDs and should only be shared via an
+     encrypted channel.
+   * **BUFFER LEEREN** — narrows the next dump to just the events
+     that follow (useful for "reproduce one specific bug" workflows).
+- **`screens/settings.dart`** — new "DIAGNOSE" section + tappable
+  card linking to the screen.
+- **`main.dart`** — `LogService().install()` called BEFORE
+  `FlutterCryptography.enable()` so even the earliest boot-path
+  debugPrints land in the buffer.
+- pubspec 1.1.3+13 → 1.1.4+14.
+
+### Why server-upload was skipped
+The diagnostics dump is unredacted on purpose so the user can read it
+themselves. Logs can contain phantom-IDs of contacts, sender pubkeys,
+relay URLs, and other metadata that this app explicitly tries to keep
+off external servers. Auto-uploading to a hosted endpoint would
+contradict the threat model. The clipboard path forces the user to
+make the share decision — which channel, which recipient, what to
+redact — themselves.
+
+---
+
 ## [3.0.7 + mobile 1.1.3] — 2026-04-28 — Messaging-pipeline observability + listener-from-boot
 
 User reported: "vom PC senden dauert 10-15 Sekunden 'wird versiegelt',

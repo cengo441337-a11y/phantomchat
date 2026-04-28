@@ -6,6 +6,7 @@ import 'package:cryptography_flutter/cryptography_flutter.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'services/background_service_config.dart';
 import 'services/crypto_service.dart';
+import 'services/log_service.dart';
 import 'services/relay_service.dart';
 import 'services/storage_service.dart';
 import 'screens/onboarding.dart';
@@ -78,6 +79,11 @@ Future<RustBootState> _bootRust() async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Install the in-memory log capture FIRST so every subsequent
+  // `debugPrint` (incl. the relay-error subscriber a few lines down,
+  // setPin's timing logs, FRB binding messages, etc.) lands in the
+  // ring buffer the Diagnostik screen surfaces.
+  LogService().install();
   // Force-install the native PBKDF2 / HKDF / AES-GCM impls. The
   // package's own deprecation message claims plugin auto-registration
   // makes this unnecessary, but real-device reports of "PIN-confirm
