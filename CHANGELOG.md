@@ -5,6 +5,67 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [audit-desktop-atomic-writes] — 2026-04-30 — Audit follow-up: atomic-write sweep across save_*
+
+Sixth audit-driven bundle. Closes desktop audit-H4 (~13 `save_*` paths
+used naked `fs::write`, producing half-written blobs on power-cut /
+`app.exit(0)` mid-write — `load_*` then silently fell back to
+`unwrap_or_default()`).
+
+### Desktop backend
+- **New `atomic_write_bytes(path, &[u8])` helper** in lib.rs alongside
+  the existing `atomic_write_json(path, Value)`. Same `tmp+fsync+rename`
+  guarantee, but takes a pre-serialised byte buffer so callers that
+  already have `serde_json::to_vec_pretty(...)` don't need an extra
+  `Value` round-trip.
+- **`atomic_write_json` refactored** to delegate to
+  `atomic_write_bytes` — single implementation point for the
+  tmp+fsync+rename invariant.
+- **Made `pub(crate)`** so `ai_bridge.rs` can use it for its own
+  `save_config` / `save_history`.
+
+### Converted (10 `save_*` paths)
+- `save_me` (lib.rs:551)
+- `save_relays` (lib.rs:931)
+- `save_window_state` (lib.rs:1103) — old comment claimed "torn write
+  just means we lose the latest gesture"; in practice produced
+  invalid JSON and reset every window position
+- `save_privacy` (lib.rs:1237)
+- `save_mls_directory` (lib.rs:1316)
+- `save_contacts` (lib.rs:1676)
+- `save_history` (lib.rs:3475 — messages.json, the largest blob)
+- `save_lan_org_disk` (lib.rs:4904)
+- `save_disappearing` (lib.rs:7590)
+- `save_conversation_state` (lib.rs:7474)
+- Listener-side messages.json write (lib.rs:1989) — same path that
+  prompted the audit finding
+- `crash_dispatched` rewrite (lib.rs:4784)
+- `mutate_message_state` (lib.rs:7544 — pin/star/react history mutate)
+- Reaction history rewrite (lib.rs:7932)
+- Disappearing-msg auto-purge (lib.rs:8371)
+- `ai_bridge::save_config` (ai_bridge.rs:252)
+- `ai_bridge::save_history` (ai_bridge.rs:484)
+
+### Deliberately NOT converted
+- `b"1"` sentinel files (`onboarded`, install-marker) — single-byte,
+  torn-write produces an empty file which `load` already tolerates.
+- `let _ = fs::write(...)` defaults seeders — best-effort, no caller
+  cares if the write fails.
+- `voice/*.opus|.aac|.m4a` saves — binary streams; the receive path
+  tolerates partial files via the existing format-detection.
+- One-off user exports (zip, plaintext export) — not a state file,
+  user re-runs the action if interrupted.
+
+### Test plan
+- [x] `cargo test --workspace` — 19 suites, all green
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` — clean
+- [ ] Manual desktop run: write history, kill the process mid-write
+  (KILL signal during `save_history` heavy-spam), restart, verify
+  pre-incident messages still load. Pre-Bundle G this would have
+  truncated the file.
+
+---
+
 ## [audit-mobile-update] — 2026-04-30 — Audit follow-up: minisign-style update verify + APK timeouts
 
 Fifth audit-driven bundle. Closes mobile audit-H5 (`signature` field

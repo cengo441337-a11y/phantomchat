@@ -550,9 +550,7 @@ fn load_me(app: &AppHandle) -> MeDisk {
 
 fn save_me(app: &AppHandle, me: &MeDisk) -> anyhow::Result<()> {
     let path = me_path(app)?;
-    fs::write(&path, serde_json::to_vec_pretty(me)?)
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    atomic_write_bytes(&path, &serde_json::to_vec_pretty(me)?)
 }
 
 /// Resolve the user's preferred self-label for outbound MLS Welcomes.
@@ -930,9 +928,7 @@ fn load_relays(app: &AppHandle) -> Vec<String> {
 
 fn save_relays(app: &AppHandle, urls: &[String]) -> anyhow::Result<()> {
     let path = relays_path(app)?;
-    let buf = serde_json::to_vec_pretty(&urls)?;
-    fs::write(&path, buf).with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    atomic_write_bytes(&path, &serde_json::to_vec_pretty(&urls)?)
 }
 
 fn privacy_path(app: &AppHandle) -> anyhow::Result<PathBuf> {
@@ -1097,14 +1093,16 @@ fn load_window_state(app: &AppHandle) -> Option<WindowStateDisk> {
     serde_json::from_slice::<WindowStateDisk>(&raw).ok()
 }
 
-/// Write the window state atomically-enough for our purposes (single
-/// `fs::write` — the file is small and a torn write just means we lose
-/// the latest gesture, never corrupt earlier app data).
+/// Write the window state atomically (audit-H4 desktop). Pre-Bundle G
+/// the comment claimed "torn write just means we lose the latest gesture";
+/// in practice a torn write produced an invalid JSON the next launch
+/// silently fell back to defaults on, repositioning every window. Atomic
+/// write + the existing `unwrap_or_default()` reader keep the previous
+/// good state when the write is interrupted.
 fn save_window_state(app: &AppHandle, state: WindowStateDisk) -> Result<(), String> {
     let path = window_state_path(app).map_err(|e| e.to_string())?;
     let buf = serde_json::to_vec_pretty(&state).map_err(|e| e.to_string())?;
-    fs::write(&path, buf).map_err(|e| format!("write {}: {}", path.display(), e))?;
-    Ok(())
+    atomic_write_bytes(&path, &buf).map_err(|e| format!("write {}: {}", path.display(), e))
 }
 
 /// Capture the current window geometry into a `WindowStateDisk`. Reads
@@ -1236,9 +1234,7 @@ fn load_privacy(app: &AppHandle) -> PrivacyConfigDto {
 
 fn save_privacy(app: &AppHandle, dto: &PrivacyConfigDto) -> anyhow::Result<()> {
     let path = privacy_path(app)?;
-    let buf = serde_json::to_vec_pretty(dto)?;
-    fs::write(&path, buf).with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    atomic_write_bytes(&path, &serde_json::to_vec_pretty(dto)?)
 }
 
 /// Build a `BridgeProvider` honouring both the persisted relay list AND
@@ -1317,9 +1313,7 @@ fn save_mls_directory(
         identity_label: identity_label.to_string(),
         members: members.to_vec(),
     };
-    fs::write(path, serde_json::to_vec_pretty(&disk)?)
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    atomic_write_bytes(path, &serde_json::to_vec_pretty(&disk)?)
 }
 
 // ── Identity persistence (mirrors `cli::cmd_keygen` JSON layout) ─────────────
@@ -1370,12 +1364,28 @@ const SECRET_SUFFIXES: &[&str] = &["view", "spend", "signing", "identity"];
 /// power-loss between "stash secrets in keystore" and "rewrite keys.json"
 /// never leaves a half-converted file on disk.
 fn atomic_write_json(path: &std::path::Path, value: &serde_json::Value) -> anyhow::Result<()> {
+    atomic_write_bytes(path, &serde_json::to_vec_pretty(value)?)
+}
+
+/// Audit 2026-04-30 (audit-H4 desktop) — atomic-write helper for callers
+/// that already have a serialised byte buffer (typed `serde_json::to_vec_pretty`,
+/// pre-encoded payloads, etc.). Same tmp+fsync+rename guarantee as
+/// [`atomic_write_json`]: a power-cut, OOM-kill, or `app.exit(0)` at any
+/// point between "open the file" and "rename onto target" leaves the
+/// previous on-disk content intact bit-for-bit.
+///
+/// Pre-Bundle G, ~13 `save_*` paths used naked `fs::write(path, buf)` —
+/// truncating the target before the new bytes hit disk. A power-loss
+/// midway through a multi-MB `messages.json` write produced a half-
+/// written / truncated file; the next launch's lenient `load_history`
+/// (`unwrap_or_default()`) silently dropped the entire history. Routing
+/// every meaningful state-write through this helper closes that hole.
+pub(crate) fn atomic_write_bytes(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
     let tmp = path.with_extension("json.tmp");
     {
         let mut f = fs::File::create(&tmp)
             .with_context(|| format!("create {}", tmp.display()))?;
-        let bytes = serde_json::to_vec_pretty(value)?;
-        f.write_all(&bytes).with_context(|| format!("write {}", tmp.display()))?;
+        f.write_all(bytes).with_context(|| format!("write {}", tmp.display()))?;
         f.sync_all().with_context(|| format!("fsync {}", tmp.display()))?;
     }
     fs::rename(&tmp, path)
@@ -1662,9 +1672,7 @@ fn load_contacts(path: &std::path::Path) -> ContactBook {
 }
 
 fn save_contacts(path: &std::path::Path, book: &ContactBook) -> anyhow::Result<()> {
-    fs::write(path, serde_json::to_vec_pretty(book)?)
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    atomic_write_bytes(path, &serde_json::to_vec_pretty(book)?)
 }
 
 // ── Tauri commands ───────────────────────────────────────────────────────────
@@ -1978,8 +1986,12 @@ async fn spawn_listener_task(
                     drop(guard);
                     if let Some(bytes) = save_bytes {
                         let path = save_path.clone();
+                        // Audit-H4: atomic write of the messages-history blob
+                        // — same rationale as save_history. Listener-side
+                        // path that survives a power-cut without losing
+                        // pre-incident chat state.
                         let _ = tokio::task::spawn_blocking(move || {
-                            std::fs::write(&path, bytes)
+                            atomic_write_bytes(&path, &bytes)
                         })
                         .await;
                     }
@@ -3473,7 +3485,13 @@ async fn save_history(
     let path = messages_path(&app).map_err(|e| e.to_string())?;
     let buf = serde_json::to_vec_pretty(&messages).map_err(|e| e.to_string())?;
     let write_path = path.clone();
-    tokio::task::spawn_blocking(move || std::fs::write(&write_path, buf))
+    // Audit 2026-04-30 (audit-H4 desktop): atomic write. Pre-Bundle G the
+    // entire chat history was overwritten via naked `fs::write` — a power-cut
+    // mid-multi-MB-write produced a half-written blob, and `load_history`'s
+    // lenient `unwrap_or_default()` silently dropped the entire history on
+    // the next launch. atomic_write_bytes (tmp+fsync+rename) preserves the
+    // previous good copy bit-for-bit when the write is interrupted.
+    tokio::task::spawn_blocking(move || atomic_write_bytes(&write_path, &buf))
         .await
         .map_err(|e| format!("save_history join: {e}"))?
         .map_err(|e| format!("write {}: {}", path.display(), e))?;
@@ -4767,7 +4785,8 @@ async fn dispatch_crash_report(
         .join("\n");
     let mut buf = rewritten;
     buf.push('\n');
-    fs::write(&path, buf).map_err(|e| format!("rewrite {}: {}", path.display(), e))?;
+    atomic_write_bytes(&path, buf.as_bytes())
+        .map_err(|e| format!("rewrite {}: {}", path.display(), e))?;
 
     audit(
         &app,
@@ -4890,9 +4909,7 @@ fn load_lan_org(path: &std::path::Path) -> Option<LanOrgDisk> {
 }
 
 fn save_lan_org_disk(path: &std::path::Path, disk: &LanOrgDisk) -> anyhow::Result<()> {
-    fs::write(path, serde_json::to_vec_pretty(disk)?)
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    atomic_write_bytes(path, &serde_json::to_vec_pretty(disk)?)
 }
 
 /// Generate a fresh 6-character org code formatted as `XXX-XXX`. CSPRNG
@@ -7465,7 +7482,7 @@ fn save_conversation_state(
 ) -> Result<(), String> {
     let path = conversation_state_path(app).map_err(|e| e.to_string())?;
     let buf = serde_json::to_vec_pretty(map).map_err(|e| e.to_string())?;
-    fs::write(&path, buf).map_err(|e| format!("write {}: {}", path.display(), e))
+    atomic_write_bytes(&path, &buf).map_err(|e| format!("write {}: {}", path.display(), e))
 }
 
 /// Per-message-state-change event payload. Mirrors TS
@@ -7529,7 +7546,8 @@ where
         hit.ok_or_else(|| format!("msg_id '{msg_id}' not found in history"))?;
     let buf = serde_json::to_vec_pretty(&history).map_err(|e| e.to_string())?;
     let write_path = path.clone();
-    tokio::task::spawn_blocking(move || std::fs::write(&write_path, buf))
+    // Audit-H4: same atomic-write rationale as save_history.
+    tokio::task::spawn_blocking(move || atomic_write_bytes(&write_path, &buf))
         .await
         .map_err(|e| format!("mutate_message_state write join: {e}"))?
         .map_err(|e| format!("write {}: {}", path.display(), e))?;
@@ -7577,9 +7595,7 @@ fn load_disappearing(app: &AppHandle) -> DisappearingDisk {
 
 fn save_disappearing(app: &AppHandle, disk: &DisappearingDisk) -> anyhow::Result<()> {
     let path = disappearing_path(app)?;
-    fs::write(&path, serde_json::to_vec_pretty(disk)?)
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    atomic_write_bytes(&path, &serde_json::to_vec_pretty(disk)?)
 }
 
 /// Truncate a body to <=80 characters (UTF-8-safe via char iteration) so
@@ -7912,8 +7928,9 @@ async fn handle_incoming_reaction_v1(
         if let Ok(buf) = serde_json::to_vec_pretty(&history) {
             // Hazard: offload the JSON write to a blocking thread so the
             // reactor doesn't stall on a multi-MB history serialise.
+            // Audit-H4: atomic_write_bytes — same rationale as save_history.
             let write_path = path.clone();
-            let join = tokio::task::spawn_blocking(move || std::fs::write(&write_path, buf)).await;
+            let join = tokio::task::spawn_blocking(move || atomic_write_bytes(&write_path, &buf)).await;
             match join {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
@@ -8352,7 +8369,10 @@ async fn run_purge_sweep(app: &AppHandle) {
     }
     if let Ok(buf) = serde_json::to_vec_pretty(&kept) {
         let write_path = path.clone();
-        let _ = tokio::task::spawn_blocking(move || std::fs::write(&write_path, buf)).await;
+        // Audit-H4: atomic_write_bytes — auto-purge mutates the entire
+        // history file; a torn write here on power-cut would lose
+        // everything that survived the purge.
+        let _ = tokio::task::spawn_blocking(move || atomic_write_bytes(&write_path, &buf)).await;
     }
     let _ = app.emit(
         "messages_purged",
