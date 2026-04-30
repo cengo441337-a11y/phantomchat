@@ -258,6 +258,219 @@ pub fn save_config(app_data_dir: &std::path::Path, cfg: &AiBridgeConfig) -> Resu
     Ok(())
 }
 
+/// Audit 2026-04-30 (H-1): validate untrusted input before it lands on disk.
+///
+/// `ai_bridge_set_config` accepts the entire `AiBridgeConfig` shape from the
+/// frontend, persists it, and `claude_cli_complete` later spawns `cfg
+/// .claude_cli_path` with `cfg.claude_cli_extra_args` as its argv. Combined
+/// with `claude_cli_skip_permissions = true`, any IPC injection that reaches
+/// `ai_bridge_set_config` (XSS-in-webview, evil renderer extension,
+/// malicious deeplink handler) can flip the bridge into running an
+/// attacker-supplied binary or fan out tool-grant flags against an
+/// allow-listed contact's next inbound message.
+///
+/// The validation below is **defence-in-depth** — the assumption is still
+/// that the webview is trusted. The CSP added in tauri.conf.json closes
+/// the typical XSS path; this fn closes the "Rust side trusts whatever
+/// the IPC layer hands it" gap underneath.
+///
+/// Rules:
+///
+/// 1. `claude_cli_path` must be:
+///
+///    - a basename `claude` or `claude.exe` (will be PATH-resolved by
+///      tokio::process::Command), OR
+///    - an absolute path whose `file_name()` is `claude` / `claude.exe`.
+///
+///    Anything else (random binary name, relative path that traverses
+///    `../..`, empty string under whitespace) is rejected.
+///
+/// 2. `claude_cli_extra_args` must not contain any tool-grant flag
+///    (`--mcp-config`, `--mcp-server`, `--add-dir`, `--allowedTools` /
+///    `--allowed-tools`, `--permission-mode`, `--dangerously-skip-permissions`).
+///    These either wire up new MCP servers, expand the filesystem
+///    permission scope, or override the skip-permissions toggle —
+///    each one a privilege grant that should not bypass the explicit
+///    `claude_cli_skip_permissions` UI checkbox.
+///
+/// 3. `system_prompt` length capped at 16 KiB — a 1 MiB prompt would
+///    blow up history serialisation and is never legitimate.
+///
+/// Per-contact overrides ship through the same gate (model, system_prompt
+/// caps applied to overrides too).
+pub fn validate(cfg: &AiBridgeConfig) -> std::result::Result<(), String> {
+    const MAX_SYSTEM_PROMPT_LEN: usize = 16 * 1024;
+    const MAX_EXTRA_ARGS: usize = 32;
+
+    // Rule 1 — claude_cli_path basename gate. Splits on BOTH `/` and `\`
+    // unconditionally because the config file roundtrips across platforms
+    // (a Windows install's ai_bridge.json mirrored to a Linux build via
+    // export/import must validate consistently). std::path::Path on Linux
+    // doesn't recognise `\` as a separator, so we can't lean on
+    // `Path::file_name`.
+    let claude_path = cfg.claude_cli_path.trim();
+    if claude_path.is_empty() {
+        return Err("claude_cli_path is empty".into());
+    }
+    let path_basename = claude_path.rsplit(['/', '\\']).next().unwrap_or("");
+    let basename_ok = matches!(path_basename, "claude" | "claude.exe");
+    if !basename_ok {
+        return Err(format!(
+            "claude_cli_path basename must be 'claude' or 'claude.exe'; got '{}'",
+            path_basename
+        ));
+    }
+    // Reject `..` segments anywhere — these are "absolute" + traversal
+    // hybrids that would bypass the basename check semantically.
+    if claude_path.split(['/', '\\']).any(|seg| seg == "..") {
+        return Err("claude_cli_path must not contain `..` segments".into());
+    }
+
+    // Rule 2 — extra-args allowlist. We don't allow-list flags positively
+    // (Claude Code adds new flags every release) — we deny-list the small
+    // set that grants extra trust.
+    if cfg.claude_cli_extra_args.len() > MAX_EXTRA_ARGS {
+        return Err(format!(
+            "claude_cli_extra_args has {} entries; max is {}",
+            cfg.claude_cli_extra_args.len(),
+            MAX_EXTRA_ARGS
+        ));
+    }
+    const FORBIDDEN_FLAG_PREFIXES: &[&str] = &[
+        "--mcp-config",
+        "--mcp-server",
+        "--add-dir",
+        "--allowedTools",
+        "--allowed-tools",
+        "--permission-mode",
+        "--dangerously-skip-permissions",
+    ];
+    for arg in &cfg.claude_cli_extra_args {
+        let trimmed = arg.trim();
+        for forbid in FORBIDDEN_FLAG_PREFIXES {
+            // Match `--mcp-config`, `--mcp-config=…`, `--mcp-config<space>X`
+            // (the latter splits across two argv entries; we still catch
+            // the lead arg).
+            if trimmed == *forbid || trimmed.starts_with(&format!("{}=", forbid)) {
+                return Err(format!(
+                    "claude_cli_extra_args contains forbidden flag '{}' — \
+                     these grant additional tool/filesystem trust and must \
+                     be configured via the explicit Settings UI toggles, \
+                     not extra-args",
+                    forbid
+                ));
+            }
+        }
+    }
+
+    // Rule 3 — system_prompt length cap (base + every per-contact override).
+    if cfg.system_prompt.len() > MAX_SYSTEM_PROMPT_LEN {
+        return Err(format!(
+            "system_prompt is {} bytes; max is {}",
+            cfg.system_prompt.len(),
+            MAX_SYSTEM_PROMPT_LEN
+        ));
+    }
+    for (label, ov) in &cfg.contact_overrides {
+        if let Some(sp) = &ov.system_prompt {
+            if sp.len() > MAX_SYSTEM_PROMPT_LEN {
+                return Err(format!(
+                    "contact_overrides[{}].system_prompt is {} bytes; max is {}",
+                    label,
+                    sp.len(),
+                    MAX_SYSTEM_PROMPT_LEN
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod validate_tests {
+    use super::*;
+
+    fn base() -> AiBridgeConfig {
+        AiBridgeConfig::default()
+    }
+
+    #[test]
+    fn default_validates() {
+        validate(&base()).expect("default config must validate");
+    }
+
+    #[test]
+    fn rejects_empty_path() {
+        let mut c = base();
+        c.claude_cli_path = "".into();
+        assert!(validate(&c).is_err());
+    }
+
+    #[test]
+    fn rejects_evil_basename() {
+        let mut c = base();
+        c.claude_cli_path = "/tmp/evil".into();
+        assert!(validate(&c).is_err());
+    }
+
+    #[test]
+    fn allows_absolute_claude() {
+        let mut c = base();
+        c.claude_cli_path = "/usr/local/bin/claude".into();
+        validate(&c).expect("absolute /usr/local/bin/claude must pass");
+    }
+
+    #[test]
+    fn allows_windows_claude_exe() {
+        let mut c = base();
+        c.claude_cli_path = r"C:\Users\u\AppData\Local\claude\claude.exe".into();
+        validate(&c).expect("windows claude.exe must pass");
+    }
+
+    #[test]
+    fn rejects_dotdot_traversal() {
+        let mut c = base();
+        c.claude_cli_path = "/usr/bin/../../etc/claude".into();
+        assert!(validate(&c).is_err());
+    }
+
+    #[test]
+    fn rejects_mcp_config_flag() {
+        let mut c = base();
+        c.claude_cli_extra_args = vec!["--mcp-config".into(), "/tmp/evil.json".into()];
+        assert!(validate(&c).is_err());
+    }
+
+    #[test]
+    fn rejects_mcp_config_eq_flag() {
+        let mut c = base();
+        c.claude_cli_extra_args = vec!["--mcp-config=/tmp/evil.json".into()];
+        assert!(validate(&c).is_err());
+    }
+
+    #[test]
+    fn rejects_skip_perms_in_args() {
+        let mut c = base();
+        c.claude_cli_extra_args = vec!["--dangerously-skip-permissions".into()];
+        assert!(validate(&c).is_err());
+    }
+
+    #[test]
+    fn allows_safe_extra_args() {
+        let mut c = base();
+        c.claude_cli_extra_args = vec!["--model".into(), "claude-sonnet-4-6".into()];
+        validate(&c).expect("--model pair must pass");
+    }
+
+    #[test]
+    fn rejects_oversize_system_prompt() {
+        let mut c = base();
+        c.system_prompt = "x".repeat(16 * 1024 + 1);
+        assert!(validate(&c).is_err());
+    }
+}
+
 fn load_history(app_data_dir: &std::path::Path) -> HistoryDisk {
     std::fs::read(history_path(app_data_dir))
         .ok()

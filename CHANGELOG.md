@@ -5,6 +5,57 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [audit-desktop-hardening] — 2026-04-30 — Audit follow-up: AI-bridge config validation + Tauri CSP
+
+Third audit-driven bundle. Closes the desktop H-1 (claude_cli config
+trust gap) and C-6 (CSP null) findings.
+
+### Desktop backend
+- **`ai_bridge::validate()` now gates every `ai_bridge_set_config` call**
+  (audit-H1). Untrusted config from the IPC layer is checked before the
+  file hits disk:
+  1. `claude_cli_path` basename must be `claude` or `claude.exe`. Bare
+     basename (PATH-resolved) and absolute paths to a binary named
+     `claude[.exe]` pass; anything else (random binary name, `..`
+     traversal, empty string) is rejected.
+  2. `claude_cli_extra_args` must not contain any tool-grant flag
+     (`--mcp-config`, `--mcp-server`, `--add-dir`, `--allowedTools` /
+     `--allowed-tools`, `--permission-mode`,
+     `--dangerously-skip-permissions`). These each grant additional
+     trust that must go through the explicit Settings UI checkbox,
+     not extra-args. Max 32 entries overall.
+  3. `system_prompt` (base + per-contact override) capped at 16 KiB.
+  Rejection routes through the audit-log as
+  `ai_bridge.config_set_rejected` with the reason. Cross-platform
+  basename split handles both `/` and `\` so a Windows-written
+  `ai_bridge.json` validates the same on Linux. 10 unit tests added.
+
+### Desktop frontend / Tauri
+- **`tauri.conf.json` `csp: null` → strict CSP** (audit-C6):
+  ```
+  default-src 'self' ipc: http://ipc.localhost;
+  script-src 'self';
+  style-src 'self' 'unsafe-inline';
+  font-src 'self' data:;
+  img-src 'self' data: blob: asset: http://asset.localhost;
+  media-src 'self' blob: asset: http://asset.localhost;
+  connect-src 'self' ipc: http://ipc.localhost;
+  frame-src 'none'; object-src 'none'; base-uri 'self'
+  ```
+  - The webview is the IPC client only — every outbound HTTP (Ollama,
+    OpenAI, Anthropic, updater) runs Rust-side, so `connect-src` can
+    be locked to `'self' ipc:`.
+  - `script-src 'self'` (no inline) — even the
+    `dangerouslySetInnerHTML` QR SVGs cannot exfiltrate via injected
+    `<script>` if the backend ever regresses.
+  - `style-src 'unsafe-inline'` required for React inline-style props +
+    Tailwind injected styles.
+  - `data:` on img/font for inline emoji + base64 icons; `blob:` on
+    img/media for `VoiceMessageBubble`'s audio object URL.
+  Live-verify on next desktop build before tagging the next release.
+
+---
+
 ## [audit-periphery] — 2026-04-30 — Audit follow-up: scripts + workflows
 
 Second audit-driven bundle, focused on the release pipeline and CI surface.

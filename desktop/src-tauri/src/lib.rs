@@ -5403,6 +5403,20 @@ fn ai_bridge_set_config(
     app: AppHandle,
     config: ai_bridge::AiBridgeConfig,
 ) -> Result<(), String> {
+    // Audit 2026-04-30 (H-1): defence-in-depth validation of every untrusted
+    // field before it lands on disk. Frontend XSS / extension hijack /
+    // deeplink shenanigans cannot weaponise claude_cli_path or extra-args
+    // into an arbitrary-binary spawn. See `ai_bridge::validate` for rules.
+    if let Err(e) = ai_bridge::validate(&config) {
+        audit(
+            &app,
+            "ai_bridge",
+            "config_set_rejected",
+            serde_json::json!({ "reason": e }),
+        );
+        return Err(format!("invalid AI-bridge config: {}", e));
+    }
+
     let dir = app_data(&app).map_err(|e| e.to_string())?;
     ai_bridge::save_config(&dir, &config).map_err(|e| e.to_string())?;
     audit(
