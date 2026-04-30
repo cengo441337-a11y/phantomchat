@@ -5,6 +5,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [audit-core-pow] — 2026-04-30 — Audit follow-up: opt-in receive-side PoW filter
+
+Fourth audit-driven bundle. Closes core audit-C1 (`verify_pow` was dead
+code, free DoS via `pow_nonce=0`).
+
+### Core
+- **`SessionStore::set_min_pow_difficulty(u32)` / `min_pow_difficulty()`**
+  expose an opt-in Hashcash floor on the receive path. Default is `0`
+  (filter off — every envelope passes; existing demo + test calls that
+  send with `pow_difficulty=0` keep round-tripping unchanged). Set to
+  `>= 1` to short-circuit envelopes that don't carry a Hashcash nonce
+  proving at least that much work.
+- **`receive_inner` and `receive_full` now run the verify_pow filter
+  BEFORE the ECDH+HKDF+HMAC tag-check** when the floor is non-zero.
+  Pre-filtering spam saves a full ECDH per garbage envelope on a
+  public-relay node — 50 µs ECDH replaced by ~1 µs SHA-256.
+- **Persistence-safe**: the new field uses `serde(default,
+  skip_serializing_if = is_zero)` so existing `sessions.json` files
+  load with `min_pow_difficulty = 0` and resave clean. No migration
+  needed.
+
+### Tests
+- 3 new tests in `core/tests/session_tests.rs`:
+  - default off accepts `difficulty=0`
+  - floor=8 rejects envelope built at `difficulty=0` (returns `Ok(None)`)
+  - floor=8 accepts envelope built at `difficulty=8`
+- `verify_pow` is no longer dead code — the audit's "Critical: dead
+  function" finding is closed by both the wiring AND the new tests.
+
+### Why opt-in (not enforced by default)
+Sender-side coordination is not yet wired — most callers (CLI demo,
+unit tests) currently send with `pow_difficulty=0`. Flipping the
+default to e.g. `8` would require every legitimate sender to grind
+PoW first, breaking the test suite and any third-party integration
+that hasn't migrated. The opt-in API lets production deployments
+(Desktop/Mobile) ramp up after senders are confirmed to grind. A
+follow-up PR will set Desktop's `SessionStore` to `min_pow_difficulty
+= 8` once telemetry shows real senders are in line.
+
+### Notes on the side-effects
+- The Hashcash header in the productive code path is `tag || ts` —
+  not the spec's `(ver, ts, epk, tag, pow_nonce)` set (audit-L1).
+  Unchanged in this PR; tracked separately because it requires
+  coordinated sender + receiver bump.
+
+---
+
 ## [audit-desktop-hardening] — 2026-04-30 — Audit follow-up: AI-bridge config validation + Tauri CSP
 
 Third audit-driven bundle. Closes the desktop H-1 (claude_cli config

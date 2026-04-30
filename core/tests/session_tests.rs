@@ -52,6 +52,62 @@ fn self_send_round_trip() {
     assert_eq!(plaintext, b"echo");
 }
 
+// Audit 2026-04-30 (C-1): receive-side PoW filter — opt-in via
+// `set_min_pow_difficulty`. Default is `0` so the existing send/receive
+// tests above (which all pass `difficulty=0`) keep round-tripping.
+// These tests cover the new opt-in path.
+
+#[test]
+fn pow_filter_off_by_default_accepts_zero_difficulty() {
+    let alice = new_identity();
+    let mut store = SessionStore::new();
+    assert_eq!(store.min_pow_difficulty(), 0);
+
+    let envelope = store.send(&alice.addr, b"hi", 0);
+    let plaintext = store
+        .receive(&envelope, &alice.view, &alice.spend)
+        .expect("receive")
+        .expect("default filter must accept difficulty=0");
+    assert_eq!(plaintext, b"hi");
+}
+
+#[test]
+fn pow_filter_rejects_difficulty_below_floor() {
+    let alice = new_identity();
+
+    // Floor = 8. Send envelope was constructed at difficulty 0 (no PoW
+    // grind). Receive must short-circuit to Ok(None).
+    let mut sender = SessionStore::new();
+    let envelope = sender.send(&alice.addr, b"spam", 0);
+
+    let mut receiver = SessionStore::new();
+    receiver.set_min_pow_difficulty(8);
+    let outcome = receiver
+        .receive(&envelope, &alice.view, &alice.spend)
+        .expect("receive must not error");
+    assert!(
+        outcome.is_none(),
+        "envelope built at difficulty 0 must be filtered when floor is 8"
+    );
+}
+
+#[test]
+fn pow_filter_accepts_envelope_at_or_above_floor() {
+    let alice = new_identity();
+
+    // Sender grinds difficulty 8; receiver demands at least 8.
+    let mut sender = SessionStore::new();
+    let envelope = sender.send(&alice.addr, b"legit", 8);
+
+    let mut receiver = SessionStore::new();
+    receiver.set_min_pow_difficulty(8);
+    let plaintext = receiver
+        .receive(&envelope, &alice.view, &alice.spend)
+        .expect("receive")
+        .expect("envelope at floor must pass");
+    assert_eq!(plaintext, b"legit");
+}
+
 #[test]
 fn alice_to_bob_multi_round_exchange() {
     let alice = new_identity();

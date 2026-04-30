@@ -26,7 +26,6 @@
       }
     ],
     "security": {
-      "_csp_audit_note": "Audit 2026-04-30 (C-6): tightened from null. The webview is the IPC client only — no third-party scripts, no externally hosted assets. ipc: + http://ipc.localhost cover Tauri 2 IPC; asset: + http://asset.localhost cover the assetProtocol scope below (voice files, downloads). 'unsafe-inline' on style is required for React inline-style props + Tailwind injected styles. data: on img-src is required for emoji + base64 inline icons; blob: for VoiceMessageBubble's audio playback object URL. AddressQR + OnboardingWizard QR SVGs are produced by the Rust backend and inserted via dangerouslySetInnerHTML — they live under script-src 'self' (no inline scripts) so even a future backend regression cannot exfiltrate via injected <script>. connect-src is 'self' + IPC only because every outbound HTTP (Ollama, OpenAI, Anthropic, updater) runs on the Rust side, not in the webview.",
       "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: asset: http://asset.localhost; media-src 'self' blob: asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; base-uri 'self'",
       "assetProtocol": {
         "enable": true,
