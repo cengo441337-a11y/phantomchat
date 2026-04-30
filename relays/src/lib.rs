@@ -18,8 +18,6 @@
 //! Events werden mit einem **ephemeren secp256k1-KeyPair** pro Session
 //! signiert — der Sender ist gegenüber Relay-Betreibern pseudonym.
 
-pub mod nostr;
-
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
 use phantomchat_core::envelope::Envelope;

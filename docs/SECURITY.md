@@ -106,7 +106,7 @@ Schwachstellenmeldungen ernst und antworten zeitnah.
 | **E-Mail** (bevorzugt) | `admin@dc-infosec.de` |
 | **PGP-Key** | [`keys/security.asc`](../keys/security.asc) |
 | **Fingerprint** | `0F8D A258 1B8A 1428 9F0F  2FD7 EF08 6D82 9914 A0E3` |
-| **Expiry** | 2028-04-25 (Ed25519 / Curve25519) |
+| **Expiry** | 2027-10-26 (Ed25519 / Curve25519) |
 | **security.txt** | [`/.well-known/security.txt`](../.well-known/security.txt) (RFC 9116) |
 
 Bitte kein öffentliches GitHub-Issue für Sicherheitsmeldungen — `admin@dc-infosec.de`

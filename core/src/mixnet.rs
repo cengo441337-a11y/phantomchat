@@ -231,7 +231,7 @@ mod tests {
     }
 
     fn random_hop() -> HopKeypair {
-        let secret = StaticSecret::random_from_rng(&mut OsRng);
+        let secret = StaticSecret::random_from_rng(OsRng);
         let public = PublicKey::from(&secret);
         HopKeypair { secret, hop: MixnetHop { public } }
     }
@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn single_hop_delivers_payload_directly() {
         let bob = random_hop();
-        let packet = pack_onion(&[bob.hop.clone()], b"hello bob");
+        let packet = pack_onion(std::slice::from_ref(&bob.hop), b"hello bob");
         match peel_onion(&packet, &bob.secret).unwrap() {
             Peeled::Final { payload } => assert_eq!(payload, b"hello bob"),
             Peeled::Forward { .. } => panic!("single-hop must deliver terminally"),
@@ -284,14 +284,14 @@ mod tests {
     fn peeling_with_wrong_key_fails() {
         let real = random_hop();
         let impostor = random_hop();
-        let pkt = pack_onion(&[real.hop.clone()], b"x");
+        let pkt = pack_onion(std::slice::from_ref(&real.hop), b"x");
         assert!(peel_onion(&pkt, &impostor.secret).is_err());
     }
 
     #[test]
     fn tampered_layer_fails() {
         let h1 = random_hop();
-        let mut pkt = pack_onion(&[h1.hop.clone()], b"fragile");
+        let mut pkt = pack_onion(std::slice::from_ref(&h1.hop), b"fragile");
         // Flip a byte inside the sealed layer (not the nonce) — AEAD MAC breaks.
         let idx = pkt.layer.len() - 4;
         pkt.layer[idx] ^= 0xFF;
