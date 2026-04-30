@@ -5,6 +5,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [audit-mobile-update] — 2026-04-30 — Audit follow-up: minisign-style update verify + APK timeouts
+
+Fifth audit-driven bundle. Closes mobile audit-H5 (`signature` field
+parsed but never verified; APK download had no wall-clock cap).
+
+### Mobile
+- **Ed25519 manifest verification scaffold landed**
+  (`update_service.dart`, audit-H5 mobile). New
+  `_verifyManifestSignature` runs as a hard-gate inside
+  `checkForUpdate` BEFORE any banner is surfaced. The verifier:
+  - Pulls `signature` (base64-encoded Ed25519 over the canonical-JSON
+    of the manifest **without** the signature key)
+  - Verifies against `kManifestPubkeyB64` (32-byte base64 Ed25519
+    public key) using `cryptography` package's `Ed25519` algo
+  - Hard-rejects the update on any failure mode (wrong shape, bad
+    signature, decode error)
+- **`kManifestPubkeyB64 = null` for now** — release-engineering needs
+  to generate the dedicated update-signing keypair (separate from the
+  desktop Tauri minisign key, separate from the disclosure PGP key)
+  and configure `publish-android-update-manifest.sh` to sign the
+  canonical JSON. While `null`, the verifier short-circuits to "no
+  enforcement" + a `debugPrint` warning on every check so the
+  passthrough state is visible in `flutter run` logs and the new
+  in-app diagnostics screen. Existing pilots stay working unchanged.
+- **APK download wall-clock cap (10 min) + connection timeout (30 s)**
+  added to `downloadApk` (audit-H5 mobile). Pre-3.0.7 the manifest
+  fetch had a tight 6 s budget but the APK fetch had **none** — a
+  slow-loris server or captured router could keep the download
+  dialog spinning indefinitely. Per-chunk progress now respects a
+  10-min wall-clock cap that surfaces a stalled download as an
+  actionable error.
+
+### Test plan
+- [x] `flutter analyze` — no issues
+- [ ] Live APK update flow with `kManifestPubkeyB64` still null —
+  manifest passes through, banner appears, download succeeds. Verify
+  via the new diagnostics screen that the "manifest verify SKIPPED"
+  warning lands in the log buffer.
+- [ ] Generate the project Ed25519 keypair, set
+  `kManifestPubkeyB64`, teach
+  `publish-android-update-manifest.sh` to sign — separate PR.
+
+---
+
 ## [audit-core-pow] — 2026-04-30 — Audit follow-up: opt-in receive-side PoW filter
 
 Fourth audit-driven bundle. Closes core audit-C1 (`verify_pow` was dead
