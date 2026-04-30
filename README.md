@@ -410,8 +410,8 @@ PhantomChat ships three GitHub Actions workflows under `.github/workflows/`:
   post-Release once trusted): SSHes to the Hostinger update host and runs
   `phantom-publish` for the MSI + scp's APKs to `/var/www/updates/download/`.
 
-Dependabot bumps Cargo, npm, and GitHub Actions deps weekly (see
-`.github/dependabot.yml`).
+Dependabot bumps Cargo, npm, and GitHub Actions deps monthly, grouped per
+ecosystem, with semver-major bumps ignored (see `.github/dependabot.yml`).
 
 ## Reproducible Builds
 

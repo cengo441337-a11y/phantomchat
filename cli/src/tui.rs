@@ -1085,9 +1085,21 @@ fn load_identity(
                     "signing_public".to_string(),
                     serde_json::Value::String(hex::encode(sk.public_bytes())),
                 );
-                let _ = serde_json::to_vec_pretty(&json)
+                let wrote = serde_json::to_vec_pretty(&json)
                     .ok()
-                    .and_then(|b| fs::write(file, b).ok());
+                    .and_then(|b| fs::write(file, b).ok())
+                    .is_some();
+                // Audit 2026-04-30: keep upgraded keyfile at 0600 — same
+                // rationale as `cmd_keygen` in main.rs. The auto-upgrade path
+                // in particular is a perms-regression vector because it
+                // rewrites the file in-place from a previously stricter mode.
+                if wrote {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = fs::set_permissions(file, fs::Permissions::from_mode(0o600));
+                    }
+                }
             }
             (sk, true)
         }

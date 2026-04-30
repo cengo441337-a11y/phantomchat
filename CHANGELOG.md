@@ -5,6 +5,124 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [audit-hardening] — 2026-04-30 — Whole-product audit pass: quick-wins bundle
+
+Multi-agent code audit across core crypto, desktop Tauri backend, desktop
+React frontend, mobile Flutter, CLI, relays, scripts, CI, and docs. Baseline
+was already clean (cargo test/clippy/fmt + flutter analyze all green) so
+this bundle is the first wave of low-risk fixes for the findings that don't
+need a refactor or design discussion. Heavier items (PoW receive-side
+filter, atomic-write sweep across `messages.json` + 12 sibling `save_*`,
+mobile minisign-update-verify, AEAD nonce belt-and-suspenders, CSP
+hardening) are tracked for follow-up PRs.
+
+### Relays
+- **Delete `relays/src/nostr.rs` (audit-H1, peripherie).** The module was
+  pre-rewrite dead code declaring `PHANTOM_KIND = 1984` (NIP-78
+  application-specific) while the productive path in `lib.rs:39` correctly
+  uses `NOSTR_KIND_PHANTOM = 1059` (NIP-59 Gift Wrap) per `spec/SPEC.md §9`.
+  Because the module was `pub mod nostr;` exported, any external crate
+  importing `phantomchat_relays::nostr::NostrEvent` would silently emit
+  events with the wrong kind and never round-trip through `lib.rs`
+  subscriptions. The active code in `lib.rs` already implements the full
+  Nostr surface (event id, Schnorr-secp256k1 ephemeral signing, REQ
+  filters); nothing actually consumed the dead module.
+
+### CLI
+- **`keys.json` is now written with 0600 mode on Unix (audit-H10,
+  peripherie).** Both `cli/src/main.rs cmd_keygen` and the
+  `cli/src/tui.rs` legacy-keyfile auto-upgrade path now call
+  `fs::set_permissions(..., 0o600)` immediately after `fs::write`. The
+  file carries `signing_private` (Ed25519 seed), `view_private`, and
+  `spend_private` — under default umask on Linux that's world-readable,
+  which makes any same-host process able to exfiltrate the identity.
+  Mobile + Desktop migrated to OS-Keystore long ago; CLI was the last
+  on-disk keymaterial path. `#[cfg(unix)]` keeps Windows builds clean
+  (NTFS user-profile ACLs already restrict).
+
+### CI / Dependabot
+- **GitHub Actions ecosystem now ignores semver-major bumps**
+  (audit-M11, peripherie). The other three ecosystems (cargo root, fuzz,
+  npm) already had `ignore: version-update:semver-major`; the
+  `github-actions` block was grouping `*` including majors, which clogs
+  the queue with unmergeable migration PRs (e.g. `actions/checkout v5 →
+  v6`). Aligned all four ecosystems.
+
+### Docs
+- **`docs/SECURITY.md` PGP-key expiry corrected from 2028-04-25 to
+  2027-10-26** (audit-H7, peripherie). The key in `keys/security.asc`
+  decodes to `2027-10-26`, matching `.well-known/security.txt:16`. The
+  earlier 2028 number was a memory-error in the original Wave 9 commit
+  message; SECURITY.md was the only place still claiming it.
+- **`README.md` Dependabot description updated from "weekly" to
+  "monthly, grouped per ecosystem, semver-major ignored"** (audit-H5).
+  The actual `dependabot.yml` was retuned to monthly two days after the
+  README claim was written and never followed up.
+
+### Mobile — PIN hardening + secure-storage defaults
+The mobile audit surfaced three Critical findings around PIN-KDF and
+on-device secret storage. All three are addressed below; auto-update
+manifest signature verification (audit-H5 mobile) is bigger and tracked
+separately.
+
+- **`FlutterSecureStorage` now uses explicit `AndroidOptions(
+  encryptedSharedPreferences: true)` + `IOSOptions(accessibility:
+  KeychainAccessibility.unlocked_this_device)`** in all three call
+  sites: `services/security_service.dart`, `services/storage_service
+  .dart`, `services/app_lock_service.dart` (audit-C5 mobile). The
+  default `FlutterSecureStorage()` constructor under flutter_secure
+  _storage 9.x leaves the on-disk blob in plain SharedPreferences with
+  cipher-wrapping via a non-Keystore-backed master key on Android, and
+  on iOS the keychain item rides along into iCloud / iTunes backups.
+  This breaks the "keys live only on this device" promise the
+  onboarding screen makes. The new options route the identity blob,
+  PIN hash + salt, and DB password through Android Keystore-backed
+  EncryptedSharedPreferences and iOS device-bound Keychain.
+- **PBKDF2 iteration count for new PINs raised 50 000 → 600 000**
+  (audit-C3 mobile). 50k was below the OWASP-2023 minimum (≥600k for
+  PBKDF2-HMAC-SHA256) and made 4–8-digit numerical PINs (10⁴–10⁸ search
+  space) crackable in seconds on any GPU once the device is rooted or
+  the secure-storage blob is pulled from a backup. Existing PINs keep
+  unlocking under their original iter count via the lazy-migration
+  path already wired to `_kPinIters`. Re-entering the PIN (or hitting
+  "Change PIN") rolls the user forward to 600k automatically.
+- **`FlutterCryptography.enable()` is now also called inside
+  `_pbkdf2Inner` before `Pbkdf2()` is constructed** (audit-C4 mobile).
+  Plugin registrations are **isolate-local** under Flutter, but
+  `_pbkdf2Inner` runs via `compute(...)` in a fresh background
+  isolate that doesn't inherit the main-isolate's enable() call. The
+  result was that the supposedly-native KDF silently fell back to pure
+  -Dart and the 50k stop-gap was the only thing keeping setPin under
+  the UI-freeze threshold. Calling enable() inside the worker fixes
+  the registration; combined with the 600k bump, KDF now drops from
+  ~5–15 s to ~150 ms on devices that ship the native implementation.
+  Pure-Dart fallback hardware sees a one-time 5–15 s freeze at PIN
+  confirmation, which is acceptable for a once-per-device action.
+
+### Core — clippy hygiene
+- **`core/src/mixnet.rs` test helpers**: replaced `&[bob.hop.clone()]`
+  with `std::slice::from_ref(&bob.hop)` (3 sites, `cloned_ref_to_slice
+  _refs` lint, Rust 1.95) and `&mut OsRng` with `OsRng` (`needless_
+  borrows_for_generic_args` lint). Behavioural no-op; surfaced after
+  the audit cargo run invalidated the clippy cache. Without this the
+  CI `clippy -D warnings` gate would block the PR.
+
+### What changed in numbers
+- 10 files modified, 1 deleted (`relays/src/nostr.rs`, 127 LOC).
+- No public API changes. Workspace tests, clippy `-D warnings`, and
+  flutter analyze were all green before AND after the bundle. (Note:
+  preexisting `cargo fmt --all` drift across ~46 unrelated files
+  remains untouched — out of scope for this audit bundle.)
+
+### Why one bundled PR (per "Quiet release pipeline" rule)
+Each fix above is &lt; 10 LOC; opening 6 PRs would be 6 review pings, 6
+build-runs, and 6 dependabot-style notification events for changes that
+together still don't ship a binary (no version bump, no GH release, no
+desktop or mobile tag). Bundling matches the existing
+"audit-trail-without-noise" pattern.
+
+---
+
 ## [mobile 1.1.4] — 2026-04-28 — In-app diagnostics screen
 
 User: "wieso baust du nicht ne log funktion ein? dann kann man direkt

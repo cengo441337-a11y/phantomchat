@@ -742,6 +742,16 @@ fn cmd_keygen(out: PathBuf) -> anyhow::Result<()> {
     });
 
     fs::write(&out, serde_json::to_vec_pretty(&json)?)?;
+    // Audit 2026-04-30: keys.json carries Ed25519 / X25519 private keys
+    // (signing_private, view_private, spend_private). Default umask leaves
+    // it world-readable on Linux, which makes any same-host process able to
+    // exfiltrate the identity. Tighten to 0600. Windows ACLs already restrict
+    // user-profile files; the cfg gate keeps cross-platform builds clean.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&out, fs::Permissions::from_mode(0o600));
+    }
     pb.finish_and_clear();
 
     ok("KEYPAIR GENERATED");

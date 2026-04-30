@@ -5,8 +5,18 @@ import '../models/identity.dart';
 import '../models/contact.dart';
 import '../models/message.dart';
 
+// Audit 2026-04-30: explicit secure-storage options — see security_service.dart
+// for the full rationale. Identity blob (privateView/Spend/Signing) MUST be
+// KeyStore-backed on Android and device-bound (no iCloud) on iOS.
+const _aOptions = AndroidOptions(encryptedSharedPreferences: true);
+const _iOptions =
+    IOSOptions(accessibility: KeychainAccessibility.unlocked_this_device);
+
 class StorageService {
-  static const _storage = FlutterSecureStorage();
+  static const _storage = FlutterSecureStorage(
+    aOptions: _aOptions,
+    iOptions: _iOptions,
+  );
   static const _identityKey = 'phantom_identity';
   static const _contactsKey = 'phantom_contacts';
   static const _messagesPrefix = 'msgs_';

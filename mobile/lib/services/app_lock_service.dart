@@ -1,6 +1,8 @@
 import 'dart:convert';
 
 import 'package:cryptography/cryptography.dart';
+// ignore: deprecated_member_use
+import 'package:cryptography_flutter/cryptography_flutter.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -24,7 +26,20 @@ class _Pbkdf2Args {
 /// The pure-Dart PBKDF2 from `cryptography` is the bottleneck (5-15 s on
 /// mid-range Android at 600k iters); offloading it keeps the UI thread
 /// responsive during PIN setup / verification.
+///
+/// Audit 2026-04-30: `FlutterCryptography.enable()` registers the native
+/// implementations behind `Pbkdf2()`, but plugin registrations are
+/// **isolate-local**. The `compute(...)` wrapper spawns a fresh isolate
+/// that has no native registration — so the call to `FlutterCryptography
+/// .enable()` in `main.dart` was wirkungslos for this code-path and PBKDF2
+/// silently fell back to pure-Dart. Calling enable() FIRST inside the
+/// worker fixes that: every spawned isolate registers the native
+/// MethodChannel-backed PBKDF2 before constructing the algorithm. On
+/// devices that ship the native implementation this drops 600k from
+/// ~5–15 s to ~150 ms.
 Future<Uint8List> _pbkdf2Inner(_Pbkdf2Args args) async {
+  // ignore: deprecated_member_use
+  FlutterCryptography.enable();
   final pbkdf2 = Pbkdf2(
     macAlgorithm: Hmac.sha256(),
     iterations: args.iterations,
@@ -53,8 +68,18 @@ Future<Uint8List> _pbkdf2Inner(_Pbkdf2Args args) async {
 /// This class is stateless beyond the two in-memory fields it tracks for the
 /// lifetime of the process: `_unlockedAt` and `_failedAttempts`. Everything
 /// else is persisted through the backing stores.
+// Audit 2026-04-30: explicit secure-storage options — see security_service.dart
+// for the full rationale. PIN hash + salt MUST be KeyStore-backed on Android
+// and device-bound (no iCloud) on iOS.
+const _aOptions = AndroidOptions(encryptedSharedPreferences: true);
+const _iOptions =
+    IOSOptions(accessibility: KeychainAccessibility.unlocked_this_device);
+
 class AppLockService {
-  static const _storage = FlutterSecureStorage();
+  static const _storage = FlutterSecureStorage(
+    aOptions: _aOptions,
+    iOptions: _iOptions,
+  );
 
   // Secure-storage keys
   static const _kPinHash       = 'phantom_pin_hash';
@@ -79,17 +104,29 @@ class AppLockService {
   /// Default inactivity timeout in seconds. User-configurable at runtime.
   static const int defaultAutoLockSeconds = 60;
 
-  /// PBKDF2 iteration count for newly-set PINs. 50k is an intentional
-  /// compromise: the hash already lives in Android Keystore / iOS
-  /// Keychain (hardware-backed where available), so iter count is the
-  /// second line of defence, not the first. With cryptography_flutter
-  /// native, 600k = ~150 ms; on older / emulator-class hardware where
-  /// the package falls back to pure-Dart, 600k = 30-60 s of UI freeze
-  /// at PIN-confirm. 50k stays sub-second across all paths. Stored per-
-  /// user in `_kPinIters` so this constant can be bumped to 600k once
-  /// shipping devices run native KDF — `verifyPin` reads the stored
-  /// count back, so existing PINs keep verifying after a bump.
-  static const int currentPbkdf2Iters = 50000;
+  /// PBKDF2 iteration count for newly-set PINs.
+  ///
+  /// Audit 2026-04-30: bumped 50000 → 600000 to match the OWASP-2023 minimum
+  /// for PBKDF2-HMAC-SHA256 (`https://cheatsheetseries.owasp.org/cheatsheets/
+  /// Password_Storage_Cheat_Sheet.html`). 50k was a stop-gap that left
+  /// 4–8-digit numerical PINs (10⁴–10⁸ search space) crackable in seconds on
+  /// any GPU once the device is rooted or the secure-storage blob is pulled
+  /// from a backup; the AndroidKeystore / iOS-Keychain wrap is the first
+  /// line of defence, but iters is what saves the user when that fails.
+  ///
+  /// Lazy migration: the iter count used at setPin time is persisted in
+  /// `_kPinIters`. `verifyPin` reads it back, so users whose PIN was set
+  /// under the legacy 50k regime keep unlocking with the legacy count
+  /// without forced re-entry. Re-entering the PIN (or hitting "Change PIN")
+  /// rolls the user forward to 600k automatically.
+  ///
+  /// Tradeoff: on devices where `cryptography_flutter` runs the native KDF,
+  /// 600k = ~150 ms — imperceptible. On emulators / older hardware that
+  /// falls back to pure-Dart, 600k = a one-time 5–15 s freeze at PIN
+  /// confirmation. Acceptable: setPin runs once per device, and
+  /// `_pbkdf2Inner` runs in a background isolate so the UI stays
+  /// dispatchable.
+  static const int currentPbkdf2Iters = 600000;
 
   /// Iteration count used by builds before the iter-count was persisted.
   /// Verification falls back to this when `_kPinIters` is absent so
