@@ -253,9 +253,12 @@ pub fn save_config(app_data_dir: &std::path::Path, cfg: &AiBridgeConfig) -> Resu
     let path = config_path(app_data_dir);
     let buf =
         serde_json::to_vec_pretty(cfg).with_context(|| "serialising AiBridgeConfig")?;
-    std::fs::write(&path, buf)
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    // Audit 2026-04-30 (audit-H4 desktop): atomic-write — see lib.rs
+    // `atomic_write_bytes`. AI-bridge config carries provider tokens
+    // and per-contact overrides; a torn write here would dump the user
+    // into the default `ai_bridge.json` on next launch and could expose
+    // an unintended endpoint or system-prompt.
+    crate::atomic_write_bytes(&path, &buf)
 }
 
 /// Audit 2026-04-30 (H-1): validate untrusted input before it lands on disk.
@@ -481,9 +484,10 @@ fn load_history(app_data_dir: &std::path::Path) -> HistoryDisk {
 fn save_history(app_data_dir: &std::path::Path, disk: &HistoryDisk) -> Result<()> {
     let path = history_path(app_data_dir);
     let buf = serde_json::to_vec_pretty(disk).with_context(|| "serialising history")?;
-    std::fs::write(&path, buf)
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    // Audit 2026-04-30 (audit-H4 desktop): atomic-write. AI-bridge per-
+    // contact rolling history is appended on every reply; a torn write
+    // mid-`append_turn` would lose the entire rolling-history blob.
+    crate::atomic_write_bytes(&path, &buf)
 }
 
 /// Append a turn to `contact_label`'s rolling history and persist. Truncates
