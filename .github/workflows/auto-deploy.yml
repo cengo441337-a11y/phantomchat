@@ -23,6 +23,15 @@ concurrency:
   group: auto-deploy
   cancel-in-progress: false
 
+# Audit 2026-04-30 (C-9): explicit least-privilege. The deploy job needs
+# only `contents: read` to download the release artefact via `gh` —
+# every other GITHUB_TOKEN scope (issues/PRs/packages/etc.) is denied
+# by setting the workflow-level allowlist to read-only. The Hostinger
+# SSH deploy uses a separate secret (HOSTINGER_DEPLOY_KEY), not the
+# GITHUB_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   deploy:
     name: ssh-deploy to Hostinger

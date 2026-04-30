@@ -29,6 +29,18 @@ if [[ $# -ne 1 ]]; then
 fi
 
 VERSION="$1"
+
+# Audit 2026-04-30 (H-9): validate VERSION strictly. The string is
+# interpolated into ssh-heredoc bodies, scp paths, manifest JSON, and
+# git-tag commands further down — a malicious commit message containing
+# '"', '$', '`', ';' or backtick would otherwise produce shell-injection
+# on hostinger or arbitrary git/gh execution. Restrict to semver-shape
+# (digit.digit.digit, optional pre-release / build).
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.]+)?$ ]]; then
+    echo "FAIL: VERSION '$VERSION' is not a valid semver (expected 'N.N.N[-pre][+build])'" >&2
+    exit 2
+fi
+
 MSI_NAME="PhantomChat_${VERSION}_x64_en-US.msi"
 NEXUS_REPO_DIR="${NEXUS_REPO_DIR:-D:/phantomchat}"
 HOSTINGER_DOWNLOAD_DIR="${HOSTINGER_DOWNLOAD_DIR:-/var/www/updates/download}"
@@ -56,6 +68,12 @@ tauri signer sign --private-key "\${TAURI_SIGNING_PRIVATE_KEY:-\$HOME/.tauri/pha
                   "/tmp/$MSI_NAME"
 sudo install -m 0644 "/tmp/$MSI_NAME"     "$HOSTINGER_DOWNLOAD_DIR/$MSI_NAME"
 sudo install -m 0644 "/tmp/$MSI_NAME.sig" "$HOSTINGER_DOWNLOAD_DIR/$MSI_NAME.sig"
+# Audit 2026-04-30 (L-11): generate the .sha256 sidecar that the
+# stable-URL symlink (\$MSI_NAME.sha256) and download-page link target.
+# Without this the symlink dangles and the public download page's
+# "verify hash" link 404s.
+sha256sum "/tmp/$MSI_NAME" | awk '{print \$1 "  $MSI_NAME"}' | sudo tee "$HOSTINGER_DOWNLOAD_DIR/$MSI_NAME.sha256" > /dev/null
+sudo chmod 0644 "$HOSTINGER_DOWNLOAD_DIR/$MSI_NAME.sha256"
 rm -f "/tmp/$MSI_NAME" "/tmp/$MSI_NAME.sig"
 
 # Auto-prune: drop every prior PhantomChat_*.msi (+ sidecars) that
@@ -94,22 +112,42 @@ PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 ssh hostinger bash -se <<EOF
 set -euo pipefail
-SIG_CONTENT="\$(cat "$HOSTINGER_DOWNLOAD_DIR/$MSI_NAME.sig")"
+
+# Audit 2026-04-30 (C-8): \`tauri signer sign\` produces a .sig file
+# that contains a header line and embedded newlines. Interpolating the
+# raw blob into a JSON heredoc as a string-literal value would emit
+# syntactically broken JSON whenever the sig has a newline or quote
+# character — Tauri's updater client then silently fails the
+# signature parse. Use \`jq -Rs '.'\` to JSON-encode the entire file
+# (raw-input + slurp = one JSON-string with newlines escaped as \\n,
+# quotes as \\", etc.) and \`--rawfile\` so we don't have to shell-quote
+# the value either.
 TMP_MANIFEST="\$(mktemp)"
-cat > "\$TMP_MANIFEST" <<JSON
-{
-  "version": "$VERSION",
-  "pub_date": "$PUB_DATE",
-  "platforms": {
-    "windows-x86_64": {
-      "url": "https://updates.dc-infosec.de/download/$MSI_NAME",
-      "signature": "\$SIG_CONTENT",
-      "sha256": "$LOCAL_SHA",
-      "size_bytes": $LOCAL_SIZE
+jq -n \\
+  --arg version "$VERSION" \\
+  --arg pub_date "$PUB_DATE" \\
+  --arg url "https://updates.dc-infosec.de/download/$MSI_NAME" \\
+  --rawfile signature "$HOSTINGER_DOWNLOAD_DIR/$MSI_NAME.sig" \\
+  --arg sha256 "$LOCAL_SHA" \\
+  --argjson size_bytes "$LOCAL_SIZE" \\
+  '{
+    version: \$version,
+    pub_date: \$pub_date,
+    platforms: {
+      "windows-x86_64": {
+        url: \$url,
+        signature: \$signature,
+        sha256: \$sha256,
+        size_bytes: \$size_bytes
+      }
     }
-  }
-}
-JSON
+  }' > "\$TMP_MANIFEST"
+
+# Sanity: the just-written manifest must round-trip through jq again.
+# jq exits non-zero on malformed JSON, so a corrupt heredoc fails fast
+# before the install rather than after the file is on the public path.
+jq -e '.version, .platforms."windows-x86_64".signature' "\$TMP_MANIFEST" >/dev/null
+
 sudo install -m 0644 "\$TMP_MANIFEST" "$HOSTINGER_MANIFEST_PATH"
 rm -f "\$TMP_MANIFEST"
 EOF
