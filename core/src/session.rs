@@ -40,7 +40,7 @@ use crate::address::PhantomAddress;
 use crate::envelope::{Envelope, SealedSender, VERSION_HYBRID};
 use crate::keys::{HybridPublicKey, HybridSecretKey, PhantomSigningKey, SpendKey, ViewKey};
 use crate::ratchet::{RatchetError, RatchetState};
-use crate::scanner::scan_envelope_tag_ok;
+use crate::scanner::{scan_envelope_tag_ok, verify_pow};
 
 const SESSION_HKDF_INFO: &[u8] = b"PhantomChat-v1-Session";
 
@@ -73,15 +73,50 @@ pub enum SessionError {
     Serde(#[from] serde_json::Error),
 }
 
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
 /// Collection of Double-Ratchet sessions keyed by contact address.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SessionStore {
     sessions: HashMap<String, RatchetState>,
+
+    /// Audit 2026-04-30 (C-1): receive-side PoW enforcement gate.
+    ///
+    /// `0` (the default and the value persisted to existing sessions on
+    /// disk via the `serde(default)` migration) disables the check —
+    /// every envelope passes the pow filter. Set to a non-zero
+    /// difficulty (e.g. `8`) to make the receive path short-circuit
+    /// envelopes that don't carry a Hashcash nonce ≥ that difficulty,
+    /// short-circuiting the (expensive) ECDH+HKDF+HMAC scan against
+    /// spam / `Envelope::dummy()`-shape traffic.
+    ///
+    /// Senders are not auto-coordinated yet: enabling this requires
+    /// every legitimate sender to use at least the configured
+    /// difficulty. Production deployments should ramp slowly (start at
+    /// `0`, observe telemetry, bump to e.g. `4`, then `8`). The
+    /// `Hashcash::verify` semantics are "≥" so a sender that exceeds
+    /// the configured floor is also accepted.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    min_pow_difficulty: u32,
 }
 
 impl SessionStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Configure the receive-side PoW filter. Default is `0` (disabled).
+    /// Set to `>= 1` to reject inbound envelopes whose Hashcash nonce
+    /// proves less work than the floor.
+    pub fn set_min_pow_difficulty(&mut self, difficulty: u32) {
+        self.min_pow_difficulty = difficulty;
+    }
+
+    /// Currently configured receive-side PoW floor. `0` means disabled.
+    pub fn min_pow_difficulty(&self) -> u32 {
+        self.min_pow_difficulty
     }
 
     // ── Persistence ────────────────────────────────────────────────────────
@@ -263,6 +298,18 @@ impl SessionStore {
         spend_key: &SpendKey,
         hybrid_secret: Option<&HybridSecretKey>,
     ) -> Result<Option<Vec<u8>>, SessionError> {
+        // Phase 0 — Hashcash filter (audit-C1). Skipped when
+        // `min_pow_difficulty == 0` (the default + every test case).
+        // When enabled, runs BEFORE the tag-check because PoW verify is
+        // a single SHA-256 compute (~µs) whereas the tag-check below is
+        // a full ECDH (~50 µs); pre-filtering spam before the ECDH
+        // saves CPU on a public relay's worth of garbage envelopes.
+        if self.min_pow_difficulty > 0
+            && !verify_pow(envelope, self.min_pow_difficulty)
+        {
+            return Ok(None);
+        }
+
         // Phase 1 — view-key tag check. Cheap, short-circuits on someone
         // else's envelope (the majority of traffic on a public relay).
         if !scan_envelope_tag_ok(envelope, view_key) {
@@ -333,6 +380,14 @@ impl SessionStore {
         spend_key: &SpendKey,
         hybrid_secret: Option<&HybridSecretKey>,
     ) -> Result<Option<ReceivedMessage>, SessionError> {
+        // Phase 0 — Hashcash filter (audit-C1). Same opt-in semantics as
+        // `receive_inner`; skipped when `min_pow_difficulty == 0`.
+        if self.min_pow_difficulty > 0
+            && !verify_pow(envelope, self.min_pow_difficulty)
+        {
+            return Ok(None);
+        }
+
         if !scan_envelope_tag_ok(envelope, view_key) {
             return Ok(None);
         }
