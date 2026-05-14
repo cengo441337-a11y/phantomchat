@@ -5,6 +5,67 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [audit-session-cap-and-dead-code] — 2026-05-14 — Audit follow-up: session-map DoS cap + mobile dead-crypto removal
+
+Seventh audit-driven bundle. Closes core **H-7** (unbounded session map
+DoS) and mobile **M-7** (deprecated `CryptoService` ChaCha20-Poly1305
+methods that did not match the production XChaCha20-Poly1305 wire
+format).
+
+### Core (Rust)
+- **`MAX_SESSIONS = 4096`** cap on the in-memory `SessionStore` map.
+  Without it an attacker could spray envelopes whose
+  `peer_ratchet_pub` first-8-bytes were a fresh random per send and
+  pin the receiver's RAM with `RatchetState` entries for peers it has
+  no actual conversations with. Inbound envelopes that would create
+  session #4097 are now dropped silently — same on-the-wire surface
+  as a non-mine envelope, so the attacker can't even tell their fresh
+  pubkey was rejected. Cap is large enough that a power-user with
+  200 contacts × 4 DH-ratchet rotations × 5 long-lived devices = 4000
+  sessions never hits it during legitimate use; the user can manually
+  prune via the desktop / CLI "rotate identity" path.
+- **`SessionStore::session_count()`** new accessor — used by tests
+  and the desktop "rotate identity" UI to surface "you are tracking
+  N peers".
+- **2 new integration tests** in `core/tests/session_tests.rs`:
+  `session_count_tracks_unique_peers` (fast smoke) and
+  `session_cap_drops_new_peer_when_full` (gated behind `#[ignore]`
+  because it fills the map to 4096 in debug — run with
+  `cargo test --ignored`). The slow test verifies both that the
+  4097th fresh peer is dropped AND that peers already in the map
+  keep round-tripping (cache-hit path unaffected).
+
+### Mobile (Flutter)
+- **Deleted `CryptoService.encrypt` / `decrypt` / `ecdh`** plus the
+  static `_chacha = Chacha20.poly1305Aead()` field they shared. Those
+  methods used a 96-bit-nonce ChaCha20 that did not match the Rust
+  core's XChaCha20-Poly1305 (192-bit nonce) wire format, so any
+  envelope produced or consumed via that Dart path was
+  wire-incompatible with itself. Grep confirmed no remaining caller
+  used either method — they were dead ammunition that would produce
+  subtly broken envelopes if anything reached for them.
+- **Kept** `generateKeyPair` and `generateSigningSeedHex` (used by
+  the onboarding boot path before the FRB bridge is ready) plus the
+  `_hex` helper; removed the now-orphan `_unhex` helper and unused
+  `dart:convert` import.
+- **Doc comment updated** to spell out exactly which audit finding
+  this addresses so future readers don't re-introduce dead Dart
+  crypto paths.
+
+### Still deferred (separate PRs)
+- Core C-2 (AEAD nonce key/counter binding — crypto-design)
+- Core H-3 (ratchet skipped-keys buffer)
+- Desktop H-3 (bootstrap.json signature scheme)
+- Mobile M-2 (V2/V3 contact-store unification)
+- Periphery C-7 (sign-windows-v2 → EV/HW-token procurement)
+- Periphery M-10 (action commit-SHA pinning, bundled with future
+  major-bump window)
+- `kManifestPubkeyB64` enablement (gated on release-eng key generation
+  + canonical-JSON-without-signature signing in
+  `publish-android-update-manifest.sh`)
+
+---
+
 ## [audit-desktop-atomic-writes] — 2026-04-30 — Audit follow-up: atomic-write sweep across save_*
 
 Sixth audit-driven bundle. Closes desktop audit-H4 (~13 `save_*` paths

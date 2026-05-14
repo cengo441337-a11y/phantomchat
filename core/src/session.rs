@@ -44,6 +44,26 @@ use crate::scanner::{scan_envelope_tag_ok, verify_pow};
 
 const SESSION_HKDF_INFO: &[u8] = b"PhantomChat-v1-Session";
 
+/// Audit 2026-04-30 (audit-H7 core): cap the in-memory session map.
+///
+/// Without this cap, an attacker can publish envelopes whose
+/// `ratchet_header[0..32]` carries a fresh random `peer_ratchet_pub` for
+/// every send. Each one walks `receive_inner`'s decrypt-against-every-
+/// session loop (~50 µs ECDH per existing session, fine), fails to
+/// decrypt against any, then **creates a new session entry** keyed by
+/// the attacker-chosen first-8-bytes of that pub. Repeat 10⁶ times to
+/// pin the receiver's RAM at ~1 GiB of unbounded `RatchetState`s,
+/// despite the receiver having no actual conversations with that peer.
+///
+/// The cap is large enough that no realistic user — a power-user with
+/// 200 contacts × 4 DH-ratchet rotations × 5 long-lived devices = 4000
+/// sessions — will ever hit it during legitimate use, but tight enough
+/// that the unbounded-DoS class is closed. Inbound envelopes that would
+/// have created session #4097 are silently dropped (same surface as a
+/// non-mine envelope) until the user manually prunes via the desktop /
+/// CLI "rotate identity" path.
+pub const MAX_SESSIONS: usize = 4096;
+
 /// Outcome of a successful [`SessionStore::receive_full`] call — the
 /// plaintext plus, if the sender opted into Sealed Sender, verifying
 /// signature material.
@@ -117,6 +137,13 @@ impl SessionStore {
     /// Currently configured receive-side PoW floor. `0` means disabled.
     pub fn min_pow_difficulty(&self) -> u32 {
         self.min_pow_difficulty
+    }
+
+    /// Number of in-memory sessions. Mostly useful for the desktop
+    /// "rotate identity" UI to surface "you are tracking N peers" and
+    /// for the unit tests that exercise [`MAX_SESSIONS`].
+    pub fn session_count(&self) -> usize {
+        self.sessions.len()
     }
 
     // ── Persistence ────────────────────────────────────────────────────────
@@ -359,6 +386,16 @@ impl SessionStore {
         let bootstrap = initial_shared_from_spend_pub(&spend_key.public);
 
         let session_key = format!("peer:{}", hex::encode(&peer_ratchet_bytes[..8]));
+        // Audit 2026-04-30 (audit-H7 core): cap session-map growth before
+        // the entry-or-insert. If we'd be inserting a NEW key past
+        // `MAX_SESSIONS`, drop the envelope silently — same on-the-wire
+        // surface as a non-mine envelope, so an attacker can't even tell
+        // their fresh `peer_ratchet_pub` was rejected.
+        if self.sessions.len() >= MAX_SESSIONS
+            && !self.sessions.contains_key(&session_key)
+        {
+            return Ok(None);
+        }
         let session = self.sessions.entry(session_key).or_insert_with(|| {
             RatchetState::initialize_as_receiver(bootstrap, &spend_key.secret, peer_ratchet_pub)
         });
@@ -433,6 +470,14 @@ impl SessionStore {
                     let peer_ratchet_pub = x25519_dalek::PublicKey::from(peer_ratchet_bytes);
                     let bootstrap = initial_shared_from_spend_pub(&spend_key.public);
                     let session_key = format!("peer:{}", hex::encode(&peer_ratchet_bytes[..8]));
+                    // Audit-H7 core: same cap as `receive_inner`; drop
+                    // when the map is full and we'd be inserting a new
+                    // attacker-shaped key.
+                    if self.sessions.len() >= MAX_SESSIONS
+                        && !self.sessions.contains_key(&session_key)
+                    {
+                        return Ok(None);
+                    }
                     let session = self.sessions.entry(session_key).or_insert_with(|| {
                         RatchetState::initialize_as_receiver(
                             bootstrap,

@@ -203,6 +203,69 @@ fn session_store_persists_to_disk() {
     let _ = std::fs::remove_file(tmp);
 }
 
+// Audit 2026-04-30 (H-7): the in-memory session map is bounded so a
+// remote attacker can't pin our RAM by spraying envelopes with fresh
+// `peer_ratchet_pub` values. Cap is `MAX_SESSIONS = 4096`; new peers
+// beyond that are dropped silently (same wire surface as non-mine),
+// while peers already in the map keep round-tripping.
+
+#[test]
+fn session_count_tracks_unique_peers() {
+    let bob = new_identity();
+    let mut bob_store = SessionStore::new();
+    assert_eq!(bob_store.session_count(), 0);
+
+    for _ in 0..3 {
+        let mut alice_store = SessionStore::new();
+        let env = alice_store.send(&bob.addr, b"hi", 0);
+        bob_store
+            .receive(&env, &bob.view, &bob.spend)
+            .unwrap()
+            .unwrap();
+    }
+    assert_eq!(bob_store.session_count(), 3);
+}
+
+#[test]
+#[ignore = "slow: fills the map to MAX_SESSIONS (4096 ECDH ops in debug). Run with --ignored."]
+fn session_cap_drops_new_peer_when_full() {
+    use phantomchat_core::session::MAX_SESSIONS;
+
+    let bob = new_identity();
+    let mut bob_store = SessionStore::new();
+    let mut first_alice_store: Option<SessionStore> = None;
+
+    for i in 0..MAX_SESSIONS {
+        let mut alice_store = SessionStore::new();
+        let env = alice_store.send(&bob.addr, b"fill", 0);
+        bob_store
+            .receive(&env, &bob.view, &bob.spend)
+            .unwrap()
+            .unwrap();
+        if i == 0 {
+            first_alice_store = Some(alice_store);
+        }
+    }
+    assert_eq!(bob_store.session_count(), MAX_SESSIONS);
+
+    let mut eve_store = SessionStore::new();
+    let env = eve_store.send(&bob.addr, b"dos", 0);
+    let out = bob_store.receive(&env, &bob.view, &bob.spend).unwrap();
+    assert!(
+        out.is_none(),
+        "fresh peer beyond MAX_SESSIONS must be silently dropped"
+    );
+    assert_eq!(bob_store.session_count(), MAX_SESSIONS);
+
+    let mut alice0_store = first_alice_store.unwrap();
+    let env = alice0_store.send(&bob.addr, b"still-here", 0);
+    let plain = bob_store
+        .receive(&env, &bob.view, &bob.spend)
+        .unwrap()
+        .expect("existing peer must still round-trip");
+    assert_eq!(plain, b"still-here");
+}
+
 /// Tiny per-run disambiguator so parallel test processes don't clash on the
 /// same tmp filename. Avoids pulling in the `uuid` crate just for a test.
 fn uuid_ish() -> String {
