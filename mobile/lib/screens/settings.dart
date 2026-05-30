@@ -158,6 +158,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
             : ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
+                  // App-update first so "Nach Updates suchen" is the most
+                  // prominent action in Settings — users reported they
+                  // couldn't find it when it sat further down.
+                  _sectionHeader('APP-UPDATE'),
+                  const SizedBox(height: 12),
+                  _updateCard(),
+                  const SizedBox(height: 32),
+                  _sectionHeader('VERBINDUNG'),
+                  const SizedBox(height: 12),
+                  _relayCard(),
+                  const SizedBox(height: 32),
                   _sectionHeader('SICHERHEIT'),
                   const SizedBox(height: 12),
                   _bioOnLaunchCard(),
@@ -168,14 +179,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _batteryOptCard(),
                     const SizedBox(height: 32),
                   ],
-                  _sectionHeader('VERBINDUNG'),
-                  const SizedBox(height: 12),
-                  _relayCard(),
-                  const SizedBox(height: 32),
-                  _sectionHeader('APP-UPDATE'),
-                  const SizedBox(height: 12),
-                  _updateCard(),
-                  const SizedBox(height: 32),
                   _sectionHeader('DIAGNOSE'),
                   const SizedBox(height: 12),
                   _diagnosticsCard(),
