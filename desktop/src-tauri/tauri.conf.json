@@ -57,7 +57,7 @@
       "endpoints": [
         "https://updates.dc-infosec.de/phantomchat/{{target}}/{{current_version}}"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU4NDIwNjEyRUZFMDgwMUYKUldRZmdPRHZFZ1pDNkZNMjA3Wmo3Z3hucXhSSHJEWCtqZFRHQkloRTRRRDJ6REU4VlFtUkYrMjkK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMyRjkyREVBODg5NUEzMjYKUldRbW81V0k2aTM1d2dGMmRxUlFvQ01OeHVzTDUyNjFkeU5kY3RtWkg2WnIrdWs3YTE1YXg1MDIK",
       "windows": {
         "installMode": "passive"
       }
