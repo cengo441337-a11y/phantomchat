@@ -48,7 +48,7 @@ HOSTINGER_MANIFEST_PATH="${HOSTINGER_MANIFEST_PATH:-/var/www/updates/phantomchat
 LOCAL_TMP="${LOCAL_TMP:-/tmp/$MSI_NAME}"
 
 echo "[1/6] Building MSI on nexus (cargo tauri build, default features = stt)…"
-ssh nexus "cd '$NEXUS_REPO_DIR' && cargo tauri build -- --no-default-features --features custom-protocol"
+ssh nexus "cd '$NEXUS_REPO_DIR' && cmd /c "set RUSTFLAGS=-C embed-bitcode=yes && cargo tauri build -- --no-default-features --features custom-protocol""
 
 NEXUS_MSI_PATH="$NEXUS_REPO_DIR/target/release/bundle/msi/$MSI_NAME"
 
