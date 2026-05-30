@@ -28,7 +28,8 @@ class ArgosWalletScreen extends StatefulWidget {
 
 enum _Stage { loading, none, createPin, backupReveal, restore, locked, main }
 
-class _ArgosWalletScreenState extends State<ArgosWalletScreen> {
+class _ArgosWalletScreenState extends State<ArgosWalletScreen>
+    with WidgetsBindingObserver {
   final _svc = ArgosWalletService.instance;
   _Stage _stage = _Stage.loading;
   String? _justRevealedMnemonic;
@@ -43,7 +44,29 @@ class _ArgosWalletScreenState extends State<ArgosWalletScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _bootstrap();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Auto-lock the wallet when the app goes to background. Defense
+    // against a thief who picks up an unlocked-but-screen-off phone.
+    // Skip during the mnemonic-reveal flow so the user can switch to
+    // a notes app to write the words down without losing the screen.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      if (_stage == _Stage.main && _svc.isUnlocked) {
+        unawaited(_svc.lock());
+        if (mounted) setState(() => _stage = _Stage.locked);
+      }
+    }
   }
 
   Future<void> _bootstrap() async {
@@ -790,9 +813,11 @@ class _UnlockPanel extends StatefulWidget {
 }
 
 class _UnlockPanelState extends State<_UnlockPanel> {
+  static const _maxAttempts = 10;
   final _pin = TextEditingController();
   String? _error;
   bool _busy = false;
+  int _attempts = 0;
 
   @override
   void dispose() {
@@ -809,12 +834,26 @@ class _UnlockPanelState extends State<_UnlockPanel> {
     });
     try {
       await ArgosWalletService.instance.unlock(p);
+      _attempts = 0;
       widget.onUnlocked();
     } catch (e) {
       if (!mounted) return;
+      _attempts += 1;
+      _pin.clear();
+      if (_attempts >= _maxAttempts) {
+        // Panic-wipe: defense against an attacker brute-forcing the PIN
+        // on a stolen device. The encrypted blob is destroyed; only the
+        // recovery phrase can rebuild the wallet.
+        await ArgosWalletService.instance.wipe();
+        widget.onWipe();
+        return;
+      }
+      final remaining = _maxAttempts - _attempts;
       setState(() {
         _busy = false;
-        _error = '$e';
+        _error = (remaining <= 3)
+            ? 'Falsche PIN. Noch $remaining Versuche — danach wird die Wallet gelöscht.'
+            : 'Falsche PIN. $remaining Versuche übrig.';
       });
     }
   }
