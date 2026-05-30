@@ -244,6 +244,34 @@ fn counter_too_far_ahead_is_capped_at_max_skip() {
 }
 
 #[test]
+fn state_with_skipped_keys_round_trips_through_json() {
+    // Audit 2026-05-30 (R-4): a ratchet state that accumulated skipped
+    // message keys must still serialize to JSON. The skipped-keys cache is
+    // keyed by a ([u8;32], u32) tuple; serde_json rejects non-string map
+    // keys, so the state needs the flat-list codec to persist. Before the
+    // fix the CLI logged "session store serde: key must be a string" and
+    // dropped the session after any out-of-order receive.
+    let (mut alice, mut bob, _) = handshake();
+
+    // Alice sends 1,2,3; Bob receives 3 first → 1 and 2 become skipped keys.
+    let (_h1, _c1) = alice.encrypt(b"s-1");
+    let (_h2, _c2) = alice.encrypt(b"s-2");
+    let (h3, c3) = alice.encrypt(b"s-3");
+    assert_eq!(bob.decrypt(&h3, &c3).unwrap(), b"s-3");
+
+    // Bob's state now holds 2 skipped keys. Serialize → deserialize → it
+    // must survive AND still decrypt the back-fill envelopes.
+    let json = serde_json::to_string(&bob).expect("state with skipped keys must serialize to JSON");
+    assert!(json.contains("skipped"), "skipped keys should be present in JSON");
+    let mut restored: RatchetState = serde_json::from_str(&json).unwrap();
+    restored.restore_secret();
+
+    // The restored state still has the cached keys: re-deliver msg 1.
+    assert_eq!(restored.decrypt(&_h1, &_c1).unwrap(), b"s-1");
+    assert_eq!(restored.decrypt(&_h2, &_c2).unwrap(), b"s-2");
+}
+
+#[test]
 fn dh_ratchet_step_commits_only_when_first_new_chain_message_validates() {
     // Alice and Bob have bootstrapped. Bob is about to ratchet to a new
     // chain on Alice's next send (which happens once Alice receives a Bob

@@ -129,6 +129,32 @@ fn kdf_ck(ck: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
 /// Cache key for [`RatchetState::skipped_keys`]: `(peer_ratchet_pub, counter)`.
 type SkippedKeyId = ([u8; 32], u32);
 
+/// Custom serde for [`RatchetState::skipped_keys`]. `serde_json` only allows
+/// string map keys, but the cache is keyed by a `([u8; 32], u32)` tuple, so
+/// we round-trip it as a flat `Vec<(key, value)>` list instead of a JSON
+/// object. Bincode (used by the group store) wouldn't need this, but the
+/// session store is JSON, so the codec lives here.
+mod skipped_kv {
+    use super::SkippedKeyId;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::collections::HashMap;
+
+    pub fn serialize<S: Serializer>(
+        m: &HashMap<SkippedKeyId, [u8; 32]>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        let v: Vec<(SkippedKeyId, [u8; 32])> = m.iter().map(|(k, val)| (*k, *val)).collect();
+        v.serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<HashMap<SkippedKeyId, [u8; 32]>, D::Error> {
+        let v: Vec<(SkippedKeyId, [u8; 32])> = Vec::deserialize(d)?;
+        Ok(v.into_iter().collect())
+    }
+}
+
 /// Zustand einer Double‑Ratchet‑Session.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RatchetState {
@@ -156,7 +182,14 @@ pub struct RatchetState {
     /// [`RatchetState::skipped_order`]. Audit 2026-05-30 (R-1/R-2): without
     /// this cache, a single dropped envelope between two consecutive sends
     /// permanently broke the chain.
-    #[serde(default)]
+    ///
+    /// Serialized via [`skipped_kv`] as a flat `[(key, value)]` list:
+    /// `serde_json` rejects map keys that aren't strings, and
+    /// [`SkippedKeyId`] is a `([u8; 32], u32)` tuple. Without the custom
+    /// codec a session that accumulated any skipped keys could not persist
+    /// to disk (audit 2026-05-30 R-4: "session store serde: key must be a
+    /// string" after an out-of-order receive).
+    #[serde(default, with = "skipped_kv")]
     skipped_keys: HashMap<SkippedKeyId, [u8; 32]>,
 
     /// Insertion order of [`skipped_keys`]. Drives FIFO eviction once the
