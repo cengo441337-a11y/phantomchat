@@ -14,6 +14,7 @@ import 'chat.dart';
 import 'qr_scan.dart';
 import 'settings.dart';
 import 'channels.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -37,6 +38,11 @@ class _HomeScreenState extends State<HomeScreen> {
   UpdateInfo? _update;
   bool _checkingUpdate = false;
 
+  /// Installed semver, shown next to "SECURE · ONLINE" in the header so the
+  /// user can always confirm which build they are running without diving
+  /// into Settings → ÜBER.
+  String _appVersion = '';
+
   @override
   void initState() {
     super.initState();
@@ -56,8 +62,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// Boot-time background update probe — drives the badge on the header's
   /// update icon without showing any UI. Failure → no badge (the manual
-  /// check via the icon still works).
+  /// check via the icon still works). Also pulls the installed semver so
+  /// the header subtitle can show it next to "SECURE · ONLINE".
   Future<void> _silentUpdateCheck() async {
+    try {
+      final pkg = await PackageInfo.fromPlatform();
+      if (mounted) setState(() => _appVersion = pkg.version);
+    } catch (_) {/* silent */}
     try {
       final info = await UpdateService.checkForUpdate();
       if (!mounted) return;
@@ -456,7 +467,13 @@ class _HomeScreenState extends State<HomeScreen> {
                     const SizedBox(width: 5),
                     Flexible(
                       child: Text(
-                        'SECURE · ONLINE',
+                        // Persistent version label so users can always see
+                        // which build they are running without digging into
+                        // Settings. Cyan separator + grey version keeps the
+                        // green "online" pill the visual anchor.
+                        _appVersion.isEmpty
+                            ? 'SECURE · ONLINE'
+                            : 'SECURE · ONLINE · v$_appVersion',
                         style: GoogleFonts.spaceMono(fontSize: 9, color: kGreen, letterSpacing: 1),
                         overflow: TextOverflow.fade,
                         softWrap: false,
