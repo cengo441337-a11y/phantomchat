@@ -174,7 +174,7 @@ jobs:
 
       - name: cargo tauri build (no signing, no STT)
         working-directory: desktop
-        run: cargo tauri build --no-default-features --features custom-protocol
+        run: cargo tauri build -- --no-default-features --features custom-protocol
 
       # Upload the MSI + setup.exe so a manual release can grab the
       # CI-built artefacts (nexus rustc 1.95 has a windows-sys stack
