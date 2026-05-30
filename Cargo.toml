@@ -12,5 +12,12 @@ resolver = "2"
 # codegen-units so no single rustc invocation needs the ~3 GB peak that
 # trips OOM/STATUS_STACK_BUFFER_OVERRUN on nexus. opt-level=3 stays.
 [profile.release]
-codegen-units = 64
+# Audit 2026-05-30 (R-7b): the desktop release was tripping
+# STATUS_STACK_BUFFER_OVERRUN inside rustc on the nexus Windows host.
+# Lower opt-level + single codegen-unit shrinks the per-crate stack
+# pressure enough that the build completes.
+opt-level = 2
+codegen-units = 1
 lto = false
+debug = false
+incremental = false
