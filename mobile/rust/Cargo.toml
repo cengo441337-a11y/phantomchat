@@ -59,3 +59,9 @@ solana-sdk = "2.0"
 solana-client = "2.0"
 spl-associated-token-account = { version = "4", features = ["no-entrypoint"] }
 
+
+# Force openssl-sys to build OpenSSL from source (vendored) so the Android
+# cross-compile does not need a system-libssl. solana-secp256r1-program
+# transitively pulls openssl; without vendored we hit OPENSSL_DIR not set.
+openssl = { version = "0.10", features = ["vendored"] }
+
