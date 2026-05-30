@@ -172,6 +172,15 @@ jobs:
         working-directory: desktop
         run: npm ci
 
+      - name: Strip signCommand from tauri.conf.json (CI has no pilot cert)
+        shell: pwsh
+        run: |
+          $f = 'desktop/src-tauri/tauri.conf.json'
+          $j = Get-Content $f -Raw | ConvertFrom-Json
+          if ($j.bundle.windows.signCommand) { $j.bundle.windows.PSObject.Properties.Remove('signCommand') }
+          $j | ConvertTo-Json -Depth 64 | Set-Content $f -Encoding utf8
+          Write-Output ('signCommand removed from ' + $f)
+
       - name: cargo tauri build (no signing, no STT)
         working-directory: desktop
         run: cargo tauri build -- --no-default-features --features custom-protocol
