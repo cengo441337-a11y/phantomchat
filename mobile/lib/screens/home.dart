@@ -412,7 +412,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildHeader() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      // Tighter horizontal padding so all five icons + title fit on
+      // narrower phones without the title wrapping to two lines.
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
       child: Row(
         children: [
           Container(
@@ -424,7 +426,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             child: const Icon(Icons.shield_outlined, color: kCyan, size: 18),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           // Wrap the title block in Expanded so on narrower devices it
           // shrinks instead of pushing the trailing icon row off-screen.
           // Without this the header overflows ~20 px on a 392 dp viewport
@@ -465,41 +467,46 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-          if (_contacts.isNotEmpty)
+          // NODES badge only on screens wide enough to absorb it without
+          // pushing the title to two lines (post-v1.1.9, with the update
+          // icon added we have 4 trailing icons; 360 dp class phones can't
+          // also fit the badge).
+          if (_contacts.isNotEmpty && MediaQuery.of(context).size.width > 400) ...[
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
               decoration: BoxDecoration(
                 border: Border.all(color: kGrayText.withValues(alpha: 0.3)),
                 color: kBgCard,
               ),
-              child: Text('${_contacts.length} NODES',
-                style: GoogleFonts.spaceMono(fontSize: 9, color: kGrayText, letterSpacing: 1)),
+              child: Text('${_contacts.length}',
+                style: GoogleFonts.spaceMono(fontSize: 10, color: kGrayText, letterSpacing: 1)),
             ),
-          const SizedBox(width: 8),
+            const SizedBox(width: 4),
+          ],
           GestureDetector(
             onTap: _openChannels,
             child: Container(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
                 border: Border.all(color: kCyan.withValues(alpha: 0.4)),
                 color: kBgCard,
               ),
-              child: const Icon(Icons.groups_outlined, color: kCyan, size: 20),
+              child: const Icon(Icons.groups_outlined, color: kCyan, size: 18),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 4),
           GestureDetector(
             onTap: _showMyId,
             child: Container(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
                 border: Border.all(color: kGrayText.withValues(alpha: 0.3)),
                 color: kBgCard,
               ),
-              child: const Icon(Icons.fingerprint, color: kGrayText, size: 20),
+              child: const Icon(Icons.fingerprint, color: kGrayText, size: 18),
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 4),
           // Update icon — green/badged when an update is pending so users
           // can't miss it. Tapping with no update available runs a fresh
           // manual check + SnackBar feedback. Reported regression: when
@@ -511,7 +518,7 @@ class _HomeScreenState extends State<HomeScreen> {
               clipBehavior: Clip.none,
               children: [
                 Container(
-                  padding: const EdgeInsets.all(8),
+                  padding: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
                     border: Border.all(
                       color: _update != null
@@ -528,13 +535,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   child: _checkingUpdate
                       ? const SizedBox(
-                          width: 20, height: 20,
+                          width: 18, height: 18,
                           child: CircularProgressIndicator(color: kGreen, strokeWidth: 1.5),
                         )
                       : Icon(
                           Icons.system_update_alt,
                           color: _update != null ? kGreen : kGrayText,
-                          size: 20,
+                          size: 18,
                         ),
                 ),
                 if (_update != null)
@@ -551,7 +558,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 4),
           GestureDetector(
             onTap: () {
               Navigator.of(context).push(
@@ -559,12 +566,12 @@ class _HomeScreenState extends State<HomeScreen> {
               );
             },
             child: Container(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
                 border: Border.all(color: kGrayText.withValues(alpha: 0.3)),
                 color: kBgCard,
               ),
-              child: const Icon(Icons.settings_outlined, color: kGrayText, size: 20),
+              child: const Icon(Icons.settings_outlined, color: kGrayText, size: 18),
             ),
           ),
         ],
