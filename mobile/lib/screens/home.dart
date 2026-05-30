@@ -7,7 +7,9 @@ import '../services/storage_service.dart';
 import '../theme.dart';
 import '../widgets/glitch_text.dart';
 import '../widgets/cyber_card.dart';
+import '../services/update_service.dart';
 import '../widgets/update_banner.dart';
+import '../widgets/update_dialog.dart';
 import 'chat.dart';
 import 'qr_scan.dart';
 import 'settings.dart';
@@ -26,10 +28,20 @@ class _HomeScreenState extends State<HomeScreen> {
   PhantomIdentity? _identity;
   bool _loading = true;
 
+  /// Update available (set by the auto-check on boot). Drives the badge on
+  /// the header's update icon: tapping the icon either opens the install
+  /// dialog (when `_update != null`) or runs a manual check and shows a
+  /// SnackBar (when null). Users repeatedly reported they couldn't find
+  /// the update button when it lived in Settings — putting it directly
+  /// in the header makes it impossible to miss.
+  UpdateInfo? _update;
+  bool _checkingUpdate = false;
+
   @override
   void initState() {
     super.initState();
     _load();
+    _silentUpdateCheck();
   }
 
   Future<void> _load() async {
@@ -40,6 +52,64 @@ class _HomeScreenState extends State<HomeScreen> {
       _contacts = contacts;
       _loading = false;
     });
+  }
+
+  /// Boot-time background update probe — drives the badge on the header's
+  /// update icon without showing any UI. Failure → no badge (the manual
+  /// check via the icon still works).
+  Future<void> _silentUpdateCheck() async {
+    try {
+      final info = await UpdateService.checkForUpdate();
+      if (!mounted) return;
+      setState(() => _update = info);
+    } catch (_) {
+      /* silent */
+    }
+  }
+
+  /// Header update-icon handler: if an update is known, open the install
+  /// dialog directly; otherwise run a fresh manual check with visible
+  /// feedback so the user knows the button actually did something.
+  Future<void> _onUpdateTap() async {
+    if (_update != null) {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => UpdateDialog(info: _update!),
+      );
+      return;
+    }
+    if (_checkingUpdate) return;
+    setState(() => _checkingUpdate = true);
+    UpdateInfo? info;
+    try {
+      info = await UpdateService.checkForUpdate();
+    } catch (_) {
+      info = null;
+    }
+    if (!mounted) return;
+    setState(() {
+      _checkingUpdate = false;
+      _update = info;
+    });
+    if (info != null) {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => UpdateDialog(info: info!),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Du bist auf der neuesten Version.',
+            style: GoogleFonts.spaceMono(fontSize: 12),
+          ),
+          backgroundColor: kBgCard,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   void _showAddContact() {
@@ -292,10 +362,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // System UI insets — the gesture/navigation bar at the bottom + the
+    // status bar at the top. SafeArea(bottom: false) so we can extend the
+    // grid all the way down (pretty), then add the inset back as bottom
+    // padding inside Expanded so contacts and the FAB are never hidden by
+    // the gesture bar. Reported regression: bottom nav bar was overlapping
+    // UI on real phones.
+    final bottomInset = MediaQuery.of(context).viewPadding.bottom;
     return Scaffold(
       backgroundColor: kBg,
       body: GridBackground(
         child: SafeArea(
+          bottom: false,
           // Wave 11G — wrap the home body in `UpdateBanner` so a yellow
           // "update available" strip shows above the contact list when
           // a newer APK has been published. The banner is invisible
@@ -306,18 +384,29 @@ class _HomeScreenState extends State<HomeScreen> {
                 _buildHeader(),
                 Container(height: 1, color: kCyan.withValues(alpha: 0.12)),
                 Expanded(
-                  child: _loading
-                      ? const Center(child: CircularProgressIndicator(color: kCyan, strokeWidth: 1.5))
-                      : _contacts.isEmpty
-                          ? _buildEmpty()
-                          : _buildList(),
+                  child: Padding(
+                    // Reserve room for the gesture bar PLUS the FAB so the
+                    // last contact entry can be scrolled to without being
+                    // hidden behind it.
+                    padding: EdgeInsets.only(bottom: bottomInset + 80),
+                    child: _loading
+                        ? const Center(child: CircularProgressIndicator(color: kCyan, strokeWidth: 1.5))
+                        : _contacts.isEmpty
+                            ? _buildEmpty()
+                            : _buildList(),
+                  ),
                 ),
               ],
             ),
           ),
         ),
       ),
-      floatingActionButton: _CyberFab(onTap: _showAddContact),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      floatingActionButton: Padding(
+        // Lift the FAB above the gesture bar.
+        padding: EdgeInsets.only(bottom: bottomInset),
+        child: _CyberFab(onTap: _showAddContact),
+      ),
     );
   }
 
@@ -408,6 +497,58 @@ class _HomeScreenState extends State<HomeScreen> {
                 color: kBgCard,
               ),
               child: const Icon(Icons.fingerprint, color: kGrayText, size: 20),
+            ),
+          ),
+          const SizedBox(width: 6),
+          // Update icon — green/badged when an update is pending so users
+          // can't miss it. Tapping with no update available runs a fresh
+          // manual check + SnackBar feedback. Reported regression: when
+          // the only update entry point lived in Settings, users couldn't
+          // find it; this header slot is the fix.
+          GestureDetector(
+            onTap: _onUpdateTap,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: _update != null
+                          ? kGreen
+                          : kGrayText.withValues(alpha: 0.3),
+                      width: _update != null ? 1.5 : 1,
+                    ),
+                    color: _update != null
+                        ? kGreen.withValues(alpha: 0.08)
+                        : kBgCard,
+                    boxShadow: _update != null
+                        ? [BoxShadow(color: kGreen.withValues(alpha: 0.5), blurRadius: 8)]
+                        : null,
+                  ),
+                  child: _checkingUpdate
+                      ? const SizedBox(
+                          width: 20, height: 20,
+                          child: CircularProgressIndicator(color: kGreen, strokeWidth: 1.5),
+                        )
+                      : Icon(
+                          Icons.system_update_alt,
+                          color: _update != null ? kGreen : kGrayText,
+                          size: 20,
+                        ),
+                ),
+                if (_update != null)
+                  Positioned(
+                    right: -3, top: -3,
+                    child: Container(
+                      width: 10, height: 10,
+                      decoration: const BoxDecoration(
+                        color: kGreen, shape: BoxShape.circle,
+                        boxShadow: [BoxShadow(color: kGreen, blurRadius: 6)],
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
           const SizedBox(width: 6),

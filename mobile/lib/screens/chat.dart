@@ -535,10 +535,16 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // SafeArea(bottom: false) + an explicit bottom padding on the input
+    // bar so the Android gesture/nav bar can't cover the send button or
+    // typed text. Reported regression: bottom nav bar overlapping UI.
+    final bottomInset = MediaQuery.of(context).viewPadding.bottom;
     return Scaffold(
       backgroundColor: kBg,
+      resizeToAvoidBottomInset: true,
       body: GridBackground(
         child: SafeArea(
+          bottom: false,
           child: Column(
             children: [
               _buildAppBar(),
@@ -546,7 +552,10 @@ class _ChatScreenState extends State<ChatScreen> {
               Expanded(
                 child: _messages.isEmpty ? _buildEmptyChat() : _buildMessages(),
               ),
-              _buildInput(),
+              Padding(
+                padding: EdgeInsets.only(bottom: bottomInset),
+                child: _buildInput(),
+              ),
             ],
           ),
         ),
