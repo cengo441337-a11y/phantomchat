@@ -12,6 +12,7 @@ import '../widgets/cyber_card.dart';
 import '../widgets/update_dialog.dart';
 import 'diagnostics.dart';
 import 'relay_manager.dart';
+import 'wallet_screen.dart';
 
 /// PhantomChat settings panel — Wave 8a.
 ///
@@ -169,6 +170,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _sectionHeader('APP-UPDATE'),
                   const SizedBox(height: 12),
                   _updateCard(),
+                  const SizedBox(height: 32),
+                  _sectionHeader('WALLET · ARGOS'),
+                  const SizedBox(height: 12),
+                  _walletCard(),
                   const SizedBox(height: 32),
                   _sectionHeader('VERBINDUNG'),
                   const SizedBox(height: 12),
@@ -435,6 +440,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// — the LLM runs on the user's desktop via `phantomchat ai-bridge`
   /// (ClaudeCli / Ollama / OpenAI / Anthropic API). The card explains the
   /// setup and links to the project docs so curious users don't get lost.
+Widget _walletCard() {    return GestureDetector(      onTap: () => Navigator.of(context).push(        MaterialPageRoute(builder: (_) => const ArgosWalletScreen()),      ).then((_) => setState(() {})),      child: CyberCard(        borderColor: kCyan,        padding: const EdgeInsets.all(16),        child: Row(          children: [            const Icon(Icons.account_balance_wallet_outlined, color: kCyan, size: 22),            const SizedBox(width: 12),            Expanded(              child: Column(                crossAxisAlignment: CrossAxisAlignment.start,                children: [                  Text("Argos Wallet öffnen",                      style: GoogleFonts.spaceGrotesk(                          fontSize: 14, fontWeight: FontWeight.w600, color: kWhite)),                  const SizedBox(height: 4),                  Text("Non-custodial Solana · Send · Swap · Auto-Swap-on-Send",                      style: GoogleFonts.spaceMono(                          fontSize: 10, color: kWhiteDim)),                ],              ),            ),            const Icon(Icons.chevron_right, color: kCyan, size: 20),          ],        ),      ),    );  }
   Widget _aiBridgeCard() {
     return CyberCard(
       borderColor: kMagenta,
