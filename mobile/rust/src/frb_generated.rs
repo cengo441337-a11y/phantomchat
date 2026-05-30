@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1074652651;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 183394523;
 
 // Section: executor
 
@@ -46,6 +46,547 @@ flutter_rust_bridge::frb_generated_default_handler!();
 
 // Section: wire_funcs
 
+fn wire__crate__api__wallet__argos_balance_sol_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "argos_balance_sol",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok = crate::api::wallet::argos_balance_sol().await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__wallet__argos_balance_token_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "argos_balance_token",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_mint_b58 = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok =
+                            crate::api::wallet::argos_balance_token(api_mint_b58).await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__wallet__argos_create_wallet_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "argos_create_wallet",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_network = <String>::sse_decode(&mut deserializer);
+            let api_pin = <String>::sse_decode(&mut deserializer);
+            let api_storage_path = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::wallet::argos_create_wallet(
+                        api_network,
+                        api_pin,
+                        api_storage_path,
+                    )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__wallet__argos_devnet_airdrop_one_sol_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "argos_devnet_airdrop_one_sol",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok = crate::api::wallet::argos_devnet_airdrop_one_sol().await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__wallet__argos_execute_swap_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "argos_execute_swap",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok = crate::api::wallet::argos_execute_swap().await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__wallet__argos_lock_wallet_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "argos_lock_wallet",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::wallet::argos_lock_wallet()?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__wallet__argos_quote_swap_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "argos_quote_swap",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_input_mint_b58 = <String>::sse_decode(&mut deserializer);
+            let api_output_mint_b58 = <String>::sse_decode(&mut deserializer);
+            let api_amount_in = <u64>::sse_decode(&mut deserializer);
+            let api_slippage_bps = <u16>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok = crate::api::wallet::argos_quote_swap(
+                            api_input_mint_b58,
+                            api_output_mint_b58,
+                            api_amount_in,
+                            api_slippage_bps,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__wallet__argos_restore_wallet_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "argos_restore_wallet",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_mnemonic = <String>::sse_decode(&mut deserializer);
+            let api_network = <String>::sse_decode(&mut deserializer);
+            let api_pin = <String>::sse_decode(&mut deserializer);
+            let api_storage_path = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::wallet::argos_restore_wallet(
+                        api_mnemonic,
+                        api_network,
+                        api_pin,
+                        api_storage_path,
+                    )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__wallet__argos_send_sol_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "argos_send_sol",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_recipient_b58 = <String>::sse_decode(&mut deserializer);
+            let api_lamports = <u64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok =
+                            crate::api::wallet::argos_send_sol(api_recipient_b58, api_lamports)
+                                .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__wallet__argos_send_token_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "argos_send_token",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_mint_b58 = <String>::sse_decode(&mut deserializer);
+            let api_recipient_b58 = <String>::sse_decode(&mut deserializer);
+            let api_amount = <u64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok = crate::api::wallet::argos_send_token(
+                            api_mint_b58,
+                            api_recipient_b58,
+                            api_amount,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__wallet__argos_swap_and_send_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "argos_swap_and_send",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_recipient_b58 = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok =
+                            crate::api::wallet::argos_swap_and_send(api_recipient_b58).await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__wallet__argos_unlock_wallet_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "argos_unlock_wallet",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_pin = <String>::sse_decode(&mut deserializer);
+            let api_storage_path = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok =
+                        crate::api::wallet::argos_unlock_wallet(api_pin, api_storage_path)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__wallet__argos_validate_address_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "argos_validate_address",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_s = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, String>((move || {
+                let output_ok = crate::api::wallet::argos_validate_address(api_s)?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__wallet__argos_wallet_network_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "argos_wallet_network",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok(crate::api::wallet::argos_wallet_network())?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__wallet__argos_wallet_pubkey_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "argos_wallet_pubkey",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok(crate::api::wallet::argos_wallet_pubkey())?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__generate_phantom_id_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -1126,6 +1667,58 @@ impl SseDecode for String {
     }
 }
 
+impl SseDecode for crate::api::wallet::ArgosSwapAndSendOutcome {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_signatureB58 = <String>::sse_decode(deserializer);
+        let mut var_recipientAtaB58 = <String>::sse_decode(deserializer);
+        let mut var_outputMintB58 = <String>::sse_decode(deserializer);
+        let mut var_amountOutExpected = <u64>::sse_decode(deserializer);
+        return crate::api::wallet::ArgosSwapAndSendOutcome {
+            signature_b58: var_signatureB58,
+            recipient_ata_b58: var_recipientAtaB58,
+            output_mint_b58: var_outputMintB58,
+            amount_out_expected: var_amountOutExpected,
+        };
+    }
+}
+
+impl SseDecode for crate::api::wallet::ArgosSwapPreview {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_amountIn = <u64>::sse_decode(deserializer);
+        let mut var_amountOutMin = <u64>::sse_decode(deserializer);
+        let mut var_amountOutExpected = <u64>::sse_decode(deserializer);
+        let mut var_platformFeeOut = <u64>::sse_decode(deserializer);
+        let mut var_routeLabel = <String>::sse_decode(deserializer);
+        let mut var_slippageBps = <u16>::sse_decode(deserializer);
+        let mut var_outputMintB58 = <String>::sse_decode(deserializer);
+        return crate::api::wallet::ArgosSwapPreview {
+            amount_in: var_amountIn,
+            amount_out_min: var_amountOutMin,
+            amount_out_expected: var_amountOutExpected,
+            platform_fee_out: var_platformFeeOut,
+            route_label: var_routeLabel,
+            slippage_bps: var_slippageBps,
+            output_mint_b58: var_outputMintB58,
+        };
+    }
+}
+
+impl SseDecode for crate::api::wallet::ArgosWalletInfo {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_pubkeyB58 = <String>::sse_decode(deserializer);
+        let mut var_mnemonic = <String>::sse_decode(deserializer);
+        let mut var_network = <String>::sse_decode(deserializer);
+        return crate::api::wallet::ArgosWalletInfo {
+            pubkey_b58: var_pubkeyB58,
+            mnemonic: var_mnemonic,
+            network: var_network,
+        };
+    }
+}
+
 impl SseDecode for bool {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1267,10 +1860,24 @@ impl SseDecode for (Vec<u8>, Vec<u8>) {
     }
 }
 
+impl SseDecode for u16 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_u16::<NativeEndian>().unwrap()
+    }
+}
+
 impl SseDecode for u32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         deserializer.cursor.read_u32::<NativeEndian>().unwrap()
+    }
+}
+
+impl SseDecode for u64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_u64::<NativeEndian>().unwrap()
     }
 }
 
@@ -1302,31 +1909,48 @@ fn pde_ffi_dispatcher_primary_impl(
 ) {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        3 => wire__crate__api__init_secure_storage_impl(port, ptr, rust_vec_len, data_len),
-        4 => wire__crate__api__join_group_impl(port, ptr, rust_vec_len, data_len),
-        5 => wire__crate__api__load_local_identity_impl(port, ptr, rust_vec_len, data_len),
-        6 => wire__crate__api__load_local_identity_v3_impl(port, ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__mls_add_member_impl(port, ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__mls_create_group_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__mls_decrypt_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__mls_directory_impl(port, ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__mls_directory_insert_impl(port, ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__mls_encrypt_impl(port, ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__mls_init_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__mls_join_via_welcome_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__mls_list_members_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__mls_publish_key_package_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__mls_self_signing_pub_hex_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__nostr_build_event_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__nostr_extract_event_payload_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__nostr_subscription_req_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__perform_panic_wipe_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__receive_full_v3_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__scan_incoming_envelope_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__send_group_message_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__send_sealed_v3_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__send_secure_message_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__update_avatar_cid_impl(port, ptr, rust_vec_len, data_len),
+        1 => wire__crate__api__wallet__argos_balance_sol_impl(port, ptr, rust_vec_len, data_len),
+        2 => wire__crate__api__wallet__argos_balance_token_impl(port, ptr, rust_vec_len, data_len),
+        3 => wire__crate__api__wallet__argos_create_wallet_impl(port, ptr, rust_vec_len, data_len),
+        4 => wire__crate__api__wallet__argos_devnet_airdrop_one_sol_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        5 => wire__crate__api__wallet__argos_execute_swap_impl(port, ptr, rust_vec_len, data_len),
+        6 => wire__crate__api__wallet__argos_lock_wallet_impl(port, ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__wallet__argos_quote_swap_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__wallet__argos_restore_wallet_impl(port, ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__wallet__argos_send_sol_impl(port, ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__wallet__argos_send_token_impl(port, ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__wallet__argos_swap_and_send_impl(port, ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__wallet__argos_unlock_wallet_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__init_secure_storage_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__join_group_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__load_local_identity_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__load_local_identity_v3_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__mls_add_member_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__mls_create_group_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__mls_decrypt_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__mls_directory_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__mls_directory_insert_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__mls_encrypt_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__mls_init_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__mls_join_via_welcome_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__mls_list_members_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__mls_publish_key_package_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__mls_self_signing_pub_hex_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__nostr_build_event_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__nostr_extract_event_payload_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__nostr_subscription_req_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__perform_panic_wipe_impl(port, ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__receive_full_v3_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__scan_incoming_envelope_impl(port, ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__send_group_message_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__send_sealed_v3_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__send_secure_message_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__update_avatar_cid_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1339,18 +1963,92 @@ fn pde_ffi_dispatcher_sync_impl(
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        1 => wire__crate__api__generate_phantom_id_impl(ptr, rust_vec_len, data_len),
-        2 => wire__crate__api__get_privacy_mode_impl(ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__mls_in_group_impl(ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__mls_member_count_impl(ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__mls_self_label_impl(ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__set_privacy_mode_impl(ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__wallet__argos_validate_address_impl(ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__wallet__argos_wallet_network_impl(ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__wallet__argos_wallet_pubkey_impl(ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__generate_phantom_id_impl(ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__get_privacy_mode_impl(ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__mls_in_group_impl(ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__mls_member_count_impl(ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__mls_self_label_impl(ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__set_privacy_mode_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
 
 // Section: rust2dart
 
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::wallet::ArgosSwapAndSendOutcome {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.signature_b58.into_into_dart().into_dart(),
+            self.recipient_ata_b58.into_into_dart().into_dart(),
+            self.output_mint_b58.into_into_dart().into_dart(),
+            self.amount_out_expected.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::wallet::ArgosSwapAndSendOutcome
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::wallet::ArgosSwapAndSendOutcome>
+    for crate::api::wallet::ArgosSwapAndSendOutcome
+{
+    fn into_into_dart(self) -> crate::api::wallet::ArgosSwapAndSendOutcome {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::wallet::ArgosSwapPreview {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.amount_in.into_into_dart().into_dart(),
+            self.amount_out_min.into_into_dart().into_dart(),
+            self.amount_out_expected.into_into_dart().into_dart(),
+            self.platform_fee_out.into_into_dart().into_dart(),
+            self.route_label.into_into_dart().into_dart(),
+            self.slippage_bps.into_into_dart().into_dart(),
+            self.output_mint_b58.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::wallet::ArgosSwapPreview
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::wallet::ArgosSwapPreview>
+    for crate::api::wallet::ArgosSwapPreview
+{
+    fn into_into_dart(self) -> crate::api::wallet::ArgosSwapPreview {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::wallet::ArgosWalletInfo {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.pubkey_b58.into_into_dart().into_dart(),
+            self.mnemonic.into_into_dart().into_dart(),
+            self.network.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::wallet::ArgosWalletInfo
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::wallet::ArgosWalletInfo>
+    for crate::api::wallet::ArgosWalletInfo
+{
+    fn into_into_dart(self) -> crate::api::wallet::ArgosWalletInfo {
+        self
+    }
+}
 // Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::MlsMemberInfoV3 {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
@@ -1426,6 +2124,38 @@ impl SseEncode for String {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<u8>>::sse_encode(self.into_bytes(), serializer);
+    }
+}
+
+impl SseEncode for crate::api::wallet::ArgosSwapAndSendOutcome {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.signature_b58, serializer);
+        <String>::sse_encode(self.recipient_ata_b58, serializer);
+        <String>::sse_encode(self.output_mint_b58, serializer);
+        <u64>::sse_encode(self.amount_out_expected, serializer);
+    }
+}
+
+impl SseEncode for crate::api::wallet::ArgosSwapPreview {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u64>::sse_encode(self.amount_in, serializer);
+        <u64>::sse_encode(self.amount_out_min, serializer);
+        <u64>::sse_encode(self.amount_out_expected, serializer);
+        <u64>::sse_encode(self.platform_fee_out, serializer);
+        <String>::sse_encode(self.route_label, serializer);
+        <u16>::sse_encode(self.slippage_bps, serializer);
+        <String>::sse_encode(self.output_mint_b58, serializer);
+    }
+}
+
+impl SseEncode for crate::api::wallet::ArgosWalletInfo {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.pubkey_b58, serializer);
+        <String>::sse_encode(self.mnemonic, serializer);
+        <String>::sse_encode(self.network, serializer);
     }
 }
 
@@ -1540,10 +2270,24 @@ impl SseEncode for (Vec<u8>, Vec<u8>) {
     }
 }
 
+impl SseEncode for u16 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_u16::<NativeEndian>(self).unwrap();
+    }
+}
+
 impl SseEncode for u32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         serializer.cursor.write_u32::<NativeEndian>(self).unwrap();
+    }
+}
+
+impl SseEncode for u64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_u64::<NativeEndian>(self).unwrap();
     }
 }
 

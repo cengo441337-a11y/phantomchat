@@ -724,3 +724,14 @@ pub fn nostr_extract_event_payload(frame_text: String) -> Result<Option<Vec<u8>>
     let bytes = hex::decode(content_hex).map_err(|e| format!("content hex decode: {e}"))?;
     Ok(Some(bytes))
 }
+
+
+// ── Argos Wallet API (inline via #[path]) ─────────────────────────────────
+//
+// Wallet primitives for the upcoming Argos rebrand: BIP39 mnemonic +
+// Argon2id-encrypted persist + Solana send/swap + Auto-Swap-on-Send.
+// Lives in wallet_api.rs as a sibling file but is re-exposed here so
+// flutter_rust_bridge picks it up via the existing rust_input = crate::api.
+#[path = "wallet_api.rs"]
+pub mod wallet;
+
