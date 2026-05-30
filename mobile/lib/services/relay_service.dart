@@ -111,6 +111,7 @@ class RelayService {
   /// `relays/src/lib.rs` factory uses. Persisted relay list overrides
   /// these on subsequent launches.
   static const List<String> defaultRelayUrls = <String>[
+    'wss://relay.dc-infosec.de',
     'wss://relay.damus.io',
     'wss://nos.lol',
     'wss://relay.snort.social',

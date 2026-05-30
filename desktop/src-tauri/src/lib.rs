@@ -86,6 +86,7 @@ const POW_DIFFICULTY: u32 = 8;
 /// Three well-known Nostr relays — gives the user redundancy out of the box
 /// without forcing them to configure anything before first use.
 const DEFAULT_RELAYS: &[&str] = &[
+    "wss://relay.dc-infosec.de",
     "wss://relay.damus.io",
     "wss://nos.lol",
     "wss://relay.snort.social",

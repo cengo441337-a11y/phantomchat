@@ -132,7 +132,7 @@ enum Commands {
         #[arg(short, long)]
         message: String,
         /// Nostr relay URL
-        #[arg(short = 'u', long, default_value = "wss://relay.damus.io")]
+        #[arg(short = 'u', long, default_value = "wss://relay.dc-infosec.de")]
         relay: String,
     },
     /// Listen for incoming messages
@@ -140,7 +140,7 @@ enum Commands {
         #[arg(short, long, default_value = "keys.json")]
         file: PathBuf,
         /// Nostr relay URL
-        #[arg(short = 'u', long, default_value = "wss://relay.damus.io")]
+        #[arg(short = 'u', long, default_value = "wss://relay.dc-infosec.de")]
         relay: String,
     },
         /// Sender-Keys group chat (create, distribute, encrypt, decrypt)
@@ -188,7 +188,7 @@ enum Commands {
         #[arg(short, long, default_value = "keys.json")]
         file: PathBuf,
         /// Nostr relay URL
-        #[arg(short = 'u', long, default_value = "wss://relay.damus.io")]
+        #[arg(short = 'u', long, default_value = "wss://relay.dc-infosec.de")]
         relay: String,
     },
 }
