@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -127,6 +128,14 @@ export default function App() {
   /// for the mention auto-complete + the loud `notify_mention` trigger.
   /// Empty string until the boot probe resolves.
   const [myLabel, setMyLabel] = useState<string>("");
+
+  // Installed semver — shown in the header so users can tell at a glance
+  // which build they are on without diving into a hidden "about" dialog.
+  // Pulled from the tauri runtime so it always matches the actual bundle.
+  const [appVersion, setAppVersion] = useState<string>("");
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => {/* unsupported / dev */});
+  }, []);
 
   // ── Auto-updater banner ───────────────────────────────────────────────
   // Set on the cold-start `check_for_updates` round-trip if the endpoint
@@ -1125,6 +1134,14 @@ export default function App() {
           </span>
           <span className="text-soft-grey">·</span>
           <span className="text-cyber-cyan text-xs font-display">{t("app.header.brand_subtitle")}</span>
+          {appVersion && (
+            <>
+              <span className="text-soft-grey">·</span>
+              <span className="text-soft-grey text-[10px] font-mono" title="App-Version">
+                v{appVersion}
+              </span>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-3">
           {/* Manual update-check button — distinct from the silent
