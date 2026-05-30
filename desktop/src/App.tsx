@@ -42,7 +42,7 @@ import { plaintextMentions } from "./lib/mentions";
 
 type LeftPaneTab = "contacts" | "channels";
 
-const DEFAULT_RELAY = "wss://relay.damus.io";
+const DEFAULT_RELAY = "wss://relay.dc-infosec.de";
 const HISTORY_DEBOUNCE_MS = 500;
 
 function nowHHMMSS(): string {

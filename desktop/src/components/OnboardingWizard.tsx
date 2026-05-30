@@ -18,6 +18,7 @@ const TOTAL_STEPS = 7;
 type StepIdx = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 const DEFAULT_RELAY_OPTIONS = [
+  "wss://relay.dc-infosec.de",
   "wss://relay.damus.io",
   "wss://nos.lol",
   "wss://relay.snort.social",
