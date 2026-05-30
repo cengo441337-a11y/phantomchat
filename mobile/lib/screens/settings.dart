@@ -11,6 +11,7 @@ import '../theme.dart';
 import '../widgets/cyber_card.dart';
 import '../widgets/update_dialog.dart';
 import 'diagnostics.dart';
+import 'relay_manager.dart';
 
 /// PhantomChat settings panel — Wave 8a.
 ///
@@ -156,11 +157,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: _loading
             ? const Center(child: CircularProgressIndicator(color: kCyan, strokeWidth: 1.5))
             : ListView(
-                padding: const EdgeInsets.all(20),
+                padding: EdgeInsets.only(
+                  left: 20, right: 20, top: 20,
+                  bottom: 20 + MediaQuery.of(context).viewPadding.bottom,
+                ),
                 children: [
                   // App-update first so "Nach Updates suchen" is the most
                   // prominent action in Settings — users reported they
                   // couldn't find it when it sat further down.
+                  SizedBox(height: MediaQuery.of(context).viewPadding.top > 0 ? 0 : 8),
                   _sectionHeader('APP-UPDATE'),
                   const SizedBox(height: 12),
                   _updateCard(),
@@ -168,6 +173,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _sectionHeader('VERBINDUNG'),
                   const SizedBox(height: 12),
                   _relayCard(),
+                  const SizedBox(height: 32),
+                  _sectionHeader('AI-ASSISTENT'),
+                  const SizedBox(height: 12),
+                  _aiBridgeCard(),
                   const SizedBox(height: 32),
                   _sectionHeader('SICHERHEIT'),
                   const SizedBox(height: 12),
@@ -346,61 +355,146 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// now — surfaces whether the app is reachable (the messaging transport)
   /// and which relays it talks to, so a user debugging "messages don't
   /// arrive" can see the connection state at a glance.
+  /// Tappable relay card — opens the full RelayManager (add / remove /
+  /// reorder / live test). Previous incarnation was a read-only list
+  /// which is exactly what users complained about.
   Widget _relayCard() {
     final urls = RelayService.instance.relayUrls;
     final connected = RelayService.instance.hasAnyConnection;
     final stateColor = connected ? kGreen : kMagenta;
+    return GestureDetector(
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const RelayManagerScreen()),
+      ).then((_) => setState(() {})),
+      child: CyberCard(
+        borderColor: kCyan,
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(connected ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
+                    color: stateColor, size: 22),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text('Relays verwalten',
+                      style: GoogleFonts.spaceGrotesk(
+                          fontSize: 14, fontWeight: FontWeight.w600, color: kWhite)),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: stateColor.withValues(alpha: 0.6)),
+                    color: stateColor.withValues(alpha: 0.08),
+                  ),
+                  child: Text(connected ? 'VERBUNDEN' : 'GETRENNT',
+                      style: GoogleFonts.spaceMono(
+                          fontSize: 10, color: stateColor, letterSpacing: 1.5)),
+                ),
+                const SizedBox(width: 8),
+                const Icon(Icons.chevron_right, color: kCyan, size: 20),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ...urls.take(3).map((u) => Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    children: [
+                      Icon(Icons.circle, size: 7,
+                          color: u.contains('dc-infosec.de') ? kCyan : kGrayText),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(u,
+                            style: GoogleFonts.spaceMono(
+                                fontSize: 11,
+                                color: u.contains('dc-infosec.de') ? kWhite : kGrayText)),
+                      ),
+                    ],
+                  ),
+                )),
+            if (urls.length > 3)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text('  + ${urls.length - 3} weitere',
+                    style: GoogleFonts.spaceMono(fontSize: 11, color: kGrayText)),
+              ),
+            const SizedBox(height: 4),
+            Text(
+              'Tippen um Relays hinzuzufuegen, zu entfernen, Reihenfolge '
+              'zu aendern oder die Erreichbarkeit zu testen.',
+              style: GoogleFonts.spaceMono(fontSize: 11, color: kGrayText, height: 1.5),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// AI-Bridge info card. Mobile is the CLIENT of the bridge, not the host
+  /// — the LLM runs on the user's desktop via `phantomchat ai-bridge`
+  /// (ClaudeCli / Ollama / OpenAI / Anthropic API). The card explains the
+  /// setup and links to the project docs so curious users don't get lost.
+  Widget _aiBridgeCard() {
     return CyberCard(
-      borderColor: kCyan,
+      borderColor: kMagenta,
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(connected ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
-                  color: stateColor, size: 22),
+              const Icon(Icons.smart_toy_outlined, color: kMagenta, size: 22),
               const SizedBox(width: 12),
               Expanded(
-                child: Text('Relay-Verbindung',
+                child: Text('AI-Assistent (Home-LLM)',
                     style: GoogleFonts.spaceGrotesk(
                         fontSize: 14, fontWeight: FontWeight.w600, color: kWhite)),
               ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  border: Border.all(color: stateColor.withValues(alpha: 0.6)),
-                  color: stateColor.withValues(alpha: 0.08),
+                  border: Border.all(color: kMagenta.withValues(alpha: 0.6)),
+                  color: kMagenta.withValues(alpha: 0.08),
                 ),
-                child: Text(connected ? 'VERBUNDEN' : 'GETRENNT',
+                child: Text('DESKTOP-SEITIG',
                     style: GoogleFonts.spaceMono(
-                        fontSize: 10, color: stateColor, letterSpacing: 1.5)),
+                        fontSize: 9, color: kMagenta, letterSpacing: 1.5)),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          ...urls.map((u) => Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Row(
-                  children: [
-                    Icon(Icons.circle, size: 7,
-                        color: u.contains('dc-infosec.de') ? kCyan : kGrayText),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(u,
-                          style: GoogleFonts.spaceMono(
-                              fontSize: 11,
-                              color: u.contains('dc-infosec.de') ? kWhite : kGrayText)),
-                    ),
-                  ],
-                ),
-              )),
-          const SizedBox(height: 4),
+          const SizedBox(height: 10),
           Text(
-            'PhantomChat stellt Nachrichten über diese Relays zu. Der '
-            'eigene Relay (dc-infosec.de) ist am zuverlässigsten — '
-            'öffentliche Nostr-Relays können Nachrichten verwerfen.',
+            'Die KI-Bridge laeuft auf deinem Home-PC (PhantomChat Desktop). '
+            'Provider waehlbar dort: Claude CLI (Pro-Abo), Ollama (lokal), '
+            'OpenAI-kompatibel oder Anthropic API. Auf dem Handy '
+            'konfigurierst du nur, welcher Kontakt ueber die Bridge '
+            'antworten soll — das passiert beim Hinzufuegen des '
+            'Bridge-Kontakts (Erlaube als AI-Antwort).',
             style: GoogleFonts.spaceMono(fontSize: 11, color: kGrayText, height: 1.5),
+          ),
+          const SizedBox(height: 10),
+          GestureDetector(
+            onTap: () {
+              Clipboard.setData(const ClipboardData(
+                  text: 'https://github.com/cengo441337-a11y/phantomchat#wave-11--ai-bridge'));
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text('Setup-Doku-Link kopiert',
+                  style: GoogleFonts.spaceMono(fontSize: 12)),
+                backgroundColor: kBgCard,
+              ));
+            },
+            child: Row(
+              children: [
+                const Icon(Icons.link, color: kMagenta, size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('Setup-Anleitung (Desktop)',
+                    style: GoogleFonts.spaceMono(fontSize: 11, color: kMagenta)),
+                ),
+                const Icon(Icons.copy, color: kGrayText, size: 14),
+              ],
+            ),
           ),
         ],
       ),
