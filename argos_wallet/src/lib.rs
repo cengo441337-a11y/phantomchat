@@ -17,6 +17,9 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod transfer;
+pub use transfer::{parse_address, LAMPORTS_PER_SOL_CONST};
+
 use std::path::Path;
 
 use argon2::{Algorithm, Argon2, Params, Version};
@@ -131,6 +134,14 @@ impl ArgosWallet {
     /// Keypair holds a copy of the secret bytes; let it drop ASAP.
     fn keypair(&self) -> Keypair {
         Keypair::try_from(&self.keypair_bytes[..]).expect("internally-validated bytes")
+    }
+
+    /// Public alias for [`Self::keypair`] used by the `transfer` module.
+    /// Returns a fresh `Keypair` each call so the caller can move it into
+    /// a signers slice without lifetime contortions; secret bytes are
+    /// copied, not referenced.
+    pub(crate) fn keypair_for_signing(&self) -> Keypair {
+        self.keypair()
     }
 
     /// Solana public address (32 bytes).
@@ -309,6 +320,13 @@ pub enum Error {
     /// Argon2id / AEAD failure.
     #[error("crypto: {0}")]
     Crypto(String),
+    /// Solana RPC error (network failure, insufficient funds, ...).
+    /// Surfaces the upstream string so the UI can display it as-is.
+    #[error("rpc: {0}")]
+    Rpc(String),
+    /// User-pasted Solana address could not be parsed.
+    #[error("invalid address: {0}")]
+    InvalidAddress(String),
     /// JSON serde error on the persisted blob.
     #[error("serde: {0}")]
     Serde(#[from] serde_json::Error),
