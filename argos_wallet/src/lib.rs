@@ -17,7 +17,9 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod swap;
 pub mod transfer;
+pub use swap::{SwapPreview, PLATFORM_FEE_BPS, TREASURY_WALLET_PLACEHOLDER};
 pub use transfer::{parse_address, LAMPORTS_PER_SOL_CONST};
 
 use std::path::Path;
