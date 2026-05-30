@@ -44,7 +44,7 @@ fi
 MSI_NAME="PhantomChat_${VERSION}_x64_en-US.msi"
 NEXUS_REPO_DIR="${NEXUS_REPO_DIR:-D:/phantomchat}"
 HOSTINGER_DOWNLOAD_DIR="${HOSTINGER_DOWNLOAD_DIR:-/var/www/updates/download}"
-HOSTINGER_MANIFEST_PATH="${HOSTINGER_MANIFEST_PATH:-/var/www/updates/phantomchat/windows/latest.json}"
+HOSTINGER_MANIFEST_PATH="${HOSTINGER_MANIFEST_PATH:-/var/www/updates/phantomchat/manifests/windows-x86_64.json}"
 LOCAL_TMP="${LOCAL_TMP:-/tmp/$MSI_NAME}"
 
 echo "[1/6] Building MSI on nexus (cargo tauri build, default features = stt)…"
@@ -63,8 +63,7 @@ ssh hostinger bash -se <<EOF
 set -euo pipefail
 cd /tmp
 # tauri signer sign produces a .sig sidecar next to the artefact.
-tauri signer sign --private-key "\${TAURI_SIGNING_PRIVATE_KEY:-\$HOME/.tauri/phantomchat.key}" \\
-                  --password "\${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" \\
+npx --yes @tauri-apps/cli@2 signer sign --private-key "\$(sudo cat /root/.tauri/phantom-updater-v2.key)" --password "" \
                   "/tmp/$MSI_NAME"
 sudo install -m 0644 "/tmp/$MSI_NAME"     "$HOSTINGER_DOWNLOAD_DIR/$MSI_NAME"
 sudo install -m 0644 "/tmp/$MSI_NAME.sig" "$HOSTINGER_DOWNLOAD_DIR/$MSI_NAME.sig"
