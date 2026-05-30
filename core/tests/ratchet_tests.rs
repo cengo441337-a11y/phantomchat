@@ -162,6 +162,30 @@ fn replay_of_decrypted_envelope_is_rejected_without_breaking_session() {
 }
 
 #[test]
+fn first_message_counter_is_one_indexed_on_the_wire() {
+    // Audit 2026-05-30 (R-5): the on-wire counter MUST be 1-indexed (first
+    // message = 1, second = 2 …). Every shipped client's receiver relies on
+    // this; a 0-indexed counter silently broke cross-version decryption — an
+    // updated phone could not read a not-yet-updated desktop's messages
+    // while the reverse direction (old receiver ignores the counter) still
+    // worked, producing a one-way-chat bug. This pins the wire format.
+    let bob = SpendKey::generate();
+    let mut alice = RatchetState::initialize_as_sender(shared(), bob.public);
+    let (h1, _c1) = alice.encrypt(b"first");
+    assert_eq!(
+        u32::from_le_bytes(h1[32..36].try_into().unwrap()),
+        1,
+        "first message must be counter 1 (1-indexed wire format)"
+    );
+    let (h2, _c2) = alice.encrypt(b"second");
+    assert_eq!(
+        u32::from_le_bytes(h2[32..36].try_into().unwrap()),
+        2,
+        "second message must be counter 2"
+    );
+}
+
+#[test]
 fn out_of_order_arrival_is_tolerated_via_skipped_keys_cache() {
     let (mut alice, mut bob, _) = handshake();
 
@@ -201,7 +225,7 @@ fn attacker_forged_peer_ratchet_pub_does_not_desync_session() {
     // dh_ratchet step on the live recv chain.
     let mut forged_header = vec![0u8; 60];
     forged_header[0..32].copy_from_slice(&[0xAB; 32]); // attacker-controlled peer pub
-    forged_header[32..36].copy_from_slice(&0u32.to_le_bytes());
+    forged_header[32..36].copy_from_slice(&1u32.to_le_bytes()); // valid 1-indexed counter
     forged_header[36..60].copy_from_slice(&[0xCD; 24]);
     let forged_ct = vec![0xEF; 80];
     let err = bob.decrypt(&forged_header, &forged_ct).unwrap_err();
@@ -287,7 +311,7 @@ fn dh_ratchet_step_commits_only_when_first_new_chain_message_validates() {
     // decryption silently failed.
     let mut forged = vec![0u8; 60];
     forged[0..32].copy_from_slice(&[0x42; 32]);
-    forged[32..36].copy_from_slice(&0u32.to_le_bytes());
+    forged[32..36].copy_from_slice(&1u32.to_le_bytes()); // valid 1-indexed counter
     forged[36..60].copy_from_slice(&[0x99; 24]);
     let forged_ct = vec![0u8; 80];
     let _ = alice.decrypt(&forged, &forged_ct); // expect Err; doesn't matter which

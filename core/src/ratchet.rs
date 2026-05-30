@@ -336,10 +336,19 @@ impl RatchetState {
     /// Encrypts a plaintext and returns `(ratchet_header, ciphertext)`.
     /// The header layout is `[32 B ratchet_pub][4 B counter][24 B nonce]`.
     pub fn encrypt(&mut self, plaintext: &[u8]) -> (Vec<u8>, Vec<u8>) {
-        // Header carries the COUNTER OF THIS message (= send_count before
-        // we bump it), so we capture it before [`next_send_key`] increments.
-        let counter = self.send_count;
+        // Header carries the **1-indexed** counter (= send_count AFTER the
+        // bump): the first message on a chain is counter 1, the second is 2,
+        // and so on. This is the wire format every shipped PhantomChat
+        // client uses — the pre-2026-05-30 receiver ignored the counter
+        // entirely and just consumed the next chain key, so the value MUST
+        // keep meaning "the N-th message" for the transactional decrypt
+        // below to stay backward/forward compatible (audit 2026-05-30 R-5:
+        // an earlier rewrite made this 0-indexed, which silently broke
+        // decryption from any peer still running the old ratchet — e.g.
+        // an updated phone could not read messages from a not-yet-updated
+        // desktop).
         let msg_key = self.next_send_key();
+        let counter = self.send_count;
         let cipher = XChaCha20Poly1305::new(msg_key.as_slice().into());
 
         let mut nonce_bytes = [0u8; 24];
@@ -427,28 +436,31 @@ impl RatchetState {
             staged.dh_ratchet(peer_pub);
         }
 
-        // Replay / catch-up window inside the (possibly fresh) recv chain.
-        if counter < staged.recv_count {
+        // `counter` is 1-indexed ("this is the N-th message on the chain").
+        // `recv_count` is the highest counter already consumed (0 = none
+        // yet). A 0 counter is only ever produced by a malformed/forged
+        // header, since every real sender starts at 1.
+        if counter == 0 {
+            return Err(RatchetError::InvalidHeader);
+        }
+        if counter <= staged.recv_count {
             return Err(RatchetError::Replay);
         }
-        let skip_n = counter
-            .checked_sub(staged.recv_count)
-            .ok_or(RatchetError::Replay)?;
+        let skip_n = counter - 1 - staged.recv_count;
         if skip_n > MAX_SKIP {
             return Err(RatchetError::TooMuchSkip(skip_n));
         }
 
-        // Derive (and stage) keys for any counters we're jumping over so
-        // the matching real envelopes can land later.
-        for k in staged.recv_count..counter {
+        // Derive + stash keys for the messages we're jumping over; their
+        // 1-indexed counters are (recv_count+1) ..= (counter-1).
+        for c in (staged.recv_count + 1)..counter {
             let (next_ck, msg_key) = kdf_ck(&staged.recv_chain);
             staged.recv_chain = next_ck;
-            staged.insert_skipped(peer_pub_bytes, k, msg_key);
-            staged.recv_count = k + 1;
+            staged.insert_skipped(peer_pub_bytes, c, msg_key);
         }
 
-        // Derive *this* message's key (don't advance recv_chain yet —
-        // we only do that once AEAD validates).
+        // Derive *this* message's key (the counter-th in the chain). Don't
+        // advance recv_chain / recv_count yet — only once AEAD validates.
         let (next_ck, msg_key) = kdf_ck(&staged.recv_chain);
 
         let cipher = XChaCha20Poly1305::new(msg_key.as_slice().into());
@@ -461,7 +473,7 @@ impl RatchetState {
 
         // ── Commit ────────────────────────────────────────────────────────
         staged.recv_chain = next_ck;
-        staged.recv_count = counter.saturating_add(1);
+        staged.recv_count = counter;
         *self = staged;
         Ok(plain)
     }
