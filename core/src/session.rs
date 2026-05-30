@@ -367,15 +367,25 @@ impl SessionStore {
         // Phase 3 — ratchet lookup. See module docs for why we try every
         // session before opening a new one: peer DH-ratchet rotations
         // change `peer_ratchet_public` mid-conversation.
+        //
+        // Audit 2026-05-30 (R-6): a `RatchetError::Replay` from any
+        // existing session means "this exact envelope was already decoded
+        // here" — typical when a relay loops the publisher's own event
+        // back, or when the same envelope arrives over two connected
+        // relays. Treat that as a silent drop (the receive ratchet stayed
+        // untouched, per the transactional decrypt) so the user does not
+        // see "ratchet decrypt failed: Replay erkannt" pop up in chat for
+        // perfectly normal duplicates.
         for session in self.sessions.values_mut() {
             let mut candidate = session.clone();
             candidate.restore_secret();
-            if let Ok(plain) = candidate.decrypt(
-                &payload.ratchet_header,
-                &payload.encrypted_body,
-            ) {
-                *session = candidate;
-                return Ok(Some(plain));
+            match candidate.decrypt(&payload.ratchet_header, &payload.encrypted_body) {
+                Ok(plain) => {
+                    *session = candidate;
+                    return Ok(Some(plain));
+                }
+                Err(RatchetError::Replay) => return Ok(None),
+                Err(_) => { /* try the next session */ }
             }
         }
 
@@ -400,7 +410,11 @@ impl SessionStore {
             RatchetState::initialize_as_receiver(bootstrap, &spend_key.secret, peer_ratchet_pub)
         });
 
-        let plaintext = session.decrypt(&payload.ratchet_header, &payload.encrypted_body)?;
+        let plaintext = match session.decrypt(&payload.ratchet_header, &payload.encrypted_body) {
+            Ok(p) => p,
+            Err(RatchetError::Replay) => return Ok(None),
+            Err(e) => return Err(SessionError::Ratchet(e)),
+        };
         Ok(Some(plaintext))
     }
 
@@ -446,46 +460,61 @@ impl SessionStore {
             return Err(SessionError::MissingHeader);
         }
 
-        // Ratchet decrypt (same rotation-tolerant search as receive_inner).
-        let plaintext = {
-            let mut found = None;
+        // Ratchet decrypt (same rotation-tolerant search as receive_inner,
+        // including the R-6 silent-drop on Replay).
+        enum LoopResult { Found(Vec<u8>), Replay, NotMine }
+        let outcome = {
+            let mut r = LoopResult::NotMine;
             for session in self.sessions.values_mut() {
                 let mut candidate = session.clone();
                 candidate.restore_secret();
-                if let Ok(plain) = candidate.decrypt(
-                    &payload.ratchet_header,
-                    &payload.encrypted_body,
-                ) {
-                    *session = candidate;
-                    found = Some(plain);
-                    break;
+                match candidate.decrypt(&payload.ratchet_header, &payload.encrypted_body) {
+                    Ok(plain) => {
+                        *session = candidate;
+                        r = LoopResult::Found(plain);
+                        break;
+                    }
+                    Err(RatchetError::Replay) => {
+                        r = LoopResult::Replay;
+                        break;
+                    }
+                    Err(_) => { /* try next */ }
                 }
             }
-            match found {
-                Some(p) => p,
-                None => {
-                    let peer_ratchet_bytes: [u8; 32] = payload.ratchet_header[0..32]
-                        .try_into()
-                        .map_err(|_| SessionError::MissingHeader)?;
-                    let peer_ratchet_pub = x25519_dalek::PublicKey::from(peer_ratchet_bytes);
-                    let bootstrap = initial_shared_from_spend_pub(&spend_key.public);
-                    let session_key = format!("peer:{}", hex::encode(&peer_ratchet_bytes[..8]));
-                    // Audit-H7 core: same cap as `receive_inner`; drop
-                    // when the map is full and we'd be inserting a new
-                    // attacker-shaped key.
-                    if self.sessions.len() >= MAX_SESSIONS
-                        && !self.sessions.contains_key(&session_key)
-                    {
-                        return Ok(None);
-                    }
-                    let session = self.sessions.entry(session_key).or_insert_with(|| {
-                        RatchetState::initialize_as_receiver(
-                            bootstrap,
-                            &spend_key.secret,
-                            peer_ratchet_pub,
-                        )
-                    });
-                    session.decrypt(&payload.ratchet_header, &payload.encrypted_body)?
+            r
+        };
+        let plaintext = match outcome {
+            LoopResult::Replay => return Ok(None),
+            LoopResult::Found(p) => p,
+            LoopResult::NotMine => {
+                let peer_ratchet_bytes: [u8; 32] = payload.ratchet_header[0..32]
+                    .try_into()
+                    .map_err(|_| SessionError::MissingHeader)?;
+                let peer_ratchet_pub = x25519_dalek::PublicKey::from(peer_ratchet_bytes);
+                let bootstrap = initial_shared_from_spend_pub(&spend_key.public);
+                let session_key = format!("peer:{}", hex::encode(&peer_ratchet_bytes[..8]));
+                // Audit-H7 core: same cap as `receive_inner`; drop
+                // when the map is full and we'd be inserting a new
+                // attacker-shaped key.
+                if self.sessions.len() >= MAX_SESSIONS
+                    && !self.sessions.contains_key(&session_key)
+                {
+                    return Ok(None);
+                }
+                let session = self.sessions.entry(session_key).or_insert_with(|| {
+                    RatchetState::initialize_as_receiver(
+                        bootstrap,
+                        &spend_key.secret,
+                        peer_ratchet_pub,
+                    )
+                });
+                // Also silently drop Replay on the freshly-inserted (or
+                // existing-fall-through) session — same semantics as the
+                // loop above.
+                match session.decrypt(&payload.ratchet_header, &payload.encrypted_body) {
+                    Ok(p) => p,
+                    Err(RatchetError::Replay) => return Ok(None),
+                    Err(e) => return Err(SessionError::Ratchet(e)),
                 }
             }
         };

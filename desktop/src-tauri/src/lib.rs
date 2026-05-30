@@ -914,8 +914,23 @@ fn load_relays(app: &AppHandle) -> Vec<String> {
         Err(_) => return DEFAULT_RELAYS.iter().map(|s| s.to_string()).collect(),
     };
     if let Ok(raw) = fs::read(&path) {
-        if let Ok(list) = serde_json::from_slice::<Vec<String>>(&raw) {
+        if let Ok(mut list) = serde_json::from_slice::<Vec<String>>(&raw) {
             if !list.is_empty() {
+                // Audit 2026-05-30 (R-7): one-shot migration — make sure
+                // the project's own broadcast relay is always present on
+                // an existing install. Reported live: an upgraded desktop
+                // kept the pre-3.0.8 relay list (just public Nostr relays
+                // that drop kind-1059) and so messages never went through.
+                // We do not REPLACE the user's list — public relays stay
+                // for redundancy — we just guarantee the own relay sits
+                // at the front so it is the primary publish target.
+                const OWN_RELAY: &str = "wss://relay.dc-infosec.de";
+                if !list.iter().any(|u| u == OWN_RELAY) {
+                    list.insert(0, OWN_RELAY.to_string());
+                    if let Ok(buf) = serde_json::to_vec_pretty(&list) {
+                        let _ = fs::write(&path, buf);
+                    }
+                }
                 return list;
             }
         }

@@ -268,6 +268,29 @@ fn counter_too_far_ahead_is_capped_at_max_skip() {
 }
 
 #[test]
+fn legacy_skipped_keys_object_form_is_accepted_on_load() {
+    // Audit 2026-05-30 (R-6): reported live by Deniz — desktop installs
+    // written between R-1 (added skipped_keys) and R-4 (added the Vec
+    // codec) carry "skipped_keys": {} on disk. Loading those files with
+    // the strict Vec-only deserializer errored out with "invalid type:
+    // map, expected a sequence" and dropped every chat on upgrade. This
+    // pins the tolerant-decoder behaviour so the bug can't sneak back in.
+    let bob = SpendKey::generate();
+    let alice = RatchetState::initialize_as_sender(shared(), bob.public);
+    let json = serde_json::to_string(&alice).unwrap();
+    // Splice the canonical (empty) `"skipped_keys":[]` into the legacy
+    // `"skipped_keys":{}` object form that 1.1.6-era installs wrote.
+    let legacy = json.replace("\"skipped_keys\":[]", "\"skipped_keys\":{}");
+    assert!(legacy.contains("\"skipped_keys\":{}"));
+    let mut restored: RatchetState =
+        serde_json::from_str(&legacy).expect("legacy {} form must load");
+    restored.restore_secret();
+    // Sanity-check the restored state is still usable.
+    let (h, c) = restored.encrypt(b"after legacy-format load");
+    assert!(!h.is_empty() && !c.is_empty());
+}
+
+#[test]
 fn state_with_skipped_keys_round_trips_through_json() {
     // Audit 2026-05-30 (R-4): a ratchet state that accumulated skipped
     // message keys must still serialize to JSON. The skipped-keys cache is

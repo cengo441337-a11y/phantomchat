@@ -150,8 +150,37 @@ mod skipped_kv {
     pub fn deserialize<'de, D: Deserializer<'de>>(
         d: D,
     ) -> Result<HashMap<SkippedKeyId, [u8; 32]>, D::Error> {
-        let v: Vec<(SkippedKeyId, [u8; 32])> = Vec::deserialize(d)?;
-        Ok(v.into_iter().collect())
+        // Accept BOTH the canonical Vec form (post-R-4) AND the legacy
+        // HashMap-as-JSON-object form. The legacy form is what
+        // `serde_json` produces for an empty `HashMap<([u8;32], u32),
+        // _>` when no `with =` codec is set — i.e. what every desktop
+        // install written between the R-1 commit (added the field) and
+        // the R-4 commit (added this codec) carries on disk. Without
+        // accepting `{}` here, loading those files errors out with
+        // "session store serde: invalid type: map, expected a sequence"
+        // and EVERY chat goes dark on upgrade (audit 2026-05-30 R-6:
+        // reported live by Deniz with `line 177 column 22` pointing at
+        // exactly such a `"skipped_keys": {}` entry).
+        //
+        // Skipped keys are a perf optimisation for out-of-order delivery;
+        // dropping a non-canonical map is safe — at worst a handful of
+        // already-in-flight envelopes can't be back-filled. The ratchet
+        // itself stays in sync.
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Either {
+            Vec(Vec<(SkippedKeyId, [u8; 32])>),
+            // Empty-map fallback. The keys would never deserialise
+            // cleanly (`([u8;32], u32)` tuples aren't valid JSON string
+            // keys), so we accept an empty object and treat it as no
+            // cached skipped keys. A non-empty object is so unlikely on
+            // a real install that erroring is acceptable.
+            EmptyMap(HashMap<String, serde_json::Value>),
+        }
+        match Either::deserialize(d)? {
+            Either::Vec(v) => Ok(v.into_iter().collect()),
+            Either::EmptyMap(_) => Ok(HashMap::new()),
+        }
     }
 }
 
