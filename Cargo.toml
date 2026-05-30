@@ -7,3 +7,10 @@ members = [
     "tools/phantom-build-org-msi"
 ]
 resolver = "2"
+
+# Audit 2026-05-30 (R-7b): split the desktop release lib across many
+# codegen-units so no single rustc invocation needs the ~3 GB peak that
+# trips OOM/STATUS_STACK_BUFFER_OVERRUN on nexus. opt-level=3 stays.
+[profile.release]
+codegen-units = 64
+lto = false
