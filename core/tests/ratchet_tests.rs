@@ -126,6 +126,148 @@ fn tampered_ciphertext_fails_to_decrypt() {
     assert!(bob_state.decrypt(&h, &c).is_err());
 }
 
+// ─── Audit 2026-05-30 (R-1/R-2/R-3) regression tests ─────────────────────────
+//
+// Pre-rewrite, decrypt mutated `recv_chain` / `recv_count` *before* the AEAD
+// validated. A duplicate, an out-of-order envelope, or an attacker-crafted
+// envelope with a random peer_ratchet_pub was enough to permanently desync
+// the session. The transactional decrypt closed all three.
+
+use phantomchat_core::ratchet::{RatchetError, MAX_SKIP};
+
+fn handshake() -> (RatchetState, RatchetState, SpendKey) {
+    let bob = SpendKey::generate();
+    let mut alice = RatchetState::initialize_as_sender(shared(), bob.public);
+    let (h0, c0) = alice.encrypt(b"bootstrap");
+    let peer = PublicKey::from(<[u8; 32]>::try_from(&h0[0..32]).unwrap());
+    let mut bob_state =
+        RatchetState::initialize_as_receiver(shared(), &spend_secret(&bob), peer);
+    assert_eq!(bob_state.decrypt(&h0, &c0).unwrap(), b"bootstrap");
+    (alice, bob_state, bob)
+}
+
+#[test]
+fn replay_of_decrypted_envelope_is_rejected_without_breaking_session() {
+    let (mut alice, mut bob, _) = handshake();
+    let (h1, c1) = alice.encrypt(b"msg-1");
+    assert_eq!(bob.decrypt(&h1, &c1).unwrap(), b"msg-1");
+
+    // Replay the same envelope — must be rejected as a replay.
+    let err = bob.decrypt(&h1, &c1).unwrap_err();
+    assert_eq!(err, RatchetError::Replay, "expected Replay, got {err:?}");
+
+    // Session must still work — Alice sends msg-2 and Bob decrypts.
+    let (h2, c2) = alice.encrypt(b"msg-2");
+    assert_eq!(bob.decrypt(&h2, &c2).unwrap(), b"msg-2");
+}
+
+#[test]
+fn out_of_order_arrival_is_tolerated_via_skipped_keys_cache() {
+    let (mut alice, mut bob, _) = handshake();
+
+    // Alice sends 1, 2, 3 in order.
+    let (h1, c1) = alice.encrypt(b"a-1");
+    let (h2, c2) = alice.encrypt(b"a-2");
+    let (h3, c3) = alice.encrypt(b"a-3");
+
+    // Bob receives 3 first → 1 and 2 are stored as skipped keys.
+    assert_eq!(bob.decrypt(&h3, &c3).unwrap(), b"a-3");
+
+    // Then receives 1 (cached key path).
+    assert_eq!(bob.decrypt(&h1, &c1).unwrap(), b"a-1");
+
+    // Then 2 — also cached.
+    assert_eq!(bob.decrypt(&h2, &c2).unwrap(), b"a-2");
+
+    // Cache is now empty: re-delivering 1 must register as a replay.
+    let err = bob.decrypt(&h1, &c1).unwrap_err();
+    assert_eq!(err, RatchetError::Replay);
+
+    // Forward progress still works.
+    let (h4, c4) = alice.encrypt(b"a-4");
+    assert_eq!(bob.decrypt(&h4, &c4).unwrap(), b"a-4");
+}
+
+#[test]
+fn attacker_forged_peer_ratchet_pub_does_not_desync_session() {
+    let (mut alice, mut bob, _) = handshake();
+
+    // Snapshot Bob's view: a valid msg-1 from Alice that we'll feed AFTER
+    // the attacker attempt to prove the live state survived.
+    let (h1, c1) = alice.encrypt(b"a-1");
+
+    // Forge an envelope: random 32-byte "peer_ratchet_pub", arbitrary
+    // counter / nonce, garbage ciphertext. Pre-audit this triggered a
+    // dh_ratchet step on the live recv chain.
+    let mut forged_header = vec![0u8; 60];
+    forged_header[0..32].copy_from_slice(&[0xAB; 32]); // attacker-controlled peer pub
+    forged_header[32..36].copy_from_slice(&0u32.to_le_bytes());
+    forged_header[36..60].copy_from_slice(&[0xCD; 24]);
+    let forged_ct = vec![0xEF; 80];
+    let err = bob.decrypt(&forged_header, &forged_ct).unwrap_err();
+    assert_eq!(err, RatchetError::DecryptionFailed);
+
+    // The live state must not have ratcheted: legitimate Alice envelope
+    // still decrypts.
+    assert_eq!(bob.decrypt(&h1, &c1).unwrap(), b"a-1");
+
+    // And so does the next legit one.
+    let (h2, c2) = alice.encrypt(b"a-2");
+    assert_eq!(bob.decrypt(&h2, &c2).unwrap(), b"a-2");
+}
+
+#[test]
+fn counter_too_far_ahead_is_capped_at_max_skip() {
+    let (mut alice, mut bob, _) = handshake();
+
+    // Snapshot a real msg-1 to prove later that bob's chain didn't advance.
+    let (h1, c1) = alice.encrypt(b"a-1");
+
+    // Forge an envelope on the SAME chain (Alice's current peer_ratchet_pub)
+    // but with a counter well past MAX_SKIP. Without the cap the receiver
+    // would HMAC-loop hundreds of thousands of times. With the cap this is
+    // rejected before any keys are derived.
+    let mut header_far = h1.clone();
+    let huge = 100_000u32;
+    header_far[32..36].copy_from_slice(&huge.to_le_bytes());
+    let garbage = vec![0u8; 80];
+    let err = bob.decrypt(&header_far, &garbage).unwrap_err();
+    match err {
+        RatchetError::TooMuchSkip(n) => {
+            assert!(n > MAX_SKIP, "skip count {n} should exceed MAX_SKIP={MAX_SKIP}");
+        }
+        other => panic!("expected TooMuchSkip, got {other:?}"),
+    }
+
+    // Live state untouched: msg-1 still decrypts.
+    assert_eq!(bob.decrypt(&h1, &c1).unwrap(), b"a-1");
+}
+
+#[test]
+fn dh_ratchet_step_commits_only_when_first_new_chain_message_validates() {
+    // Alice and Bob have bootstrapped. Bob is about to ratchet to a new
+    // chain on Alice's next send (which happens once Alice receives a Bob
+    // message and rotates). To exercise the DH-ratchet commit path on
+    // Alice's side specifically: Bob sends, Alice receives.
+    let (mut alice, mut bob, _) = handshake();
+    // Snapshot a real Bob-to-Alice message we'll deliver later as proof.
+    let (h_b, c_b) = bob.encrypt(b"b-1");
+
+    // Forge a Bob-shaped envelope with a brand-new (random) ratchet_pub
+    // — pre-audit this triggered alice.dh_ratchet on the LIVE state, so
+    // when the real h_b/c_b followed, the chain was already past it and
+    // decryption silently failed.
+    let mut forged = vec![0u8; 60];
+    forged[0..32].copy_from_slice(&[0x42; 32]);
+    forged[32..36].copy_from_slice(&0u32.to_le_bytes());
+    forged[36..60].copy_from_slice(&[0x99; 24]);
+    let forged_ct = vec![0u8; 80];
+    let _ = alice.decrypt(&forged, &forged_ct); // expect Err; doesn't matter which
+
+    // The real Bob message must still decrypt cleanly.
+    assert_eq!(alice.decrypt(&h_b, &c_b).unwrap(), b"b-1");
+}
+
 // Helper: the ratchet APIs take &StaticSecret but SpendKey holds it behind
 // its `secret` field. Go through `clone` since StaticSecret is Clone-safe
 // and doesn't reveal material through `Debug`.

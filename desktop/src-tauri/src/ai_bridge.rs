@@ -637,20 +637,22 @@ async fn ollama_complete(
 // Claude Code) and counts against the user's Pro/Team subscription. We do
 // NOT touch tokens or auth state — that's Claude Code's domain.
 
-/// 16-byte hex fence token used to delimit role turns in the prompt
-/// payload sent to the Claude CLI subprocess. Regenerated per request so
-/// a hostile contact who guesses one fence can't reuse it on subsequent
-/// turns.
+/// 16-character hex fence token (64 bits of CSPRNG entropy) used to delimit
+/// role turns in the prompt payload sent to the Claude CLI subprocess.
+/// Regenerated per request so a hostile contact who guesses one fence can't
+/// reuse it on subsequent turns.
+///
+/// Audit 2026-05-30 (D-1): previously derived from
+/// `SystemTime::now().duration_since(UNIX_EPOCH).as_nanos()`. The nanos
+/// resolution exposes only ~10–20 bits of unpredictability against an
+/// attacker who can estimate when the message will be processed (an
+/// allow-listed contact already gets that for free — they triggered the
+/// reply). Switching to `OsRng` makes the fence guess space the full 2^64.
 fn random_fence_token() -> String {
-    use std::time::SystemTime;
+    use rand::rngs::OsRng;
+    use rand::RngCore;
     let mut buf = [0u8; 8];
-    let nanos = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    for (i, b) in buf.iter_mut().enumerate() {
-        *b = ((nanos >> (i * 8)) & 0xff) as u8;
-    }
+    OsRng.fill_bytes(&mut buf);
     hex::encode(buf)
 }
 

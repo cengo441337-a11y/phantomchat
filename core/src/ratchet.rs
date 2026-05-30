@@ -31,6 +31,29 @@
 //! and every new peer ratchet public observed during [`RatchetState::decrypt`]
 //! triggers a DH ratchet step. Compromising the current state does not
 //! reveal earlier plaintexts.
+//!
+//! ## Replay / out-of-order safety (audit 2026-05-30, R-1/R-2/R-3)
+//!
+//! The decrypt path is **transactional**: it stages every state mutation on
+//! a clone and only commits when the AEAD seal validates. That gives three
+//! properties at once:
+//!
+//! 1. **Replay** of a previously-decrypted ciphertext fails with
+//!    [`RatchetError::Replay`] *without* mutating the live state. Before
+//!    this rewrite, the receive-chain advanced on every call regardless of
+//!    AEAD outcome, so a single duplicate envelope permanently desynced the
+//!    session.
+//! 2. **Out-of-order** messages within a single sending chain are tolerated
+//!    via the [`RatchetState::skipped_keys`] cache (capped at [`MAX_SKIP`]
+//!    per chain and [`MAX_SKIPPED_KEYS`] in total). Senders can keep
+//!    pipelining without losing messages to natural reordering on the
+//!    relay tier.
+//! 3. **Attacker-controlled `peer_ratchet_pub`** can no longer DoS a
+//!    session: the DH ratchet step happens on the staged clone, so a
+//!    malformed envelope with a fresh-but-random peer_pub is discarded
+//!    along with the clone when its AEAD check fails.
+
+use std::collections::HashMap;
 
 use chacha20poly1305::{
     aead::{Aead, KeyInit as AeadKeyInit, Payload},
@@ -46,13 +69,35 @@ use x25519_dalek::{PublicKey, StaticSecret};
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Maximum number of message keys we'll derive eagerly when a peer counter
+/// runs ahead of our `recv_count` within a single sending chain. Cap
+/// prevents an attacker from forging a single envelope with a huge counter
+/// and forcing the receiver to do millions of HMACs.
+pub const MAX_SKIP: u32 = 1_000;
+
+/// Global cap on the size of the [`RatchetState::skipped_keys`] cache.
+/// Cross-chain plus within-chain entries share this budget. Oldest entries
+/// (insertion order) are evicted FIFO when the cap is exceeded.
+pub const MAX_SKIPPED_KEYS: usize = 4_000;
+
 /// Fehler, der bei der Ratchet‑Verarbeitung auftreten kann.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum RatchetError {
     #[error("Entschlüsselung fehlgeschlagen")]
     DecryptionFailed,
     #[error("Ungültiger Header")]
     InvalidHeader,
+    /// The header counter is less than `recv_count` for the matching chain
+    /// — i.e. either a re-delivery of an already-consumed envelope, or a
+    /// counter from a prior DH-chain whose key did not survive in the
+    /// [`RatchetState::skipped_keys`] cache.
+    #[error("Replay erkannt (counter bereits verarbeitet)")]
+    Replay,
+    /// The header counter is more than [`MAX_SKIP`] ahead of `recv_count`.
+    /// Either an attacker, a network with extreme reordering, or a sender
+    /// that pipelined too aggressively across a DH ratchet boundary.
+    #[error("zu viele Nachrichten in einer Kette übersprungen ({0})")]
+    TooMuchSkip(u32),
 }
 
 /// KDF für die Root-Kette (KDF-RK).
@@ -81,6 +126,9 @@ fn kdf_ck(ck: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
     (next_ck, msg_key)
 }
 
+/// Cache key for [`RatchetState::skipped_keys`]: `(peer_ratchet_pub, counter)`.
+type SkippedKeyId = ([u8; 32], u32);
+
 /// Zustand einer Double‑Ratchet‑Session.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RatchetState {
@@ -101,6 +149,20 @@ pub struct RatchetState {
     /// `recv_chain` is not yet keyed and [`decrypt`] will trigger the first
     /// DH ratchet step on any incoming peer key.
     recv_initialised: bool,
+
+    /// Cache of message keys for envelopes that arrived out of order, keyed
+    /// by `(peer_ratchet_pub, counter)`. Capped at [`MAX_SKIPPED_KEYS`]
+    /// total entries via FIFO eviction tracked in
+    /// [`RatchetState::skipped_order`]. Audit 2026-05-30 (R-1/R-2): without
+    /// this cache, a single dropped envelope between two consecutive sends
+    /// permanently broke the chain.
+    #[serde(default)]
+    skipped_keys: HashMap<SkippedKeyId, [u8; 32]>,
+
+    /// Insertion order of [`skipped_keys`]. Drives FIFO eviction once the
+    /// cache exceeds [`MAX_SKIPPED_KEYS`].
+    #[serde(default)]
+    skipped_order: Vec<SkippedKeyId>,
 }
 
 fn zero_secret() -> StaticSecret {
@@ -135,6 +197,8 @@ impl RatchetState {
             send_count: 0,
             recv_count: 0,
             recv_initialised: false,
+            skipped_keys: HashMap::new(),
+            skipped_order: Vec::new(),
         }
     }
 
@@ -179,6 +243,8 @@ impl RatchetState {
             send_count: 0,
             recv_count: 0,
             recv_initialised: true,
+            skipped_keys: HashMap::new(),
+            skipped_order: Vec::new(),
         }
     }
 
@@ -220,16 +286,26 @@ impl RatchetState {
         msg_key
     }
 
-    fn next_recv_key(&mut self) -> [u8; 32] {
-        let (next_ck, msg_key) = kdf_ck(&self.recv_chain);
-        self.recv_chain = next_ck;
-        self.recv_count += 1;
-        msg_key
+    /// Insert a skipped (chain, counter) → msg-key entry, evicting the
+    /// oldest entry FIFO if the cache exceeds [`MAX_SKIPPED_KEYS`]. Re-inserting
+    /// an already-cached key is a no-op (preserves insertion order).
+    fn insert_skipped(&mut self, peer_pub: [u8; 32], counter: u32, key: [u8; 32]) {
+        let id = (peer_pub, counter);
+        if self.skipped_keys.insert(id, key).is_none() {
+            self.skipped_order.push(id);
+            while self.skipped_order.len() > MAX_SKIPPED_KEYS {
+                let drop_id = self.skipped_order.remove(0);
+                self.skipped_keys.remove(&drop_id);
+            }
+        }
     }
 
     /// Encrypts a plaintext and returns `(ratchet_header, ciphertext)`.
     /// The header layout is `[32 B ratchet_pub][4 B counter][24 B nonce]`.
     pub fn encrypt(&mut self, plaintext: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        // Header carries the COUNTER OF THIS message (= send_count before
+        // we bump it), so we capture it before [`next_send_key`] increments.
+        let counter = self.send_count;
         let msg_key = self.next_send_key();
         let cipher = XChaCha20Poly1305::new(msg_key.as_slice().into());
 
@@ -240,7 +316,7 @@ impl RatchetState {
         let mut header = Vec::with_capacity(60);
         let own_pub = PublicKey::from(&self.ratchet_secret);
         header.extend_from_slice(own_pub.as_bytes());
-        header.extend_from_slice(&self.send_count.to_le_bytes());
+        header.extend_from_slice(&counter.to_le_bytes());
         header.extend_from_slice(&nonce_bytes);
 
         let ciphertext = cipher
@@ -250,8 +326,15 @@ impl RatchetState {
         (header, ciphertext)
     }
 
-    /// Decrypts a `(ratchet_header, ciphertext)` pair. Rotates the DH ratchet
-    /// if the header's ratchet-public differs from the currently tracked one.
+    /// Decrypts a `(ratchet_header, ciphertext)` pair.
+    ///
+    /// **Transactional**: every state change (skipped-key derivations,
+    /// DH-ratchet step, recv_chain advance, recv_count bump) is staged on a
+    /// local clone and committed atomically only after the AEAD seal
+    /// validates. A malformed / replayed / attacker-crafted envelope
+    /// therefore *cannot* desynchronise the session, even though the call
+    /// site sees an `Err`. See module-level docs for the threat model that
+    /// rewrite this fixes (audit 2026-05-30, R-1/R-2/R-3).
     pub fn decrypt(
         &mut self,
         header: &[u8],
@@ -264,21 +347,90 @@ impl RatchetState {
         let peer_pub_bytes: [u8; 32] = header[0..32]
             .try_into()
             .map_err(|_| RatchetError::InvalidHeader)?;
-        let peer_pub = PublicKey::from(peer_pub_bytes);
+        let counter = u32::from_le_bytes(
+            header[32..36]
+                .try_into()
+                .map_err(|_| RatchetError::InvalidHeader)?,
+        );
+        let nonce_bytes = &header[36..60];
 
-        if !self.recv_initialised || peer_pub.as_bytes() != &self.peer_ratchet_public {
-            self.dh_ratchet(peer_pub);
+        // ── Path 1: cached skipped key ────────────────────────────────────
+        // Out-of-order arrival of a previously-skipped envelope: the
+        // matching msg-key was derived (and stored) when a later-counter
+        // envelope in the same chain landed first. Use it and remove from
+        // the cache so a replay of the same skipped envelope still fails.
+        let cache_id = (peer_pub_bytes, counter);
+        if let Some(msg_key) = self.skipped_keys.get(&cache_id).copied() {
+            let cipher = XChaCha20Poly1305::new(msg_key.as_slice().into());
+            let plain = cipher
+                .decrypt(
+                    XNonce::from_slice(nonce_bytes),
+                    Payload { msg: ciphertext, aad: header },
+                )
+                .map_err(|_| RatchetError::DecryptionFailed)?;
+            // Authenticated — evict the consumed entry so a re-delivery is
+            // caught as Replay rather than silently re-accepted.
+            self.skipped_keys.remove(&cache_id);
+            self.skipped_order.retain(|k| k != &cache_id);
+            return Ok(plain);
         }
 
-        let msg_key = self.next_recv_key();
+        // ── Path 2: stage-on-clone, commit-on-AEAD-success ────────────────
+        let mut staged = self.clone();
+        // The Clone derive copies ratchet_secret_bytes but Clone-on
+        // StaticSecret is implemented as well (curve25519-dalek v4), so the
+        // staged secret is already usable without restore_secret.
+        let peer_pub = PublicKey::from(peer_pub_bytes);
+        let same_chain = staged.recv_initialised
+            && peer_pub.as_bytes() == &staged.peer_ratchet_public;
+
+        if !same_chain {
+            // New chain ⇒ DH ratchet step on the staged clone. If the
+            // ensuing AEAD fails (attacker-controlled peer_pub + random
+            // ciphertext), the clone is discarded and the live state stays
+            // pinned to the previous chain. Pre-audit, this step ran on
+            // the live state and made the session DoS-able by a single
+            // forged envelope.
+            staged.dh_ratchet(peer_pub);
+        }
+
+        // Replay / catch-up window inside the (possibly fresh) recv chain.
+        if counter < staged.recv_count {
+            return Err(RatchetError::Replay);
+        }
+        let skip_n = counter
+            .checked_sub(staged.recv_count)
+            .ok_or(RatchetError::Replay)?;
+        if skip_n > MAX_SKIP {
+            return Err(RatchetError::TooMuchSkip(skip_n));
+        }
+
+        // Derive (and stage) keys for any counters we're jumping over so
+        // the matching real envelopes can land later.
+        for k in staged.recv_count..counter {
+            let (next_ck, msg_key) = kdf_ck(&staged.recv_chain);
+            staged.recv_chain = next_ck;
+            staged.insert_skipped(peer_pub_bytes, k, msg_key);
+            staged.recv_count = k + 1;
+        }
+
+        // Derive *this* message's key (don't advance recv_chain yet —
+        // we only do that once AEAD validates).
+        let (next_ck, msg_key) = kdf_ck(&staged.recv_chain);
+
         let cipher = XChaCha20Poly1305::new(msg_key.as_slice().into());
+        let plain = cipher
+            .decrypt(
+                XNonce::from_slice(nonce_bytes),
+                Payload { msg: ciphertext, aad: header },
+            )
+            .map_err(|_| RatchetError::DecryptionFailed)?;
 
-        let nonce_bytes = &header[36..60];
-        let nonce = XNonce::from_slice(nonce_bytes);
-
-        cipher
-            .decrypt(nonce, Payload { msg: ciphertext, aad: header })
-            .map_err(|_| RatchetError::DecryptionFailed)
+        // ── Commit ────────────────────────────────────────────────────────
+        staged.recv_chain = next_ck;
+        staged.recv_count = counter.saturating_add(1);
+        *self = staged;
+        Ok(plain)
     }
 }
 
@@ -289,6 +441,7 @@ impl std::fmt::Debug for RatchetState {
             .field("send_count", &self.send_count)
             .field("recv_count", &self.recv_count)
             .field("recv_initialised", &self.recv_initialised)
+            .field("skipped_keys_count", &self.skipped_keys.len())
             .finish_non_exhaustive()
     }
 }
