@@ -1,20 +1,61 @@
 # PhantomChat
 
-> **Sovereign internal-comms messenger.** Quantum-safe E2E. Metadata-blind via Monero-style stealth-addressing. MLS group chat. Multi-relay redundant. Tor-mode. Tauri 2 desktop (Windows MSI), cyberpunk TUI, headless CLI. Built and offered by **DC INFOSEC** (`dc-infosec.de`) as the Slack/Email-replacement for German SMEs and law firms with hard secrecy obligations.
+> **Dezentraler, Post-Quantum-sicherer, metadatenarmer Messenger.** Keine Telefonnummer, kein Account, kein zentraler Server. Monero-Style Stealth-Adressen + Double Ratchet + ML-KEM-1024 + MLS-Gruppen — verpackt in ein Envelope-Format, das sich auf dem Wire nicht von Cover Traffic unterscheiden lässt. Rust-Core, Flutter-Android-App, Tauri-Desktop, headless CLI. Von **DC INFOSEC** ([dc-infosec.de](https://dc-infosec.de)).
 
 [![CI](https://github.com/cengo441337-a11y/phantomchat/actions/workflows/ci.yml/badge.svg)](https://github.com/cengo441337-a11y/phantomchat/actions/workflows/ci.yml)
-![Status](https://img.shields.io/badge/Status-v3.0.2-brightgreen)
+![Android](https://img.shields.io/badge/Android-v1.1.7-brightgreen)
+![Desktop](https://img.shields.io/badge/Desktop-v3.0.7-yellow)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![Crypto](https://img.shields.io/badge/Crypto-PQXDH_%2B_XChaCha20--Poly1305-red)
 ![PQ](https://img.shields.io/badge/Post--Quantum-ML--KEM--1024-blueviolet)
-![MLS](https://img.shields.io/badge/Groups-MLS_RFC_9420-brightgreen)
-![Desktop](https://img.shields.io/badge/Desktop-Tauri_2_%2B_React-blueviolet)
-![Network](https://img.shields.io/badge/Network-Multi--Relay_%2B_Auto--Reconnect_%2B_Tor-orange)
-![Tests](https://img.shields.io/badge/Tests-Selftest_30%2F30-success)
+![MLS](https://img.shields.io/badge/Groups-MLS_RFC_9420-success)
+![Tests](https://img.shields.io/badge/Tests-118_passing_%2B_selftest_30%2F30-success)
+![Relay](https://img.shields.io/badge/Relay-relay.dc--infosec.de-orange)
 
-**Dezentrales, Post-Quantum-sicheres, metadatenarmes Messaging.** Monero-Stealth-Adressen + Double Ratchet + ML-KEM-1024 + MLS-Gruppen + Onion-Mixnet + PSI-Contact-Discovery, wrapping in ein Envelope-Format das sich auf dem Wire nicht von Cover Traffic unterscheiden lässt.
+> **⚠️ Forschungsprojekt, nicht extern auditiert.** Der Krypto-Stack ist spec-implementiert und test-abgedeckt (118 Tests + 30/30 Selftest), aber **noch nicht extern auditiert**. Für High-Stakes-Einsatz (Aktivismus, Whistleblowing, journalistische Quellenarbeit) bitte auf den Audit warten. Kein Ersatz für Signal/Briar/Cwtch in lebenskritischen Szenarien.
 
-> **⚠️ Pre-Audit.** PhantomChat ist ein Forschungs- und Portfolio-Projekt von [DC INFOSEC](https://dc-infosec.de). Der Krypto-Stack ist spec-implementiert und integrationstest-abgedeckt, aber **nicht extern auditiert**. Für High-Stakes-Einsatz (Aktivismus, Whistleblowing, journalistische Quellenarbeit) bitte auf den Abschluss des Audits warten.
+## 📥 Download
+
+**Android (empfohlen, aktuell):** **[updates.dc-infosec.de/download](https://updates.dc-infosec.de/download/)** — signierte APK v1.1.7, Auto-Update eingebaut.
+**Desktop (Windows):** v3.0.7 auf derselben Seite. *(v3.0.8 mit den aktuellen Crypto-Fixes ist im Release-Prozess.)*
+
+## 📸 So sieht's aus
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/01-onboarding.png" width="200"/><br/><sub>Onboarding — lokale Identität</sub></td>
+    <td><img src="docs/screenshots/02-identity.png" width="200"/><br/><sub>Phantom-ID (keine Nummer)</sub></td>
+    <td><img src="docs/screenshots/06-pin.png" width="200"/><br/><sub>PIN + Panic-Wipe</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/03-contacts.png" width="200"/><br/><sub>Kontakte (E2E)</sub></td>
+    <td><img src="docs/screenshots/04-chat.png" width="200"/><br/><sub>Verschlüsselter Chat</sub></td>
+    <td><img src="docs/screenshots/05-settings.png" width="200"/><br/><sub>Einstellungen + Update</sub></td>
+  </tr>
+</table>
+
+## ✅ Was wirklich drin ist — und was (noch) nicht
+
+| Feature | Status | Anmerkung |
+|---|---|---|
+| **Krypto-Core** (Envelope, Double Ratchet, PQXDH) | ✅ funktioniert | 118 Tests grün, Selftest 30/30 |
+| **Post-Quantum** (ML-KEM-1024 + X25519 Hybrid) | ✅ funktioniert | Key-Exchange; Signaturen bleiben Ed25519 (klassisch) |
+| **Monero-Style Stealth-Adressen** | ✅ funktioniert | Relay kann Empfänger nicht zuordnen |
+| **MLS-Gruppen** (RFC 9420, openmls) | ✅ funktioniert | Ciphersuite klassisch (X25519+AES-128+Ed25519) |
+| **Sender-Keys-Gruppen** (Signal-Style) | ✅ funktioniert | für kleinere Gruppen |
+| **Android-App** (Flutter, v1.1.7) | ✅ läuft | signiert, Auto-Update, voll bedienbar |
+| **Nachrichten-Zustellung** (über eigenen Relay) | ✅ funktioniert | `wss://relay.dc-infosec.de`, 24/7 |
+| **Desktop-App** (Tauri 2, v3.0.7) | ✅ läuft | Code hat aktuelle Fixes; v3.0.8-Release pending |
+| **CLI** (keygen/send/listen/group/file/selftest) | ✅ funktioniert | headless, scriptbar |
+| **File-Transfer** (`.ptf`, SHA256-verifiziert) | ✅ funktioniert | byte-identischer Roundtrip getestet |
+| **Onion-Mixnet, PSI, Dandelion++, Cover-Traffic** | ✅ implementiert | im Core + Selftest |
+| **Tor-Stealth-Mode** (SOCKS5) | ✅ funktioniert | braucht lokalen Tor/Nym-Listener |
+| **Zustellung über public Nostr-Relays** | 🟡 unzuverlässig | droppen die tag-losen Stealth-Events → eigener Relay nötig (ist Default) |
+| **Desktop Auto-Update** | 🟡 in Arbeit | funktioniert erst wenn v3.0.8 released ist |
+| **Update-Manifest-Signatur** (Ed25519) | 🟡 Infrastruktur da | Signing-Key noch nicht generiert (HTTPS+SHA256+VersionCode greifen) |
+| **Externer Krypto-Audit** | ❌ ausstehend | für High-Stakes-Einsatz abwarten |
+| **iOS-App** | ❌ nicht gebaut | braucht Apple Developer Account |
+| **Voice→Text (STT, on-device)** | 🟡 Code da | hinter `stt`-Feature, in Release-Builds aus |
 
 ---
 
@@ -33,16 +74,18 @@ cargo build --release -p phantomchat_cli
 ./target/release/phantomchat_cli pair   -f alice.json
 
 # Send an encrypted message (classic or PQXDH hybrid, auto-detected from
-# the recipient address; the `phantom:` vs `phantomx:` prefix decides)
+# the recipient address; the `phantom:` vs `phantomx:` prefix decides).
+# Default relay is the project's own broadcast relay — public Nostr relays
+# drop PhantomChat's tag-less stealth events.
 ./target/release/phantomchat_cli send \
   -f alice.json \
   -r "phantom:<view_hex>:<spend_hex>" \
   -m "first ghost message" \
-  -u wss://relay.damus.io
+  -u wss://relay.dc-infosec.de
 
 # Listen for incoming envelopes (view-key stealth-scanning against every
 # envelope the relay broadcasts)
-./target/release/phantomchat_cli listen -f alice.json -u wss://relay.damus.io
+./target/release/phantomchat_cli listen -f alice.json -u wss://relay.dc-infosec.de
 
 # Switch to MaximumStealth (requires a local Tor / Nym SOCKS5 listener)
 ./target/release/phantomchat_cli mode stealth --proxy 127.0.0.1:9050
@@ -51,8 +94,9 @@ cargo build --release -p phantomchat_cli
 The full test suite runs without a network:
 
 ```bash
-cargo test --no-default-features --features net,mls
-# 64 tests across envelope, scanner, pow, ratchet, session, sealed sender,
+cargo test -p phantomchat_core --no-default-features --features net,mls
+# 118 tests across envelope, scanner, pow, ratchet (incl. replay /
+# out-of-order / cross-version regression tests), session, sealed sender,
 # hybrid PQXDH, fingerprint, prekey, group (Sender Keys), mixnet, PSI, MLS
 ```
 
