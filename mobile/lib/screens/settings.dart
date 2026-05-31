@@ -7,6 +7,7 @@ import '../services/app_lock_service.dart';
 import '../services/battery_opt_service.dart';
 import '../services/relay_service.dart';
 import '../services/update_service.dart';
+import '../services/update_state_store.dart';
 import '../theme.dart';
 import '../widgets/cyber_card.dart';
 import '../widgets/update_dialog.dart';
@@ -44,6 +45,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _version = '…';
   String _buildNumber = '';
   bool _checkingUpdate = false;
+  UpdateState _updateState = UpdateState.empty();
+  bool _runningBgCheck = false;
 
   @override
   void initState() {
@@ -58,6 +61,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       BatteryOptService.platformSupported(),
       BatteryOptService.isOptimizationDisabled(),
     ]);
+    final persisted = await UpdateStateStore.load();
     String version = '?';
     String build = '';
     try {
@@ -71,6 +75,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _bioAvailable             = results[1];
       _batteryPlatformSupported = results[2];
       _batteryOptDisabled       = results[3];
+      _updateState              = persisted;
       _version                  = version;
       _buildNumber              = build;
       _loading = false;
@@ -81,6 +86,186 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// but on demand from Settings so the user can pull the latest signed APK
   /// from updates.dc-infosec.de any time, not only when a banner happens to
   /// appear. Up-to-date / offline → a clear SnackBar instead of silence.
+  /// Run a fresh background check + write to UpdateStateStore.
+  /// Called from the always-visible "refresh" button next to the status
+  /// block and after the user dismisses the manual-check dialog.
+  Future<void> _runBackgroundCheck() async {
+    if (_runningBgCheck) return;
+    setState(() => _runningBgCheck = true);
+    try {
+      final state = await UpdateService.backgroundCheck();
+      if (!mounted) return;
+      setState(() {
+        _updateState = state;
+        _runningBgCheck = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _runningBgCheck = false);
+    }
+  }
+
+  Widget _updateStatusCard() {
+    final st = _updateState;
+    final manifestV = st.lastKnownManifestVersion ?? '—';
+    final manifestCode = st.lastKnownManifestCode;
+    final installedLabel = '$_version${_buildNumber.isNotEmpty ? "+$_buildNumber" : ""}';
+    final serverLabel = '$manifestV${manifestCode != null ? "+$manifestCode" : ""}';
+    final downloadUrl = st.lastKnownDownloadUrl
+        ?? 'https://updates.dc-infosec.de/download/app-arm64-v8a-release.apk';
+
+    Color statusColor;
+    IconData statusIcon;
+    String statusLabel;
+    switch (st.lastOutcome) {
+      case 'updateAvailable':
+        statusColor = kYellow;
+        statusIcon = Icons.system_update_alt;
+        statusLabel = 'Update verfügbar';
+        break;
+      case 'latest':
+        statusColor = kGreen;
+        statusIcon = Icons.check_circle_outline;
+        statusLabel = 'Aktuell';
+        break;
+      case 'unreachable':
+        statusColor = kMagenta;
+        statusIcon = Icons.cloud_off_outlined;
+        statusLabel = 'Server nicht erreichbar';
+        break;
+      default:
+        statusColor = kGrayText;
+        statusIcon = Icons.hourglass_empty;
+        statusLabel = 'Noch nicht geprüft';
+    }
+
+    return CyberCard(
+      borderColor: statusColor,
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(statusIcon, color: statusColor, size: 22),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(statusLabel,
+                    style: GoogleFonts.spaceGrotesk(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: statusColor)),
+              ),
+              GestureDetector(
+                onTap: _runningBgCheck ? null : _runBackgroundCheck,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: kCyan),
+                    color: kBgCard,
+                  ),
+                  child: _runningBgCheck
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                              color: kCyan, strokeWidth: 1.5))
+                      : Text('NEU PRÜFEN',
+                          style: GoogleFonts.orbitron(
+                              fontSize: 10,
+                              color: kCyan,
+                              letterSpacing: 2,
+                              fontWeight: FontWeight.w700)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _statusRow('Installiert', installedLabel, kWhite),
+          const SizedBox(height: 6),
+          _statusRow('Server', serverLabel,
+              statusColor == kGreen ? kWhite : statusColor),
+          const SizedBox(height: 6),
+          _statusRow('Zuletzt geprüft', st.formatChecked(), kWhiteDim),
+          if (st.lastErrorReason != null) ...[
+            const SizedBox(height: 8),
+            Text(st.lastErrorReason!,
+                style: GoogleFonts.spaceMono(
+                    fontSize: 10, color: kMagenta)),
+          ],
+          const SizedBox(height: 16),
+          GestureDetector(
+            onTap: () async {
+              await Clipboard.setData(ClipboardData(text: downloadUrl));
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text('Download-Link kopiert. Im Browser einfügen → APK installiert sich über die aktuelle App.',
+                    style: GoogleFonts.spaceMono(fontSize: 11, color: kCyan)),
+                backgroundColor: kBgCard,
+                duration: const Duration(seconds: 6),
+              ));
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: kBgCard,
+                border: Border.all(color: kCyan, width: 1.5),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.download, color: kCyan, size: 18),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('DIREKT-DOWNLOAD · FALLBACK',
+                            style: GoogleFonts.orbitron(
+                                fontSize: 10,
+                                color: kCyan,
+                                letterSpacing: 2,
+                                fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 2),
+                        Text(downloadUrl,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.spaceMono(
+                                fontSize: 9, color: kWhiteDim)),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.copy, color: kCyan, size: 16),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusRow(String label, String value, Color valueColor) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 110,
+          child: Text(label,
+              style: GoogleFonts.spaceMono(
+                  fontSize: 11, color: kWhiteDim)),
+        ),
+        Expanded(
+          child: Text(value,
+              style: GoogleFonts.spaceMono(
+                  fontSize: 12,
+                  color: valueColor,
+                  fontWeight: FontWeight.w700)),
+        ),
+      ],
+    );
+  }
+
   Future<void> _checkForUpdate() async {
     if (_checkingUpdate) return;
     setState(() => _checkingUpdate = true);
@@ -197,6 +382,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   // couldn't find it when it sat further down.
                   SizedBox(height: MediaQuery.of(context).viewPadding.top > 0 ? 0 : 8),
                   _sectionHeader('APP-UPDATE'),
+                  const SizedBox(height: 12),
+                  _updateStatusCard(),
                   const SizedBox(height: 12),
                   _updateCard(),
                   const SizedBox(height: 32),

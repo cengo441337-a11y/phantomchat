@@ -38,6 +38,8 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+
+import 'update_state_store.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// URL of the manifest JSON. Kept as a top-level const so a future build
@@ -192,7 +194,63 @@ class UpdateInfo {
 }
 
 class UpdateService {
-  /// Same trust chain as [checkForUpdate] but returns a [UpdateCheckResult]
+  /// Fire-and-forget version of [checkForUpdateRich] that persists the
+  /// outcome to [UpdateStateStore] so the UI can render an always-visible
+  /// "installed vX / server vY / last checked Z" status block without
+  /// hitting the network every rebuild.
+  ///
+  /// Returns the loaded [UpdateState] so callers (the home screen on
+  /// resume, the settings status block) can react immediately without
+  /// a second `UpdateStateStore.load()` round-trip.
+  static Future<UpdateState> backgroundCheck() async {
+    UpdateCheckResult? result;
+    try {
+      result = await checkForUpdateRich();
+    } catch (e) {
+      // Persist the failure so the UI sees "server unreachable" instead
+      // of stale "never checked".
+      final prior = await UpdateStateStore.load();
+      final state = UpdateState(
+        lastCheckedAtMs: DateTime.now().millisecondsSinceEpoch,
+        lastOutcome: 'unreachable',
+        lastKnownManifestVersion: prior.lastKnownManifestVersion,
+        lastKnownManifestCode: prior.lastKnownManifestCode,
+        lastKnownDownloadUrl: prior.lastKnownDownloadUrl,
+        lastErrorReason: e.toString(),
+      );
+      await UpdateStateStore.save(state);
+      return state;
+    }
+    final prior = await UpdateStateStore.load();
+    String outcome;
+    switch (result.outcome) {
+      case UpdateCheckOutcome.alreadyLatest:
+        outcome = 'latest';
+        break;
+      case UpdateCheckOutcome.updateAvailable:
+        outcome = 'updateAvailable';
+        break;
+      case UpdateCheckOutcome.manifestUnreachable:
+        outcome = 'unreachable';
+        break;
+    }
+    final state = UpdateState(
+      lastCheckedAtMs: DateTime.now().millisecondsSinceEpoch,
+      lastOutcome: outcome,
+      lastKnownManifestVersion:
+          result.manifestVersion ?? prior.lastKnownManifestVersion,
+      lastKnownManifestCode:
+          result.manifestCode ?? prior.lastKnownManifestCode,
+      lastKnownDownloadUrl:
+          result.info?.variant.url ?? prior.lastKnownDownloadUrl,
+      lastErrorReason:
+          outcome == 'unreachable' ? 'manifest verify or fetch failed' : null,
+    );
+    await UpdateStateStore.save(state);
+    return state;
+  }
+
+    /// Same trust chain as [checkForUpdate] but returns a [UpdateCheckResult]
   /// that distinguishes "already on latest" from "couldn't reach manifest".
   /// New surface; the old [checkForUpdate] is retained for the home-screen
   /// banner code that already builds on `UpdateInfo?`.

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -24,7 +25,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<PhantomContact> _contacts = [];
   PhantomIdentity? _identity;
   bool _loading = true;
@@ -46,6 +47,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
     _silentUpdateCheck();
   }
@@ -81,7 +83,44 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Header update-icon handler: if an update is known, open the install
   /// dialog directly; otherwise run a fresh manual check with visible
   /// feedback so the user knows the button actually did something.
-  Future<void> _onUpdateTap() async {
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // On resume we kick a fresh background-check so the home-screen banner
+    // can switch from "installed v1.2.X" to "update available v1.2.Y"
+    // without waiting for the user to tap. Also persists the outcome via
+    // UpdateStateStore so the next cold-start can render an immediate
+    // status without a network round-trip.
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_runBackgroundUpdateCheck());
+    }
+  }
+
+  Future<void> _runBackgroundUpdateCheck() async {
+    if (_checkingUpdate) return;
+    UpdateInfo? info;
+    try {
+      // Use the rich variant so persistence happens as a side effect.
+      final result = await UpdateService.backgroundCheck();
+      if (result.lastOutcome == 'updateAvailable') {
+        // Fetch the full info struct so the home banner can show notes.
+        info = await UpdateService.checkForUpdate();
+      }
+    } catch (_) {
+      info = null;
+    }
+    if (!mounted) return;
+    setState(() {
+      _update = info;
+    });
+  }
+
+    Future<void> _onUpdateTap() async {
     if (_update != null) {
       await showDialog<void>(
         context: context,
