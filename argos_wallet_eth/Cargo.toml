@@ -1,0 +1,45 @@
+[package]
+name = "argos_wallet_eth"
+version = "0.1.0"
+edition = "2021"
+description = "Ethereum (EVM) layer for Argos. BIP39 → secp256k1 keypair (m/44'/60'/0'/0/0) + JSON-RPC + ERC-20 transfers."
+
+[dependencies]
+# Same BIP39 we use for Solana so a restored mnemonic gives the user BOTH
+# wallets simultaneously without re-derivation flows.
+bip39 = "2.1"
+
+# secp256k1 for Ethereum key derivation. We don\'t use the BIP32 crate
+# (which would add 200 KB+ on Android); instead we implement the small
+# m/44\'/60\'/0\'/0/0 chain ourselves via hmac-sha512.
+secp256k1 = { version = "0.29", features = ["rand", "recovery", "global-context"] }
+hmac = "0.12"
+sha2 = "0.10"
+sha3 = "0.10"
+
+# RLP + keccak for transaction encoding.
+rlp = "0.5"
+
+# u256 arithmetic — no SIMD, no big extra deps.
+primitive-types = { version = "0.13", features = ["serde"] }
+
+# JSON-RPC client: we use reqwest directly (already pulled by argos_wallet)
+# instead of alloy/ethers — keeps the Android cdylib small and avoids the
+# tokio-runtime conflicts between alloy and the existing flutter_rust_bridge.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Same hex/zeroize patterns as the Solana crate so error handling looks
+# identical on the FFI side.
+hex = "0.4"
+zeroize = { version = "1.7", features = ["zeroize_derive"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[lib]
+name = "argos_wallet_eth"
+path = "src/lib.rs"

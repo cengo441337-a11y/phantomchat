@@ -37,6 +37,40 @@ use crate::{ArgosWallet, Error};
 /// callers that prefer working in lamports directly.
 pub const LAMPORTS_PER_SOL_CONST: u64 = LAMPORTS_PER_SOL;
 
+/// Argos send-fee in basis points (1 bp = 0.01 %). 50 = 0.5 %.
+///
+/// Applied to BOTH native SOL and SPL token transfers as a SECOND
+/// instruction in the same Solana transaction, so the receiver gets the
+/// full requested amount and the fee comes on top of the user-side balance.
+/// Below the [`MIN_SEND_FEE_LAMPORTS`] / [`MIN_SEND_FEE_TOKEN_BASE`] floor
+/// the floor wins so micro-transfers still contribute revenue and we don't
+/// waste compute on instructions whose data is a no-op.
+pub const SEND_FEE_BPS: u16 = 50;
+
+/// Floor for SOL-denominated sends: 0,0001 SOL = 100_000 lamports
+/// (~1 cent at $100/SOL). Any 0,5 % calculation below this floor is
+/// promoted to this minimum.
+pub const MIN_SEND_FEE_LAMPORTS: u64 = 100_000;
+
+/// Floor for SPL-token sends in raw token base units. We pick a
+/// decimal-6-friendly value (USDC, USDT both have 6 decimals) and use it
+/// 1:1 for all SPL transfers; a token with different decimals will see
+/// this floor mean different USD-equivalent amounts but that's an
+/// acceptable trade-off for code simplicity. 1_000 base units = 0.001
+/// USDC = ~0.1 cent.
+pub const MIN_SEND_FEE_TOKEN_BASE: u64 = 1_000;
+
+/// Computes the Argos send-fee for an amount in *some* base unit, applying
+/// the [`SEND_FEE_BPS`] percentage and clamping to the supplied floor.
+/// Saturates rather than panicking on absurd inputs.
+#[inline]
+pub fn argos_send_fee(amount: u64, floor: u64) -> u64 {
+    let pct = amount
+        .saturating_mul(SEND_FEE_BPS as u64)
+        / 10_000;
+    pct.max(floor)
+}
+
 /// One-shot RPC client built from the wallet's configured network. Each
 /// helper creates a fresh client so a long-lived `ArgosWallet` doesn't
 /// pin a TCP socket. For high-frequency callers, use `ArgosWallet::rpc()`
@@ -91,19 +125,37 @@ impl ArgosWallet {
     /// Send `lamports` of native SOL to `recipient`. Returns the confirmed
     /// transaction signature. Reverts on insufficient balance or invalid
     /// recipient.
+    ///
+    /// **Argos fee:** a second `system_instruction::transfer` runs in the
+    /// same Solana transaction and sends [`argos_send_fee`] of `lamports`
+    /// (0.5 % with a 100 000-lamport floor) to the treasury wallet
+    /// resolved via [`crate::swap::treasury_address`]. The recipient still
+    /// receives the full requested `lamports`; the sender's balance is
+    /// debited `lamports + fee + network_fee`. If the user lacks
+    /// `lamports + fee`, the tx fails the same way an insufficient-balance
+    /// would for a fee-less transfer.
     pub async fn send_sol(
         &self,
         recipient: &Pubkey,
         lamports: u64,
     ) -> Result<Signature, Error> {
         let rpc = self.rpc();
-        let ix = system_instruction::transfer(&self.pubkey(), recipient, lamports);
+        let treasury = crate::swap::treasury_address()?;
+        let fee_lamports = argos_send_fee(lamports, MIN_SEND_FEE_LAMPORTS);
+        let ix_transfer =
+            system_instruction::transfer(&self.pubkey(), recipient, lamports);
+        let ix_fee =
+            system_instruction::transfer(&self.pubkey(), &treasury, fee_lamports);
         let blockhash = rpc
             .get_latest_blockhash()
             .await
             .map_err(|e| Error::Rpc(e.to_string()))?;
         let kp = self.keypair_for_signing();
-        let msg = Message::new_with_blockhash(&[ix], Some(&self.pubkey()), &blockhash);
+        let msg = Message::new_with_blockhash(
+            &[ix_transfer, ix_fee],
+            Some(&self.pubkey()),
+            &blockhash,
+        );
         let tx = Transaction::new(&[&kp], msg, blockhash);
         rpc.send_and_confirm_transaction(&tx)
             .await
@@ -113,6 +165,14 @@ impl ArgosWallet {
     /// Send `amount` raw units of an SPL token mint to `recipient`.
     /// Auto-creates the recipient's Associated Token Account if missing
     /// (sender pays ~0.002 SOL rent).
+    ///
+    /// **Argos fee:** a second `spl_token::transfer` in the same Solana
+    /// transaction routes [`argos_send_fee`] of `amount` (0.5 % with a
+    /// 1 000-base-unit floor) to the treasury wallet's ATA on this mint.
+    /// If the treasury has no ATA for this mint yet we add a
+    /// `create_associated_token_account_idempotent` for it as well —
+    /// rent paid by the sender. The recipient still receives the full
+    /// requested `amount`.
     pub async fn send_spl(
         &self,
         mint: &Pubkey,
@@ -121,16 +181,18 @@ impl ArgosWallet {
     ) -> Result<Signature, Error> {
         let rpc = self.rpc();
         let sender = self.pubkey();
+        let treasury = crate::swap::treasury_address()?;
         let sender_ata =
             spl_associated_token_account::get_associated_token_address(&sender, mint);
         let recipient_ata =
             spl_associated_token_account::get_associated_token_address(recipient, mint);
+        let treasury_ata =
+            spl_associated_token_account::get_associated_token_address(&treasury, mint);
+        let fee_amount = argos_send_fee(amount, MIN_SEND_FEE_TOKEN_BASE);
 
-        let mut ixs: Vec<Instruction> = Vec::with_capacity(2);
+        let mut ixs: Vec<Instruction> = Vec::with_capacity(4);
 
-        // If recipient has no ATA yet, create one in the same tx. Idempotent
-        // create-or-skip via the "idempotent" variant — cheaper RPC round-trip
-        // than first probing get_account_info.
+        // Recipient ATA (idempotent).
         ixs.push(
             spl_associated_token_account::instruction::create_associated_token_account_idempotent(
                 &sender,
@@ -140,12 +202,18 @@ impl ArgosWallet {
             ),
         );
 
-        // SPL transfer instruction. Note: spl_token::instruction::transfer
-        // is documented-deprecated in favour of transfer_checked, but the
-        // legacy variant is what every existing Solana wallet emits and the
-        // recipient indexers (Helius, Solscan) display correctly. We use
-        // transfer_checked-style decimals check via the mint account when
-        // we render the UX-side amount, not on-chain.
+        // Treasury ATA (idempotent). One-time rent per (treasury, mint)
+        // pair; subsequent sends of the same mint are no-ops.
+        ixs.push(
+            spl_associated_token_account::instruction::create_associated_token_account_idempotent(
+                &sender,
+                &treasury,
+                mint,
+                &spl_token::ID,
+            ),
+        );
+
+        // Transfer to recipient.
         ixs.push(
             spl_token::instruction::transfer(
                 &spl_token::ID,
@@ -156,6 +224,19 @@ impl ArgosWallet {
                 amount,
             )
             .map_err(|e| Error::Rpc(format!("spl transfer ix: {e}")))?,
+        );
+
+        // Argos fee transfer to treasury ATA.
+        ixs.push(
+            spl_token::instruction::transfer(
+                &spl_token::ID,
+                &sender_ata,
+                &treasury_ata,
+                &sender,
+                &[],
+                fee_amount,
+            )
+            .map_err(|e| Error::Rpc(format!("spl fee ix: {e}")))?,
         );
 
         let blockhash = rpc
@@ -201,6 +282,29 @@ pub fn parse_address(s: &str) -> Result<Pubkey, Error> {
 mod tests {
     use super::*;
     use crate::Network;
+
+    #[test]
+    fn argos_send_fee_uses_floor_for_small_amounts() {
+        // 0.5 % of 100_000 lamports = 500 lamports, below the floor.
+        let fee = argos_send_fee(100_000, MIN_SEND_FEE_LAMPORTS);
+        assert_eq!(fee, MIN_SEND_FEE_LAMPORTS);
+    }
+
+    #[test]
+    fn argos_send_fee_uses_percentage_for_large_amounts() {
+        // 0.5 % of 1 SOL = 5_000_000 lamports.
+        let fee = argos_send_fee(LAMPORTS_PER_SOL_CONST, MIN_SEND_FEE_LAMPORTS);
+        assert_eq!(fee, 5_000_000);
+        assert!(fee > MIN_SEND_FEE_LAMPORTS);
+    }
+
+    #[test]
+    fn argos_send_fee_does_not_panic_on_overflow_inputs() {
+        // u64::MAX * 50 bps would overflow; saturating multiply means
+        // we get u64::MAX / 10_000, not a panic.
+        let fee = argos_send_fee(u64::MAX, MIN_SEND_FEE_LAMPORTS);
+        assert!(fee > 0);
+    }
 
     #[tokio::test]
     #[ignore = "hits live Solana Devnet RPC; run with --ignored when online"]

@@ -5,6 +5,7 @@ members = [
     "relays",
     "desktop/src-tauri",
     "tools/phantom-build-org-msi",
-    "argos_wallet"
+    "argos_wallet",
+    "argos_wallet_eth",
 ]
 resolver = "2"
