@@ -93,8 +93,11 @@ MANIFEST
 echo "[publish] 3/6 updating sha256 sidecar…"
 ssh hostinger "echo '$SHA_ARM64  app-arm64-v8a-release.apk' > /var/www/updates/download/PhantomChat_latest_android.apk.sha256"
 
-echo "[publish] 4/6 bumping download landing-page version label…"
-ssh hostinger "sed -i -E 's|ANDROID · APK · v[0-9]+\\.[0-9]+\\.[0-9]+|ANDROID · APK · v$VERSION|g; s|<strong>Aktuell:</strong> v[0-9]+\\.[0-9]+\\.[0-9]+|<strong>Aktuell:</strong> v$VERSION|g' /var/www/updates/download/index.html"
+echo "[publish] 4/6 bumping download landing-page Android version label (marker-based)…"
+# Marker-based: only the <!--ANDROID-VERSION-->vX<!--/ANDROID-VERSION--> blocks
+# get rewritten. Windows has its own marker (<!--WINDOWS-VERSION-->) that the
+# windows release pipeline owns, so an android publish never clobbers it.
+ssh hostinger "sed -i -E 's|<!--ANDROID-VERSION-->v[0-9]+\.[0-9]+\.[0-9]+<!--/ANDROID-VERSION-->|<!--ANDROID-VERSION-->v$VERSION<!--/ANDROID-VERSION-->|g' /var/www/updates/download/index.html"
 
 echo "[publish] 5/6 bumping pylonyx version constants…"
 ssh hostinger "for f in /root/pylonyx/web/app/argos/success/page.tsx /root/pylonyx/web/app/argos/buy/page.tsx /root/pylonyx/web/components/ArgosSection.tsx /root/pylonyx/web/lib/argos.ts /root/pylonyx/web/app/api/argos/download/route.ts; do sed -i -E 's|1\\.[12]\\.[0-9]+|$VERSION|g' \$f; done; cd /root/pylonyx/web && timeout 180 npm run build > /tmp/pylonyx-rebuild.log 2>&1 && pm2 restart pylonyx-web && echo pylonyx restarted || cat /tmp/pylonyx-rebuild.log | tail -10"
