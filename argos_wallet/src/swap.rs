@@ -61,7 +61,10 @@ pub const PLATFORM_FEE_BPS: u16 = 50;
 /// Jupiter API will reject for real fees if PLATFORM_FEE_BPS > 0 against
 /// an unowned ATA — defence-in-depth so a half-baked dev build never
 /// accidentally routes real fees to a wrong owner.
-pub const TREASURY_WALLET_PLACEHOLDER: &str = "11111111111111111111111111111112";
+pub const TREASURY_WALLET_DEFAULT: &str = "86Kt31jCCdmL2DMxijKHjEZboC3HWXm2aSdRsJy8kERU";
+
+/// Backwards-compat alias for code that still references the placeholder name.
+pub use self::TREASURY_WALLET_DEFAULT as TREASURY_WALLET_PLACEHOLDER;
 
 /// Jupiter v6 base URL. Const for the swap layer so a malicious dep
 /// version can't quietly point us at a fork.
