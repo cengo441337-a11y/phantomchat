@@ -49,3 +49,19 @@ rand = "0.8"
 # constructor we feed back into core::mls::load_group. Forwarded behind the
 # `mls` feature so a non-MLS build doesn't pay the openmls compile cost.
 openmls = { version = "0.8", optional = true }
+
+# Argos Wallet (Phase 2 — FFI bridge for the upcoming rebrand). Pulls in
+# the full Solana SDK + SPL + Jupiter HTTP client. Adds ~5 MB to the cdylib
+# but is the only way to ship a non-custodial wallet without a separate
+# Dart-side crypto implementation.
+argos_wallet = { path = "../../argos_wallet" }
+solana-sdk = "2.0"
+solana-client = "2.0"
+spl-associated-token-account = { version = "4", features = ["no-entrypoint"] }
+
+
+# Force openssl-sys to build OpenSSL from source (vendored) so the Android
+# cross-compile does not need a system-libssl. solana-secp256r1-program
+# transitively pulls openssl; without vendored we hit OPENSSL_DIR not set.
+openssl = { version = "0.10", features = ["vendored"] }
+

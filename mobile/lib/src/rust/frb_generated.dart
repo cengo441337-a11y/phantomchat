@@ -4,6 +4,7 @@
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
 import 'api.dart';
+import 'api/wallet.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'frb_generated.dart';
@@ -64,7 +65,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 1074652651;
+  int get rustContentHash => 183394523;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -76,6 +77,62 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
+  Future<BigInt> crateApiWalletArgosBalanceSol();
+
+  Future<BigInt> crateApiWalletArgosBalanceToken({required String mintB58});
+
+  Future<ArgosWalletInfo> crateApiWalletArgosCreateWallet({
+    required String network,
+    required String pin,
+    required String storagePath,
+  });
+
+  Future<String> crateApiWalletArgosDevnetAirdropOneSol();
+
+  Future<String> crateApiWalletArgosExecuteSwap();
+
+  Future<void> crateApiWalletArgosLockWallet();
+
+  Future<ArgosSwapPreview> crateApiWalletArgosQuoteSwap({
+    required String inputMintB58,
+    required String outputMintB58,
+    required BigInt amountIn,
+    required int slippageBps,
+  });
+
+  Future<ArgosWalletInfo> crateApiWalletArgosRestoreWallet({
+    required String mnemonic,
+    required String network,
+    required String pin,
+    required String storagePath,
+  });
+
+  Future<String> crateApiWalletArgosSendSol({
+    required String recipientB58,
+    required BigInt lamports,
+  });
+
+  Future<String> crateApiWalletArgosSendToken({
+    required String mintB58,
+    required String recipientB58,
+    required BigInt amount,
+  });
+
+  Future<ArgosSwapAndSendOutcome> crateApiWalletArgosSwapAndSend({
+    required String recipientB58,
+  });
+
+  Future<String> crateApiWalletArgosUnlockWallet({
+    required String pin,
+    required String storagePath,
+  });
+
+  String crateApiWalletArgosValidateAddress({required String s});
+
+  String? crateApiWalletArgosWalletNetwork();
+
+  String? crateApiWalletArgosWalletPubkey();
+
   String crateApiGeneratePhantomId();
 
   String crateApiGetPrivacyMode();
@@ -190,12 +247,475 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
+  Future<BigInt> crateApiWalletArgosBalanceSol() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 1,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_u_64,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWalletArgosBalanceSolConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletArgosBalanceSolConstMeta =>
+      const TaskConstMeta(debugName: "argos_balance_sol", argNames: []);
+
+  @override
+  Future<BigInt> crateApiWalletArgosBalanceToken({required String mintB58}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(mintB58, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 2,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_u_64,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWalletArgosBalanceTokenConstMeta,
+        argValues: [mintB58],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletArgosBalanceTokenConstMeta =>
+      const TaskConstMeta(
+        debugName: "argos_balance_token",
+        argNames: ["mintB58"],
+      );
+
+  @override
+  Future<ArgosWalletInfo> crateApiWalletArgosCreateWallet({
+    required String network,
+    required String pin,
+    required String storagePath,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(network, serializer);
+          sse_encode_String(pin, serializer);
+          sse_encode_String(storagePath, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 3,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_argos_wallet_info,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWalletArgosCreateWalletConstMeta,
+        argValues: [network, pin, storagePath],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletArgosCreateWalletConstMeta =>
+      const TaskConstMeta(
+        debugName: "argos_create_wallet",
+        argNames: ["network", "pin", "storagePath"],
+      );
+
+  @override
+  Future<String> crateApiWalletArgosDevnetAirdropOneSol() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 4,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWalletArgosDevnetAirdropOneSolConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletArgosDevnetAirdropOneSolConstMeta =>
+      const TaskConstMeta(
+        debugName: "argos_devnet_airdrop_one_sol",
+        argNames: [],
+      );
+
+  @override
+  Future<String> crateApiWalletArgosExecuteSwap() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 5,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWalletArgosExecuteSwapConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletArgosExecuteSwapConstMeta =>
+      const TaskConstMeta(debugName: "argos_execute_swap", argNames: []);
+
+  @override
+  Future<void> crateApiWalletArgosLockWallet() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 6,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWalletArgosLockWalletConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletArgosLockWalletConstMeta =>
+      const TaskConstMeta(debugName: "argos_lock_wallet", argNames: []);
+
+  @override
+  Future<ArgosSwapPreview> crateApiWalletArgosQuoteSwap({
+    required String inputMintB58,
+    required String outputMintB58,
+    required BigInt amountIn,
+    required int slippageBps,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(inputMintB58, serializer);
+          sse_encode_String(outputMintB58, serializer);
+          sse_encode_u_64(amountIn, serializer);
+          sse_encode_u_16(slippageBps, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 7,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_argos_swap_preview,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWalletArgosQuoteSwapConstMeta,
+        argValues: [inputMintB58, outputMintB58, amountIn, slippageBps],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletArgosQuoteSwapConstMeta =>
+      const TaskConstMeta(
+        debugName: "argos_quote_swap",
+        argNames: ["inputMintB58", "outputMintB58", "amountIn", "slippageBps"],
+      );
+
+  @override
+  Future<ArgosWalletInfo> crateApiWalletArgosRestoreWallet({
+    required String mnemonic,
+    required String network,
+    required String pin,
+    required String storagePath,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(mnemonic, serializer);
+          sse_encode_String(network, serializer);
+          sse_encode_String(pin, serializer);
+          sse_encode_String(storagePath, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 8,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_argos_wallet_info,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWalletArgosRestoreWalletConstMeta,
+        argValues: [mnemonic, network, pin, storagePath],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletArgosRestoreWalletConstMeta =>
+      const TaskConstMeta(
+        debugName: "argos_restore_wallet",
+        argNames: ["mnemonic", "network", "pin", "storagePath"],
+      );
+
+  @override
+  Future<String> crateApiWalletArgosSendSol({
+    required String recipientB58,
+    required BigInt lamports,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(recipientB58, serializer);
+          sse_encode_u_64(lamports, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 9,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWalletArgosSendSolConstMeta,
+        argValues: [recipientB58, lamports],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletArgosSendSolConstMeta => const TaskConstMeta(
+    debugName: "argos_send_sol",
+    argNames: ["recipientB58", "lamports"],
+  );
+
+  @override
+  Future<String> crateApiWalletArgosSendToken({
+    required String mintB58,
+    required String recipientB58,
+    required BigInt amount,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(mintB58, serializer);
+          sse_encode_String(recipientB58, serializer);
+          sse_encode_u_64(amount, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 10,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWalletArgosSendTokenConstMeta,
+        argValues: [mintB58, recipientB58, amount],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletArgosSendTokenConstMeta =>
+      const TaskConstMeta(
+        debugName: "argos_send_token",
+        argNames: ["mintB58", "recipientB58", "amount"],
+      );
+
+  @override
+  Future<ArgosSwapAndSendOutcome> crateApiWalletArgosSwapAndSend({
+    required String recipientB58,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(recipientB58, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 11,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_argos_swap_and_send_outcome,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWalletArgosSwapAndSendConstMeta,
+        argValues: [recipientB58],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletArgosSwapAndSendConstMeta =>
+      const TaskConstMeta(
+        debugName: "argos_swap_and_send",
+        argNames: ["recipientB58"],
+      );
+
+  @override
+  Future<String> crateApiWalletArgosUnlockWallet({
+    required String pin,
+    required String storagePath,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(pin, serializer);
+          sse_encode_String(storagePath, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 12,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWalletArgosUnlockWalletConstMeta,
+        argValues: [pin, storagePath],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletArgosUnlockWalletConstMeta =>
+      const TaskConstMeta(
+        debugName: "argos_unlock_wallet",
+        argNames: ["pin", "storagePath"],
+      );
+
+  @override
+  String crateApiWalletArgosValidateAddress({required String s}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(s, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWalletArgosValidateAddressConstMeta,
+        argValues: [s],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletArgosValidateAddressConstMeta =>
+      const TaskConstMeta(debugName: "argos_validate_address", argNames: ["s"]);
+
+  @override
+  String? crateApiWalletArgosWalletNetwork() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiWalletArgosWalletNetworkConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletArgosWalletNetworkConstMeta =>
+      const TaskConstMeta(debugName: "argos_wallet_network", argNames: []);
+
+  @override
+  String? crateApiWalletArgosWalletPubkey() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 15)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiWalletArgosWalletPubkeyConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWalletArgosWalletPubkeyConstMeta =>
+      const TaskConstMeta(debugName: "argos_wallet_pubkey", argNames: []);
+
+  @override
   String crateApiGeneratePhantomId() {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 1)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -217,7 +737,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 2)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -247,7 +767,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 3,
+            funcId: 18,
             port: port_,
           );
         },
@@ -277,7 +797,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 19,
             port: port_,
           );
         },
@@ -309,7 +829,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 20,
             port: port_,
           );
         },
@@ -345,7 +865,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 21,
             port: port_,
           );
         },
@@ -384,7 +904,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 22,
             port: port_,
           );
         },
@@ -424,7 +944,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 23,
             port: port_,
           );
         },
@@ -452,7 +972,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 24,
             port: port_,
           );
         },
@@ -479,7 +999,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 25,
             port: port_,
           );
         },
@@ -513,7 +1033,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 26,
             port: port_,
           );
         },
@@ -543,7 +1063,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 27,
             port: port_,
           );
         },
@@ -567,7 +1087,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 28)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_bool,
@@ -597,7 +1117,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 29,
             port: port_,
           );
         },
@@ -627,7 +1147,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 30,
             port: port_,
           );
         },
@@ -656,7 +1176,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 31,
             port: port_,
           );
         },
@@ -680,7 +1200,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 32)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_u_32,
@@ -705,7 +1225,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 33,
             port: port_,
           );
         },
@@ -729,7 +1249,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 34)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_opt_String,
@@ -754,7 +1274,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 35,
             port: port_,
           );
         },
@@ -784,7 +1304,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 36,
             port: port_,
           );
         },
@@ -816,7 +1336,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 37,
             port: port_,
           );
         },
@@ -847,7 +1367,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 38,
             port: port_,
           );
         },
@@ -878,7 +1398,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 39,
             port: port_,
           );
         },
@@ -910,7 +1430,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 40,
             port: port_,
           );
         },
@@ -942,7 +1462,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 41,
             port: port_,
           );
         },
@@ -977,7 +1497,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 42,
             port: port_,
           );
         },
@@ -1011,7 +1531,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 43,
             port: port_,
           );
         },
@@ -1047,7 +1567,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 29,
+            funcId: 44,
             port: port_,
           );
         },
@@ -1080,7 +1600,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(modeStr, serializer);
           sse_encode_opt_String(proxyAddr, serializer);
           sse_encode_bool(useNym, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 30)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 45)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -1108,7 +1628,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 31,
+            funcId: 46,
             port: port_,
           );
         },
@@ -1130,6 +1650,50 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   String dco_decode_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as String;
+  }
+
+  @protected
+  ArgosSwapAndSendOutcome dco_decode_argos_swap_and_send_outcome(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return ArgosSwapAndSendOutcome(
+      signatureB58: dco_decode_String(arr[0]),
+      recipientAtaB58: dco_decode_String(arr[1]),
+      outputMintB58: dco_decode_String(arr[2]),
+      amountOutExpected: dco_decode_u_64(arr[3]),
+    );
+  }
+
+  @protected
+  ArgosSwapPreview dco_decode_argos_swap_preview(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 7)
+      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
+    return ArgosSwapPreview(
+      amountIn: dco_decode_u_64(arr[0]),
+      amountOutMin: dco_decode_u_64(arr[1]),
+      amountOutExpected: dco_decode_u_64(arr[2]),
+      platformFeeOut: dco_decode_u_64(arr[3]),
+      routeLabel: dco_decode_String(arr[4]),
+      slippageBps: dco_decode_u_16(arr[5]),
+      outputMintB58: dco_decode_String(arr[6]),
+    );
+  }
+
+  @protected
+  ArgosWalletInfo dco_decode_argos_wallet_info(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return ArgosWalletInfo(
+      pubkeyB58: dco_decode_String(arr[0]),
+      mnemonic: dco_decode_String(arr[1]),
+      network: dco_decode_String(arr[2]),
+    );
   }
 
   @protected
@@ -1253,9 +1817,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  int dco_decode_u_16(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
+  }
+
+  @protected
   int dco_decode_u_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
+  }
+
+  @protected
+  BigInt dco_decode_u_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dcoDecodeU64(raw);
   }
 
   @protected
@@ -1275,6 +1851,57 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_list_prim_u_8_strict(deserializer);
     return utf8.decoder.convert(inner);
+  }
+
+  @protected
+  ArgosSwapAndSendOutcome sse_decode_argos_swap_and_send_outcome(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_signatureB58 = sse_decode_String(deserializer);
+    var var_recipientAtaB58 = sse_decode_String(deserializer);
+    var var_outputMintB58 = sse_decode_String(deserializer);
+    var var_amountOutExpected = sse_decode_u_64(deserializer);
+    return ArgosSwapAndSendOutcome(
+      signatureB58: var_signatureB58,
+      recipientAtaB58: var_recipientAtaB58,
+      outputMintB58: var_outputMintB58,
+      amountOutExpected: var_amountOutExpected,
+    );
+  }
+
+  @protected
+  ArgosSwapPreview sse_decode_argos_swap_preview(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_amountIn = sse_decode_u_64(deserializer);
+    var var_amountOutMin = sse_decode_u_64(deserializer);
+    var var_amountOutExpected = sse_decode_u_64(deserializer);
+    var var_platformFeeOut = sse_decode_u_64(deserializer);
+    var var_routeLabel = sse_decode_String(deserializer);
+    var var_slippageBps = sse_decode_u_16(deserializer);
+    var var_outputMintB58 = sse_decode_String(deserializer);
+    return ArgosSwapPreview(
+      amountIn: var_amountIn,
+      amountOutMin: var_amountOutMin,
+      amountOutExpected: var_amountOutExpected,
+      platformFeeOut: var_platformFeeOut,
+      routeLabel: var_routeLabel,
+      slippageBps: var_slippageBps,
+      outputMintB58: var_outputMintB58,
+    );
+  }
+
+  @protected
+  ArgosWalletInfo sse_decode_argos_wallet_info(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_pubkeyB58 = sse_decode_String(deserializer);
+    var var_mnemonic = sse_decode_String(deserializer);
+    var var_network = sse_decode_String(deserializer);
+    return ArgosWalletInfo(
+      pubkeyB58: var_pubkeyB58,
+      mnemonic: var_mnemonic,
+      network: var_network,
+    );
   }
 
   @protected
@@ -1429,9 +2056,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  int sse_decode_u_16(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getUint16();
+  }
+
+  @protected
   int sse_decode_u_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint32();
+  }
+
+  @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getBigUint64();
   }
 
   @protected
@@ -1455,6 +2094,44 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_String(String self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(utf8.encoder.convert(self), serializer);
+  }
+
+  @protected
+  void sse_encode_argos_swap_and_send_outcome(
+    ArgosSwapAndSendOutcome self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.signatureB58, serializer);
+    sse_encode_String(self.recipientAtaB58, serializer);
+    sse_encode_String(self.outputMintB58, serializer);
+    sse_encode_u_64(self.amountOutExpected, serializer);
+  }
+
+  @protected
+  void sse_encode_argos_swap_preview(
+    ArgosSwapPreview self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_64(self.amountIn, serializer);
+    sse_encode_u_64(self.amountOutMin, serializer);
+    sse_encode_u_64(self.amountOutExpected, serializer);
+    sse_encode_u_64(self.platformFeeOut, serializer);
+    sse_encode_String(self.routeLabel, serializer);
+    sse_encode_u_16(self.slippageBps, serializer);
+    sse_encode_String(self.outputMintB58, serializer);
+  }
+
+  @protected
+  void sse_encode_argos_wallet_info(
+    ArgosWalletInfo self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.pubkeyB58, serializer);
+    sse_encode_String(self.mnemonic, serializer);
+    sse_encode_String(self.network, serializer);
   }
 
   @protected
@@ -1609,9 +2286,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_u_16(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putUint16(self);
+  }
+
+  @protected
   void sse_encode_u_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint32(self);
+  }
+
+  @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putBigUint64(self);
   }
 
   @protected

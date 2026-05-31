@@ -26,7 +26,7 @@ ndk_args=()
 for abi in "${ABIS[@]}"; do ndk_args+=("-t" "$abi"); done
 cargo ndk "${ndk_args[@]}" \
     -o "$REPO_ROOT/mobile/android/app/src/main/jniLibs" \
-    build "$([ "$MODE" = release ] && echo --release)"
+    build $([ "$MODE" = release ] && echo --release)
 # phantomchat_core is statically linked into libphantomchat_mobile.so
 # via the wrapper crate's dep; we don't need (and shouldn't ship) a
 # separate libphantomchat_core.so. Also strip transient cargo-ndk debris.
