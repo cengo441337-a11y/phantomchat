@@ -5,6 +5,105 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.2.1] — 2026-05-31 — Argos Wallet Treasury auf produktive Solana-Adresse
+
+Followup zu 1.2.0: Treasury von all-ones-Placeholder auf die
+Founder-Solana-Adresse `86Kt31…kERU` (MetaMask Solana-Snap, Kleingewerbe-
+Phase). Switch auf Ledger Cold-Storage geplant sobald UG steht; der
+`ARGOS_TREASURY_WALLET`-Env-Override bleibt für genau diesen Pfad.
+
+### Mobile (Flutter)
+- `pubspec.yaml`: 1.2.0+23 → 1.2.1+24
+- Keine UI-Änderungen — Update ist rein Backend-seitig im Wallet-Crate.
+
+### argos_wallet (Rust)
+- `TREASURY_WALLET_DEFAULT` ersetzt `TREASURY_WALLET_PLACEHOLDER` als
+  kanonischen Konstantenname; Legacy-Name bleibt als `pub use` Alias
+  damit externe Importer kompatibel bleiben.
+- 9 Unit-Tests grün, clippy clean.
+
+---
+
+## [1.2.0] — 2026-05-31 — Argos Wallet — non-custodial Solana + Jupiter v6 + Auto-Swap-on-Send
+
+Erstes Major-Release nach dem Crypto-Sicherheits-Track. Argos Wallet ist
+jetzt eingebaut: nicht-verwahrend, BIP39-Recovery, Argon2id-PIN, Solana
+SDK 2.0, Jupiter v6 Quote+Swap, und das Killer-Feature
+**Auto-Swap-on-Send** — Swap + Transfer in einer einzigen atomaren
+Solana-Transaktion. Niemand im Messenger-Space hat das heute.
+
+### Neue Crate: `argos_wallet/`
+- BIP39 24-Wort Mnemonic + Solana keypair-Derivation (Phantom/Backpack-
+  kompatibel: bip39-seed[..32] → ed25519, kein SLIP-0010 für MVP).
+- Argon2id (OWASP 2023: m=64 MiB, t=3, p=4) → XChaCha20-Poly1305 AEAD
+  verschlüsselt den Keypair auf Disk. Wrong-PIN ist als expliziter
+  `Error::WrongPin` ausweisbar damit die UI ein klares "falsche PIN"
+  rendern kann.
+- `Keypair`-Bytes in `Zeroizing<[u8; 64]>`; manueller `Debug` impl
+  zeigt nur Pubkey + Network, niemals den Secret.
+- `send_sol` / `send_spl` / `balance_lamports` / `balance_spl` + ATA-
+  Auto-Create für unbekannte Empfänger.
+- `quote_swap` + `swap` gegen Jupiter v6 (`api.jup.ag/swap/v1`),
+  Platform-Fee 50 bps automatisch eingerouted.
+- **`swap_and_send` Killer-Feature**: kombiniert `/swap-instructions`
+  + manuell injizierten `create_associated_token_account_idempotent`
+  für recipient + treasury ATA, resolved alle Address-Lookup-Tables,
+  signed eine einzige v0 `VersionedTransaction`. Atomar.
+- 9 Unit-Tests + 2 live-gated Integration-Tests (Jupiter-Quote,
+  Devnet-Airdrop).
+
+### Mobile FFI (`mobile/rust/src/wallet_api.rs`)
+- 14 flutter_rust_bridge 2.12 APIs für Dart-Konsumption.
+- `Mutex<Option<Arc<ArgosWallet>>>` Cache: Sync-Lock + `Arc::clone` +
+  Drop-vor-Await — vermeidet TOCTOU UND `Send`-Constraint-Probleme.
+- `argos_lock_wallet` wiped den Cache; Caller (Lock-on-Background)
+  ist verantwortlich für Aufruf.
+
+### Mobile UI (`mobile/lib/screens/wallet_screen.dart`)
+- Single-Screen State Machine: `none → createPin → backupReveal →
+  main` / `restore → main` / `locked → main`.
+- Cyberpunk-Theme aus dem bestehenden `theme.dart` (Cyan + Magenta
+  Neon, Orbitron + Space Mono Fonts).
+- **Mnemonic-Backup-Reveal**: Tap-to-Show, "I-wrote-it-down"-Checkbox
+  ist Pflicht-Gate vor dem Hauptscreen.
+- **PIN-Brute-Force-Counter**: 10 falsche Versuche → automatischer
+  Panic-Wipe. Defense gegen geklautes-Phone-Szenario.
+- **Lock-on-Background**: `WidgetsBindingObserver.didChangeAppLifecycle`
+  callt `lock()` wenn App in `paused`/`detached` geht; Skip während
+  Backup-Reveal damit User in Notizen-App switchen kann zum
+  Mnemonic-Abtippen.
+- Send-Sheet (SOL + SPL Token-Picker), Receive-Sheet (QR + selectable
+  Address), Swap-Sheet (Jupiter Quote-Preview mit Route-Label +
+  Slippage-Chips + Auto-Swap-on-Send-Toggle).
+- Settings → neue "WALLET · ARGOS" Section.
+
+### Build / Deploy
+- `mobile/rust/Cargo.toml`: `openssl = { features = ["vendored"] }` —
+  ohne das scheitert die Android-NDK-Cross-Compile weil
+  `solana-secp256r1-program` transitiv openssl-sys zieht.
+- `scripts/build-android.sh`: `--debug`-Pfad gefixt (`build $([…] &&
+  echo --release)` musste un-quoted sein, sonst empty-arg-crash bei
+  cargo).
+- APKs deployed: arm64-v8a 45.5 MB, armeabi-v7a 27.6 MB, x86_64
+  49.2 MB. Manifest live auf
+  `updates.dc-infosec.de/phantomchat/manifests/android.json`.
+
+### Sicherheits-Notiz
+- Treasury-Wallet im Code ist `TREASURY_WALLET_DEFAULT`; Override via
+  Env-Var `ARGOS_TREASURY_WALLET=<pubkey>` — geplant für Switch auf
+  Ledger Cold-Storage sobald UG gegründet ist.
+- Jupiter-Host ist auf `api.jup.ag` gepinnt; HTTPS-only, kein Proxy.
+- User sieht Route + Slippage + Fee VOR der Signatur (Preview-Struct).
+
+---
+
+# Changelog
+
+All notable changes to PhantomChat are documented here.
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+
+---
+
 ## [audit-session-cap-and-dead-code] — 2026-05-14 — Audit follow-up: session-map DoS cap + mobile dead-crypto removal
 
 Seventh audit-driven bundle. Closes core **H-7** (unbounded session map

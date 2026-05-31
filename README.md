@@ -3,21 +3,42 @@
 > **Dezentraler, Post-Quantum-sicherer, metadatenarmer Messenger.** Keine Telefonnummer, kein Account, kein zentraler Server. Monero-Style Stealth-Adressen + Double Ratchet + ML-KEM-1024 + MLS-Gruppen — verpackt in ein Envelope-Format, das sich auf dem Wire nicht von Cover Traffic unterscheiden lässt. Rust-Core, Flutter-Android-App, Tauri-Desktop, headless CLI. Von **DC INFOSEC** ([dc-infosec.de](https://dc-infosec.de)).
 
 [![CI](https://github.com/cengo441337-a11y/phantomchat/actions/workflows/ci.yml/badge.svg)](https://github.com/cengo441337-a11y/phantomchat/actions/workflows/ci.yml)
-![Android](https://img.shields.io/badge/Android-v1.1.7-brightgreen)
-![Desktop](https://img.shields.io/badge/Desktop-v3.0.7-yellow)
+![Android](https://img.shields.io/badge/Android-v1.2.1-brightgreen)
+![Desktop](https://img.shields.io/badge/Desktop-v3.0.11-yellow)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![Crypto](https://img.shields.io/badge/Crypto-PQXDH_%2B_XChaCha20--Poly1305-red)
 ![PQ](https://img.shields.io/badge/Post--Quantum-ML--KEM--1024-blueviolet)
 ![MLS](https://img.shields.io/badge/Groups-MLS_RFC_9420-success)
 ![Tests](https://img.shields.io/badge/Tests-118_passing_%2B_selftest_30%2F30-success)
 ![Relay](https://img.shields.io/badge/Relay-relay.dc--infosec.de-orange)
+![Argos](https://img.shields.io/badge/Argos_Wallet-Solana_+_Jupiter_v6-9945FF)
+![Auto-Swap](https://img.shields.io/badge/Killer_Feature-Auto--Swap--on--Send-FF006E)
 
 > **⚠️ Forschungsprojekt, nicht extern auditiert.** Der Krypto-Stack ist spec-implementiert und test-abgedeckt (118 Tests + 30/30 Selftest), aber **noch nicht extern auditiert**. Für High-Stakes-Einsatz (Aktivismus, Whistleblowing, journalistische Quellenarbeit) bitte auf den Audit warten. Kein Ersatz für Signal/Briar/Cwtch in lebenskritischen Szenarien.
 
 ## 📥 Download
 
-**Android (empfohlen, aktuell):** **[updates.dc-infosec.de/download](https://updates.dc-infosec.de/download/)** — signierte APK v1.1.7, Auto-Update eingebaut.
-**Desktop (Windows):** v3.0.7 auf derselben Seite. *(v3.0.8 mit den aktuellen Crypto-Fixes ist im Release-Prozess.)*
+**Android (empfohlen, aktuell):** **[updates.dc-infosec.de/download](https://updates.dc-infosec.de/download/)** — signierte APK v1.2.1 inkl. Argos Wallet, Auto-Update eingebaut.
+**Desktop (Windows):** v3.0.11 auf derselben Seite.
+
+
+
+## 💰 Argos Wallet (neu in v1.2.0+)
+
+Eingebaute non-custodial Solana-Wallet — BIP39-Mnemonic + Argon2id-verschlüsselt + Jupiter v6 Swap. Das **Killer-Feature**: **Auto-Swap-on-Send** baut Swap + Transfer in eine einzige atomare Solana-Transaktion. Empfänger bekommt direkt den gewünschten Token, eine Signatur, eine Gebühr — kein anderer Messenger im Solana-Ökosystem hat das.
+
+| Funktion | Details |
+|---|---|
+| **Onboarding** | 24-Wort Recovery, tap-to-reveal, "I-wrote-it-down"-Gate vor dem Hauptscreen |
+| **PIN** | Argon2id (OWASP 2023: m=64 MiB, t=3, p=4); 10 Fehleingaben → Panic-Wipe |
+| **Lock-on-Background** | Cache wird beim App-Pause automatisch geleert |
+| **Send** | Native SOL + SPL-Tokens (USDC, USDT), QR-Scan, Adress-Validierung |
+| **Receive** | QR-Code + Selectable Address |
+| **Swap** | Jupiter v6 Quote-Preview mit Route-Label, Slippage-Chips, 0,5 % Plattform-Gebühr |
+| **Auto-Swap-on-Send** | 1 Solana-Tx: Swap + Transfer-to-Recipient + Fee-Collect, atomar |
+| **Devnet QA** | Eingebauter 1-SOL-Airdrop-Button wenn Network = Devnet |
+
+Treasury-Adresse ist via `ARGOS_TREASURY_WALLET`-Env überschreibbar — Migration auf UG-Ledger ohne Recompile.
 
 ## 📸 So sieht's aus
 
