@@ -10,7 +10,7 @@ import 'services/log_service.dart';
 import 'services/relay_service.dart';
 import 'services/storage_service.dart';
 import 'screens/onboarding.dart';
-import 'screens/home.dart';
+import 'main_shell.dart';
 import 'theme.dart';
 import 'widgets/app_lock_gate.dart';
 import 'src/rust/api.dart' as rust_api;
@@ -142,13 +142,13 @@ class PhantomApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'PhantomChat',
+      title: 'Argos',
       theme: phantomTheme(),
       debugShowCheckedModeBanner: false,
       home: AppLockGate(
         child: Stack(
           children: [
-            hasIdentity ? const HomeScreen() : const OnboardingScreen(),
+            hasIdentity ? const MainShell() : const OnboardingScreen(),
             _RustCoreBanner(rust: rust),
           ],
         ),

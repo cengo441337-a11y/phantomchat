@@ -526,7 +526,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 GlitchText(
-                  text: 'PHANTOM',
+                  text: 'ARGOS',
                   interval: const Duration(milliseconds: 200),
                   style: GoogleFonts.orbitron(
                     fontSize: 18, fontWeight: FontWeight.w900,
