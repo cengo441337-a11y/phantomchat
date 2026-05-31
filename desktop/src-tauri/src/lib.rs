@@ -13,6 +13,7 @@ mod ai_bridge;
 mod ai_bridge_watchers;
 #[cfg(feature = "stt")]
 mod ai_bridge_stt;
+mod wallet_cmds;
 
 use std::{
     fs,
@@ -6163,6 +6164,21 @@ pub fn run() {
             ai_bridge_set_watcher_enabled,
             ai_bridge_validate_cron,
             ai_bridge_run_watcher_now,
+        wallet_cmds::argos_create_wallet,
+        wallet_cmds::argos_restore_wallet,
+        wallet_cmds::argos_unlock_wallet,
+        wallet_cmds::argos_lock_wallet,
+        wallet_cmds::argos_wallet_pubkey,
+        wallet_cmds::argos_wallet_network,
+        wallet_cmds::argos_balance_sol,
+        wallet_cmds::argos_balance_token,
+        wallet_cmds::argos_send_sol,
+        wallet_cmds::argos_send_token,
+        wallet_cmds::argos_quote_swap,
+        wallet_cmds::argos_execute_swap,
+        wallet_cmds::argos_swap_and_send,
+        wallet_cmds::argos_validate_address,
+        wallet_cmds::argos_devnet_airdrop_one_sol,
         ])
         .setup(|app| {
             // Pre-create the data dir on first launch so command handlers

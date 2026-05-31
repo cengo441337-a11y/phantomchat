@@ -28,6 +28,7 @@ import type {
   UpdateInfo,
 } from "./types";
 import ContactsPane from "./components/ContactsPane";
+import { WalletPanel } from "./components/WalletPanel";
 import ChannelsPane from "./components/ChannelsPane";
 import ConversationHeader from "./components/ConversationHeader";
 import MessageStream from "./components/MessageStream";
@@ -231,6 +232,7 @@ export default function App() {
   );
 
   // ── Left-pane tab (1:1 contacts vs MLS channels) ───────────────────────
+  const [section, setSection] = useState<'wallet' | 'messenger'>('wallet');
   const [leftTab, setLeftTab] = useState<LeftPaneTab>("contacts");
 
   // ── MLS state lifted out of ChannelsPane ───────────────────────────────
@@ -1105,8 +1107,20 @@ export default function App() {
     );
   }
 
+  if (section === 'wallet') {
+    return (
+      <div className="flex flex-col h-screen bg-bg-deep text-neon-green font-mono select-none">
+        <SectionSwitcher section={section} setSection={setSection} appVersion={appVersion} />
+        <div className="flex-1 overflow-auto">
+          <WalletPanel appVersion={appVersion} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen bg-bg-deep text-neon-green font-mono select-none">
+      <SectionSwitcher section={section} setSection={setSection} appVersion={appVersion} />
       {/* Update banner — passive, dismiss by opening Settings → About. */}
       {updateAvailable?.available && (
         <div className="px-4 py-1.5 text-xs text-cyber-cyan bg-cyber-cyan/10 border-b border-cyber-cyan/40 text-center font-display">
@@ -1128,9 +1142,9 @@ export default function App() {
       {/* Header */}
       <header className="flex items-center justify-between px-4 py-2 border-b border-dim-green/40 bg-bg-panel/40 backdrop-blur-sm">
         <div className="flex items-center gap-3">
-          <span className="text-neon-magenta font-bold text-lg pc-brand-glow-magenta font-display">P</span>
+          <span className="text-neon-magenta font-bold text-lg pc-brand-glow-magenta font-display">A</span>
           <span className="text-neon-green font-bold tracking-widest pc-brand-glow font-display">
-            PHANTOMCHAT
+            ARGOS
           </span>
           <span className="text-soft-grey">·</span>
           <span className="text-cyber-cyan text-xs font-display">{t("app.header.brand_subtitle")}</span>
@@ -1401,4 +1415,63 @@ function shortAddr(addr: string): string {
   const stripped = addr.replace(/^phantomx?:/, "");
   if (stripped.length < 16) return addr;
   return `${addr.startsWith("phantomx:") ? "phantomx:" : "phantom:"}${stripped.slice(0, 8)}…${stripped.slice(-6)}`;
+}
+
+
+function SectionSwitcher({
+  section,
+  setSection,
+  appVersion,
+}: {
+  section: 'wallet' | 'messenger';
+  setSection: (s: 'wallet' | 'messenger') => void;
+  appVersion: string;
+}) {
+  return (
+    <div className="flex items-stretch border-b border-dim-green/40 bg-bg-panel/60 backdrop-blur-sm">
+      <SectionTab
+        active={section === 'wallet'}
+        onClick={() => setSection('wallet')}
+        icon="◇"
+        label="WALLET"
+      />
+      <SectionTab
+        active={section === 'messenger'}
+        onClick={() => setSection('messenger')}
+        icon="⌬"
+        label="MESSENGER"
+      />
+      <div className="flex-1" />
+      {appVersion && (
+        <div className="px-4 self-center text-soft-grey text-[10px]">v{appVersion}</div>
+      )}
+    </div>
+  );
+}
+
+function SectionTab({
+  active,
+  onClick,
+  icon,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: string;
+  label: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={
+        'px-6 py-3 font-display tracking-widest text-xs border-r border-dim-green/40 transition ' +
+        (active
+          ? 'text-cyber-cyan bg-cyber-cyan/10 border-t-2 border-t-cyber-cyan -mt-px'
+          : 'text-soft-grey hover:text-neon-green')
+      }
+    >
+      <span className="text-lg mr-2 align-middle">{icon}</span>
+      <span className="align-middle">{label}</span>
+    </button>
+  );
 }
