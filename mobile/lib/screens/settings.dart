@@ -84,32 +84,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _checkForUpdate() async {
     if (_checkingUpdate) return;
     setState(() => _checkingUpdate = true);
-    UpdateInfo? info;
+    UpdateCheckResult? result;
     try {
-      info = await UpdateService.checkForUpdate();
+      result = await UpdateService.checkForUpdateRich();
     } catch (_) {
-      info = null;
+      result = null;
     }
     if (!mounted) return;
     setState(() => _checkingUpdate = false);
-    if (info != null) {
-      await showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => UpdateDialog(info: info!),
+    if (result == null) {
+      _settingsUpdateSnack(
+        'Update-Server nicht erreichbar. Bitte spaeter erneut versuchen.',
+        kMagenta,
       );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Du hast die neueste Version ($_version). '
-            'Falls kein Internet besteht, später erneut versuchen.',
-            style: GoogleFonts.spaceMono(fontSize: 12),
-          ),
-          backgroundColor: kBgCard,
-        ),
-      );
+      return;
     }
+    switch (result.outcome) {
+      case UpdateCheckOutcome.updateAvailable:
+        if (result.info != null) {
+          await showDialog<void>(
+            context: context,
+            barrierDismissible: false,
+            builder: (_) => UpdateDialog(info: result!.info!),
+          );
+        }
+        break;
+      case UpdateCheckOutcome.alreadyLatest:
+        final m = result.manifestVersion ?? '?';
+        final c = result.manifestCode;
+        _settingsUpdateSnack(
+          'Aktuell auf v${result.installedVersion}. '
+              'Manifest: v$m${c != null ? ' / build $c' : ''}.',
+          kGreen,
+        );
+        break;
+      case UpdateCheckOutcome.manifestUnreachable:
+        _settingsUpdateSnack(
+          'Update-Server antwortet nicht oder Manifest ungueltig. '
+              'Installiert: v${result.installedVersion}.',
+          kMagenta,
+        );
+        break;
+    }
+  }
+
+  void _settingsUpdateSnack(String msg, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          msg,
+          style: GoogleFonts.spaceMono(fontSize: 12, color: color),
+        ),
+        backgroundColor: kBgCard,
+        duration: const Duration(seconds: 5),
+      ),
+    );
   }
 
   Future<void> _toggleBioOnLaunch(bool enable) async {

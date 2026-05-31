@@ -138,6 +138,41 @@ class AbiVariant {
 /// Parsed `latest.json` plus the ABI we picked for *this* device. Returned
 /// to the UI only when the manifest's version is newer than the installed
 /// version AND a matching ABI variant exists.
+/// Outcome of an explicit user-driven update check. Lets the UI tell apart
+/// "you have the latest" from "we could not reach the manifest" — both used
+/// to return `null` and surface the same generic message, which is why users
+/// reported "kein Update geht" when the network had a hiccup.
+enum UpdateCheckOutcome {
+  /// Manifest reached, parsed, no newer version available for this device's
+  /// installed version_code. The UI should say "you are on v$installed".
+  alreadyLatest,
+  /// Manifest reached, newer build found. `UpdateInfo` is non-null when this
+  /// is the result of [UpdateService.checkForUpdateRich].
+  updateAvailable,
+  /// Manifest unreachable, malformed, signature mismatch, or the device's
+  /// ABI missing from the manifest. The UI should say "couldn't reach the
+  /// update server, try again later" — NOT "you are on the latest version".
+  manifestUnreachable,
+}
+
+/// Bundle returned by [UpdateService.checkForUpdateRich].
+class UpdateCheckResult {
+  final UpdateCheckOutcome outcome;
+  final UpdateInfo? info;
+  final String installedVersion;
+  final int installedCode;
+  final String? manifestVersion;
+  final int? manifestCode;
+  const UpdateCheckResult({
+    required this.outcome,
+    required this.installedVersion,
+    required this.installedCode,
+    this.info,
+    this.manifestVersion,
+    this.manifestCode,
+  });
+}
+
 class UpdateInfo {
   final String currentVersion;
   final String newVersion;
@@ -157,6 +192,88 @@ class UpdateInfo {
 }
 
 class UpdateService {
+  /// Same trust chain as [checkForUpdate] but returns a [UpdateCheckResult]
+  /// that distinguishes "already on latest" from "couldn't reach manifest".
+  /// New surface; the old [checkForUpdate] is retained for the home-screen
+  /// banner code that already builds on `UpdateInfo?`.
+  static Future<UpdateCheckResult> checkForUpdateRich() async {
+    final pkg = await PackageInfo.fromPlatform();
+    final installed = pkg.version;
+    final installedCode = int.tryParse(pkg.buildNumber) ?? 0;
+
+    final manifest = await _fetchManifest();
+    if (manifest == null) {
+      return UpdateCheckResult(
+        outcome: UpdateCheckOutcome.manifestUnreachable,
+        installedVersion: installed,
+        installedCode: installedCode,
+      );
+    }
+    final mVersion = manifest['version'] as String?;
+    final abis = manifest['abis'] as Map<String, dynamic>?;
+    final abi = await primaryAbi();
+    final raw = abis?[abi];
+    AbiVariant? variant;
+    if (raw is Map<String, dynamic>) {
+      try {
+        variant = AbiVariant.fromJson(raw);
+      } catch (_) {}
+    }
+    if (mVersion == null || variant == null) {
+      return UpdateCheckResult(
+        outcome: UpdateCheckOutcome.manifestUnreachable,
+        installedVersion: installed,
+        installedCode: installedCode,
+        manifestVersion: mVersion,
+      );
+    }
+    if (!isOriginAllowed(variant.url)) {
+      return UpdateCheckResult(
+        outcome: UpdateCheckOutcome.manifestUnreachable,
+        installedVersion: installed,
+        installedCode: installedCode,
+        manifestVersion: mVersion,
+        manifestCode: variant.versionCode,
+      );
+    }
+    if (!await _verifyManifestSignature(manifest)) {
+      return UpdateCheckResult(
+        outcome: UpdateCheckOutcome.manifestUnreachable,
+        installedVersion: installed,
+        installedCode: installedCode,
+        manifestVersion: mVersion,
+        manifestCode: variant.versionCode,
+      );
+    }
+    final isNewer = _isNewer(mVersion, installed);
+    final codeBump = variant.versionCode > installedCode;
+    if (!isNewer || !codeBump) {
+      return UpdateCheckResult(
+        outcome: UpdateCheckOutcome.alreadyLatest,
+        installedVersion: installed,
+        installedCode: installedCode,
+        manifestVersion: mVersion,
+        manifestCode: variant.versionCode,
+      );
+    }
+    final info = UpdateInfo(
+      currentVersion: installed,
+      newVersion: mVersion,
+      releasedAt: manifest['released_at'] as String? ?? '',
+      notes: manifest['notes'] as String? ?? '',
+      abi: abi,
+      variant: variant,
+    );
+    return UpdateCheckResult(
+      outcome: UpdateCheckOutcome.updateAvailable,
+      installedVersion: installed,
+      installedCode: installedCode,
+      manifestVersion: mVersion,
+      manifestCode: variant.versionCode,
+      info: info,
+    );
+  }
+
   /// Fetches the manifest, compares versions, returns an `UpdateInfo` if
   /// an upgrade is available for the current device's ABI. Returns `null`
   /// if up-to-date, the device's ABI is missing from the manifest, or the
@@ -336,9 +453,16 @@ class UpdateService {
   static Future<Map<String, dynamic>?> _fetchManifest() async {
     final client = HttpClient()..connectionTimeout = kManifestTimeout;
     try {
+      // Cache-buster: ?ts=<unix-seconds> defeats intermediary HTTP caches
+      // (mobile carriers, ISP proxies, nginx open_file_cache, etc.) that
+      // sometimes pin the manifest to a stale version across releases.
+      final ts = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final urlWithTs = '$kUpdateManifestUrl?ts=$ts';
       final req = await client
-          .getUrl(Uri.parse(kUpdateManifestUrl))
+          .getUrl(Uri.parse(urlWithTs))
           .timeout(kManifestTimeout);
+      req.headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+      req.headers.set('Pragma', 'no-cache');
       final res = await req.close().timeout(kManifestTimeout);
       if (res.statusCode != 200) return null;
       final body = await res

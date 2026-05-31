@@ -92,35 +92,75 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     if (_checkingUpdate) return;
     setState(() => _checkingUpdate = true);
-    UpdateInfo? info;
+    UpdateCheckResult? result;
     try {
-      info = await UpdateService.checkForUpdate();
+      result = await UpdateService.checkForUpdateRich();
     } catch (_) {
-      info = null;
+      result = null;
     }
     if (!mounted) return;
     setState(() {
       _checkingUpdate = false;
-      _update = info;
+      _update = result?.info;
     });
-    if (info != null) {
-      await showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => UpdateDialog(info: info!),
+    if (result == null) {
+      _showUpdateSnack(
+        'Update-Server nicht erreichbar. Bitte spaeter erneut versuchen.',
+        kMagenta,
+        Icons.cloud_off_outlined,
       );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Du bist auf der neuesten Version.',
-            style: GoogleFonts.spaceMono(fontSize: 12),
-          ),
-          backgroundColor: kBgCard,
-          duration: const Duration(seconds: 2),
-        ),
-      );
+      return;
     }
+    switch (result.outcome) {
+      case UpdateCheckOutcome.updateAvailable:
+        if (result.info != null) {
+          await showDialog<void>(
+            context: context,
+            barrierDismissible: false,
+            builder: (_) => UpdateDialog(info: result!.info!),
+          );
+        }
+        break;
+      case UpdateCheckOutcome.alreadyLatest:
+        final manifest = result.manifestVersion ?? '?';
+        final code = result.manifestCode;
+        _showUpdateSnack(
+          'Aktuell auf v${result.installedVersion}'
+              ' (Manifest v$manifest${code != null ? ' / build $code' : ''}).',
+          kGreen,
+          Icons.check_circle_outline,
+        );
+        break;
+      case UpdateCheckOutcome.manifestUnreachable:
+        _showUpdateSnack(
+          'Update-Server antwortet nicht oder Manifest ungueltig. '
+              'Installiert: v${result.installedVersion}.',
+          kMagenta,
+          Icons.cloud_off_outlined,
+        );
+        break;
+    }
+  }
+
+  void _showUpdateSnack(String msg, Color color, IconData icon) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(icon, color: color, size: 18),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                msg,
+                style: GoogleFonts.spaceMono(fontSize: 12, color: kWhite),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: kBgCard,
+        duration: const Duration(seconds: 5),
+      ),
+    );
   }
 
   void _showAddContact() {
