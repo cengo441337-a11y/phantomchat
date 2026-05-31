@@ -16,10 +16,26 @@
 
 > **⚠️ Forschungsprojekt, nicht extern auditiert.** Der Krypto-Stack ist spec-implementiert und test-abgedeckt (118 Tests + 30/30 Selftest), aber **noch nicht extern auditiert**. Für High-Stakes-Einsatz (Aktivismus, Whistleblowing, journalistische Quellenarbeit) bitte auf den Audit warten. Kein Ersatz für Signal/Briar/Cwtch in lebenskritischen Szenarien.
 
-## 📥 Download
+## 📥 Argos kaufen — 4 EUR
 
-**Android (empfohlen, aktuell):** **[updates.dc-infosec.de/download](https://updates.dc-infosec.de/download/)** — signierte APK v1.2.1 inkl. Argos Wallet, Auto-Update eingebaut.
-**Desktop (Windows):** v3.0.11 auf derselben Seite.
+Die signierte Argos-Binary (Android-APK und Windows-MSI) ist nur über den
+offiziellen Vertriebspunkt erhältlich:
+
+**[pylonyx.de/argos/buy](https://pylonyx.de/argos/buy)** — Einmal-Kauf 4 EUR via Stripe (Karte) oder Solana Pay (4 USDC). Nach Bezahlung sofortiger Download + lebenslange Auto-Updates.
+
+### Source-Build (für Entwickler)
+
+Der Quellcode ist AGPLv3 und liegt offen in diesem Repo. Wer selbst bauen möchte:
+
+```bash
+git clone https://github.com/cengo441337-a11y/phantomchat
+cd phantomchat
+git checkout v1.3.0-android        # oder ein anderer Tag
+bash scripts/build-android.sh      # Android (braucht NDK + Flutter SDK)
+bash scripts/release-windows.sh    # Windows (braucht Tauri-Toolchain)
+```
+
+Self-Built-Binaries verwenden **nicht** den Production-Keystore — Auto-Update via In-App-Banner ist dann nicht verfügbar.
 
 
 
