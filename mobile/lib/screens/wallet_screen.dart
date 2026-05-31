@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../services/wallet_service.dart';
+import '../services/risk_check_service.dart';
 import '../src/rust/api/wallet.dart' as rust;
 import '../theme.dart';
 
@@ -1406,6 +1407,83 @@ class _SendSheetState extends State<_SendSheet> {
     super.dispose();
   }
 
+  Future<bool?> _showRiskDialog(RiskVerdict v) async {
+    final headlineColor = switch (v.severity) {
+      'red' => kMagenta,
+      'amber' => kYellow,
+      _ => kCyan,
+    };
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kBgCard,
+        title: Row(
+          children: [
+            Icon(
+              v.severity == 'red'
+                  ? Icons.warning_amber_rounded
+                  : Icons.info_outline,
+              color: headlineColor,
+            ),
+            const SizedBox(width: 10),
+            Text(
+              v.severity == 'red'
+                  ? 'Risiko erkannt'
+                  : 'Risk-Check Hinweis',
+              style: GoogleFonts.orbitron(
+                color: headlineColor,
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 2,
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              v.summary,
+              style: GoogleFonts.spaceMono(color: kWhite, fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Quelle: argos.dc-infosec.de/api/risk',
+              style: GoogleFonts.spaceMono(color: kGrayText, fontSize: 10),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              'Abbrechen',
+              style: GoogleFonts.orbitron(
+                color: kCyan,
+                fontSize: 11,
+                letterSpacing: 2,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              v.severity == 'red' ? 'TROTZDEM SENDEN' : 'Senden',
+              style: GoogleFonts.orbitron(
+                color: headlineColor,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 2,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _go() async {
     final raw = _recipient.text.trim();
     if (raw.isEmpty) {
@@ -1428,6 +1506,25 @@ class _SendSheetState extends State<_SendSheet> {
       _busy = true;
       _error = null;
     });
+    // Argos Pre-Send Risk-Check (v1.2.2). Calls argos.dc-infosec.de/api/risk
+    // for the recipient + the token mint about to be transferred. The
+    // backend currently returns hardcoded clean-for-USDC/USDT/wSOL and
+    // amber for everything unknown; the real Pylonyx scoring engine will
+    // replace it without a wire-format change.
+    final mintForCheck = _asset == 'SOL'
+        ? argosWsolMint
+        : argosKnownTokens.firstWhere((t) => t.symbol == _asset).mint;
+    final verdict = await RiskCheckService.check(
+      recipient: validated,
+      mint: mintForCheck,
+    );
+    if (verdict.shouldWarn && mounted) {
+      final proceed = await _showRiskDialog(verdict);
+      if (proceed != true) {
+        setState(() => _busy = false);
+        return;
+      }
+    }
     try {
       String sig;
       if (_asset == 'SOL') {
