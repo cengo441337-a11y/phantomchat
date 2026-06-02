@@ -18,6 +18,8 @@ use flutter_rust_bridge::frb;
 use once_cell::sync::OnceCell;
 
 use argos_wallet::swap::{SwapAndSendOutcome, SwapPreview};
+
+use crate::api::wallet::eth_api::{cache_mnemonic, clear_mnemonic_cache, load_mnemonic_encrypted, persist_mnemonic_encrypted};
 use argos_wallet::{ArgosWallet, Network};
 use solana_sdk::pubkey::Pubkey;
 
@@ -125,9 +127,12 @@ pub fn argos_create_wallet(
         .map_err(|e| format!("persist: {e}"))?;
     let pk = wallet.pubkey().to_string();
     *cache().lock().map_err(|e| format!("lock: {e}"))? = Some(Arc::new(wallet));
+    let words = mnemonic.to_string();
+    persist_mnemonic_encrypted(&words, &pin, &storage_path)?;
+    cache_mnemonic(words.clone());
     Ok(ArgosWalletInfo {
         pubkey_b58: pk,
-        mnemonic: mnemonic.to_string(),
+        mnemonic: words,
         network,
     })
 }
@@ -154,9 +159,12 @@ pub fn argos_restore_wallet(
         .map_err(|e| format!("persist: {e}"))?;
     let pk = wallet.pubkey().to_string();
     *cache().lock().map_err(|e| format!("lock: {e}"))? = Some(Arc::new(wallet));
+    let words = mnemonic.trim().to_string();
+    persist_mnemonic_encrypted(&words, &pin, &storage_path)?;
+    cache_mnemonic(words.clone());
     Ok(ArgosWalletInfo {
         pubkey_b58: pk,
-        mnemonic: mnemonic.trim().to_string(),
+        mnemonic: words,
         network,
     })
 }
@@ -169,6 +177,13 @@ pub fn argos_unlock_wallet(pin: String, storage_path: String) -> Result<String, 
         ArgosWallet::load_encrypted(&pin, &path).map_err(|e| format!("unlock: {e}"))?;
     let pk = wallet.pubkey().to_string();
     *cache().lock().map_err(|e| format!("lock: {e}"))? = Some(Arc::new(wallet));
+    // Best-effort: load the mnemonic sidecar so EVM chains can derive on
+    // demand. Pre-1.4 wallets won't have it — that's OK; ETH commands
+    // will then return a clear "mnemonic not unlocked" error and the UI
+    // can prompt the user to restore from phrase to regenerate it.
+    if let Ok(words) = load_mnemonic_encrypted(&pin, &storage_path) {
+        cache_mnemonic(words);
+    }
     Ok(pk)
 }
 
@@ -177,6 +192,7 @@ pub fn argos_unlock_wallet(pin: String, storage_path: String) -> Result<String, 
 pub fn argos_lock_wallet() -> Result<(), String> {
     *cache().lock().map_err(|e| format!("lock: {e}"))? = None;
     *preview_cache().lock().map_err(|e| format!("lock: {e}"))? = None;
+    clear_mnemonic_cache();
     Ok(())
 }
 
@@ -342,3 +358,7 @@ pub async fn argos_devnet_airdrop_one_sol() -> Result<String, String> {
         .map_err(|e| format!("airdrop: {e}"))?;
     Ok(sig.to_string())
 }
+
+
+/// EVM (Ethereum / Base / Polygon) operations.
+pub mod eth_api;

@@ -16,6 +16,9 @@ name = "phantomchat_mobile"
 path = "src/lib.rs"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+
+# ETH layer additions for v1.4.0 multi-chain
+
 [features]
 default = ["mls"]
 # Forwarded to phantomchat_core: enables the openmls-based group-chat
@@ -24,6 +27,14 @@ default = ["mls"]
 mls = ["phantomchat_core/mls", "dep:openmls"]
 
 [dependencies]
+
+# ── ETH layer for v1.4.0 multi-chain ──────────────────────────────────────
+argos_wallet_eth = { path = "../../argos_wallet_eth" }
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+primitive-types = "0.13"
+zeroize = { version = "1.7", features = ["zeroize_derive"] }
+
 # Pull the production core via path so the wrapper always tracks the
 # checked-out workspace version.
 phantomchat_core = { path = "../../core", default-features = false, features = ["net"] }

@@ -37,8 +37,12 @@ class _ArgosWalletScreenState extends State<ArgosWalletScreen>
   String? _network;
 
   // Main-view state.
+  ArgosChain _activeChain = ArgosChain.solanaMainnet;
   BigInt _solLamports = BigInt.zero;
   final Map<String, BigInt> _tokenBalances = {};
+  String _ethAddress = '';
+  String _ethBalanceWei = '0';
+  final Map<String, String> _evmTokenBalances = {}; // key = token address, decimal string
   bool _refreshing = false;
   String? _refreshError;
 
@@ -92,23 +96,47 @@ class _ArgosWalletScreenState extends State<ArgosWalletScreen>
       _refreshError = null;
     });
     try {
-      final sol = await _svc.balanceSol();
-      final tokens = <String, BigInt>{};
-      for (final t in argosKnownTokens) {
-        try {
-          tokens[t.mint] = await _svc.balanceToken(t.mint);
-        } catch (_) {
-          tokens[t.mint] = BigInt.zero;
+      if (_activeChain.isSolana) {
+        final sol = await _svc.balanceSol();
+        final tokens = <String, BigInt>{};
+        for (final t in argosKnownTokens) {
+          try {
+            tokens[t.mint] = await _svc.balanceToken(t.mint);
+          } catch (_) {
+            tokens[t.mint] = BigInt.zero;
+          }
         }
+        if (!mounted) return;
+        setState(() {
+          _solLamports = sol;
+          _tokenBalances
+            ..clear()
+            ..addAll(tokens);
+          _refreshing = false;
+        });
+      } else {
+        final net = _activeChain.backendId;
+        final addr = await _svc.ethAddress(net);
+        final wei = await _svc.ethBalanceWei(net);
+        final tokens = <String, String>{};
+        for (final t
+            in argosEvmKnownTokens.where((t) => t.chain == _activeChain)) {
+          try {
+            tokens[t.address] = await _svc.ethErc20Balance(net, t.address);
+          } catch (_) {
+            tokens[t.address] = '0';
+          }
+        }
+        if (!mounted) return;
+        setState(() {
+          _ethAddress = addr;
+          _ethBalanceWei = wei;
+          _evmTokenBalances
+            ..clear()
+            ..addAll(tokens);
+          _refreshing = false;
+        });
       }
-      if (!mounted) return;
-      setState(() {
-        _solLamports = sol;
-        _tokenBalances
-          ..clear()
-          ..addAll(tokens);
-        _refreshing = false;
-      });
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -116,6 +144,15 @@ class _ArgosWalletScreenState extends State<ArgosWalletScreen>
         _refreshError = e.toString();
       });
     }
+  }
+
+  void _switchChain(ArgosChain next) {
+    if (next == _activeChain) return;
+    setState(() {
+      _activeChain = next;
+      _refreshError = null;
+    });
+    unawaited(_refresh());
   }
 
   @override
@@ -200,8 +237,13 @@ class _ArgosWalletScreenState extends State<ArgosWalletScreen>
           _Stage.main => _MainPanel(
               pubkey: _svc.pubkey ?? '?',
               network: _svc.network ?? 'mainnet-beta',
+              activeChain: _activeChain,
+              onChainChange: _switchChain,
               solLamports: _solLamports,
               tokenBalances: _tokenBalances,
+              ethAddress: _ethAddress,
+              ethBalanceWei: _ethBalanceWei,
+              evmTokenBalances: _evmTokenBalances,
               refreshing: _refreshing,
               error: _refreshError,
               onRefresh: _refresh,
@@ -922,8 +964,13 @@ class _UnlockPanelState extends State<_UnlockPanel> {
 class _MainPanel extends StatelessWidget {
   final String pubkey;
   final String network;
+  final ArgosChain activeChain;
+  final ValueChanged<ArgosChain> onChainChange;
   final BigInt solLamports;
   final Map<String, BigInt> tokenBalances;
+  final String ethAddress;
+  final String ethBalanceWei;
+  final Map<String, String> evmTokenBalances;
   final bool refreshing;
   final String? error;
   final Future<void> Function() onRefresh;
@@ -931,8 +978,13 @@ class _MainPanel extends StatelessWidget {
   const _MainPanel({
     required this.pubkey,
     required this.network,
+    required this.activeChain,
+    required this.onChainChange,
     required this.solLamports,
     required this.tokenBalances,
+    required this.ethAddress,
+    required this.ethBalanceWei,
+    required this.evmTokenBalances,
     required this.refreshing,
     required this.error,
     required this.onRefresh,
@@ -949,6 +1001,19 @@ class _MainPanel extends StatelessWidget {
     return '$whole.$fracStr';
   }
 
+  String _ethHumanFromDecStr(String wei) {
+    // wei is a decimal-string; we render 4 fractional digits without
+    // pulling a BigDecimal lib. Trim leading zeros, then place a decimal
+    // point 18 chars from the right.
+    final clean = wei.replaceAll(RegExp(r'[^0-9]'), '');
+    if (clean.isEmpty || clean == '0') return '0.0000';
+    final padded = clean.padLeft(19, '0');
+    final whole = padded.substring(0, padded.length - 18);
+    final frac = padded.substring(padded.length - 18, padded.length - 14);
+    final wholeTrim = whole.replaceFirst(RegExp(r'^0+'), '');
+    return '${wholeTrim.isEmpty ? '0' : wholeTrim}.$frac';
+  }
+
   String _tokenHuman(BigInt raw, int decimals) {
     if (decimals == 0) return raw.toString();
     final pow = BigInt.from(10).pow(decimals);
@@ -961,6 +1026,8 @@ class _MainPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final displayAddr =
+        activeChain.isSolana ? pubkey : (ethAddress.isEmpty ? '…' : ethAddress);
     return RefreshIndicator(
       color: kCyan,
       backgroundColor: kBgCard,
@@ -968,6 +1035,11 @@ class _MainPanel extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         children: [
+          _ChainSwitcher(
+            active: activeChain,
+            onChange: onChainChange,
+          ),
+          const SizedBox(height: 12),
           // Address card
           Container(
             padding: const EdgeInsets.all(14),
@@ -996,13 +1068,13 @@ class _MainPanel extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(_short(pubkey),
+                      Text(_short(displayAddr),
                           style: GoogleFonts.spaceMono(
                               color: kCyan,
                               fontSize: 14,
                               fontWeight: FontWeight.w700,
                               letterSpacing: 1)),
-                      Text(network.toUpperCase(),
+                      Text(activeChain.label.toUpperCase(),
                           style: GoogleFonts.orbitron(
                               color: kWhiteDim,
                               fontSize: 9,
@@ -1014,7 +1086,7 @@ class _MainPanel extends StatelessWidget {
                   tooltip: 'Adresse kopieren',
                   icon: const Icon(Icons.copy_all, color: kWhite, size: 18),
                   onPressed: () {
-                    Clipboard.setData(ClipboardData(text: pubkey));
+                    Clipboard.setData(ClipboardData(text: displayAddr));
                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                       content: Text('Adresse kopiert',
                           style: GoogleFonts.spaceMono(color: kCyan)),
@@ -1049,13 +1121,21 @@ class _MainPanel extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.baseline,
                   textBaseline: TextBaseline.alphabetic,
                   children: [
-                    Text(_solHuman(solLamports),
-                        style: GoogleFonts.orbitron(
-                            color: kCyan,
-                            fontSize: 36,
-                            fontWeight: FontWeight.w700)),
+                    Text(
+                      activeChain.isSolana
+                          ? _solHuman(solLamports)
+                          : _ethHumanFromDecStr(ethBalanceWei),
+                      style: GoogleFonts.orbitron(
+                          color: kCyan,
+                          fontSize: 36,
+                          fontWeight: FontWeight.w700),
+                    ),
                     const SizedBox(width: 8),
-                    Text('SOL',
+                    Text(activeChain.isSolana
+                            ? 'SOL'
+                            : (activeChain == ArgosChain.polygon
+                                ? 'MATIC'
+                                : 'ETH'),
                         style: GoogleFonts.orbitron(
                             color: kWhiteDim,
                             fontSize: 14,
@@ -2133,6 +2213,48 @@ class _MintDropdown extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+
+class _ChainSwitcher extends StatelessWidget {
+  final ArgosChain active;
+  final ValueChanged<ArgosChain> onChange;
+  const _ChainSwitcher({required this.active, required this.onChange});
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: ArgosChain.values.map((c) {
+          final selected = c == active;
+          return Padding(
+            padding: const EdgeInsets.only(right: 6),
+            child: GestureDetector(
+              onTap: () => onChange(c),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: selected ? kCyanDim : Colors.transparent,
+                  border: Border.all(color: selected ? kCyan : kGray),
+                ),
+                child: Text(
+                  c.shortLabel,
+                  style: GoogleFonts.orbitron(
+                    color: selected ? kCyan : kGrayText,
+                    fontSize: 10,
+                    letterSpacing: 2,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
     );
   }
 }

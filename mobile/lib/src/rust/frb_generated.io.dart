@@ -5,6 +5,7 @@
 
 import 'api.dart';
 import 'api/wallet.dart';
+import 'api/wallet/eth_api.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi' as ffi;

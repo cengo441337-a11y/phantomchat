@@ -4,6 +4,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../src/rust/api/wallet.dart' as rust;
+import '../src/rust/api/wallet/eth_api.dart' as eth_rust;
 
 /// Dart-side facade over the Argos wallet FFI.
 ///
@@ -165,6 +166,150 @@ class ArgosWalletService {
 
   /// Devnet QA — request a 1 SOL airdrop. Throws on mainnet.
   Future<String> devnetAirdropOneSol() => rust.argosDevnetAirdropOneSol();
+
+  // ── EVM (Ethereum / Base / Polygon) — v1.4.0 ───────────────────────────
+
+  /// EIP-55 address derived for the given EVM network. Re-derives every
+  /// call from the cached mnemonic — no on-disk ETH secret.
+  Future<String> ethAddress(String network) =>
+      eth_rust.argosEthAddress(network: network);
+
+  /// Native balance in wei (decimal string — U256 may overflow Dart's int).
+  Future<String> ethBalanceWei(String network) =>
+      eth_rust.argosEthBalanceWei(network: network);
+
+  /// ERC-20 balance for [token] in raw base units (decimal string).
+  Future<String> ethErc20Balance(String network, String token) =>
+      eth_rust.argosEthErc20Balance(network: network, token: token);
+
+  /// Send native ETH/MATIC/etc. `wei` is a decimal-string amount.
+  Future<String> ethSendNative({
+    required String network,
+    required String recipient,
+    required String wei,
+  }) =>
+      eth_rust.argosEthSendNative(
+        network: network,
+        recipient: recipient,
+        wei: wei,
+      );
+
+  /// ERC-20 transfer. `amount` is a decimal-string of raw base units.
+  Future<String> ethSendErc20({
+    required String network,
+    required String token,
+    required String recipient,
+    required String amount,
+  }) =>
+      eth_rust.argosEthSendErc20(
+        network: network,
+        token: token,
+        recipient: recipient,
+        amount: amount,
+      );
+
+  /// UI helper: format a wei decimal-string as a 4-decimal ETH string.
+  Future<String> ethFormat(String wei) => eth_rust.argosEthFormat(wei: wei);
+
+  /// EIP-55 address validation. Returns the canonical form on success.
+  Future<String> ethValidateAddress(String s) => eth_rust.argosEthValidateAddress(s: s);
+}
+
+/// Chains a user can pick from in the wallet UI. Solana lives on its own
+/// network selector (mainnet-beta / devnet) so it appears twice when
+/// onboarding wants to surface both Solana variants — the EVM entries
+/// pass straight through to `ethAddress(network)` etc.
+enum ArgosChain {
+  solanaMainnet,
+  solanaDevnet,
+  ethereum,
+  base,
+  polygon;
+
+  String get label => switch (this) {
+        ArgosChain.solanaMainnet => 'Solana',
+        ArgosChain.solanaDevnet => 'Solana Devnet',
+        ArgosChain.ethereum => 'Ethereum',
+        ArgosChain.base => 'Base',
+        ArgosChain.polygon => 'Polygon',
+      };
+
+  String get shortLabel => switch (this) {
+        ArgosChain.solanaMainnet => 'SOL',
+        ArgosChain.solanaDevnet => 'SOL-D',
+        ArgosChain.ethereum => 'ETH',
+        ArgosChain.base => 'BASE',
+        ArgosChain.polygon => 'POLY',
+      };
+
+  bool get isSolana =>
+      this == ArgosChain.solanaMainnet || this == ArgosChain.solanaDevnet;
+
+  bool get isEvm => !isSolana;
+
+  /// Backend-facing network identifier (matches the Rust FFI vocabulary).
+  String get backendId => switch (this) {
+        ArgosChain.solanaMainnet => 'mainnet-beta',
+        ArgosChain.solanaDevnet => 'devnet',
+        ArgosChain.ethereum => 'ethereum',
+        ArgosChain.base => 'base',
+        ArgosChain.polygon => 'polygon',
+      };
+}
+
+/// First-class EVM tokens that get surfaced in the wallet UI per chain.
+/// Mints are checksummed Ethereum addresses; chain decides which list applies.
+const argosEvmKnownTokens = <ArgosEvmToken>[
+  ArgosEvmToken(
+    chain: ArgosChain.ethereum,
+    symbol: 'USDC',
+    name: 'USD Coin',
+    address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+    decimals: 6,
+  ),
+  ArgosEvmToken(
+    chain: ArgosChain.ethereum,
+    symbol: 'USDT',
+    name: 'Tether',
+    address: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+    decimals: 6,
+  ),
+  ArgosEvmToken(
+    chain: ArgosChain.base,
+    symbol: 'USDC',
+    name: 'USD Coin (Base)',
+    address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    decimals: 6,
+  ),
+  ArgosEvmToken(
+    chain: ArgosChain.polygon,
+    symbol: 'USDC',
+    name: 'USD Coin (Polygon)',
+    address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+    decimals: 6,
+  ),
+  ArgosEvmToken(
+    chain: ArgosChain.polygon,
+    symbol: 'USDT',
+    name: 'Tether (Polygon)',
+    address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F',
+    decimals: 6,
+  ),
+];
+
+class ArgosEvmToken {
+  final ArgosChain chain;
+  final String symbol;
+  final String name;
+  final String address;
+  final int decimals;
+  const ArgosEvmToken({
+    required this.chain,
+    required this.symbol,
+    required this.name,
+    required this.address,
+    required this.decimals,
+  });
 }
 
 /// Well-known SPL mints we let the UI surface natively. Keep tiny; expand
