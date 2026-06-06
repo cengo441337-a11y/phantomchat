@@ -5,7 +5,7 @@
 [![CI](https://github.com/cengo441337-a11y/phantomchat/actions/workflows/ci.yml/badge.svg)](https://github.com/cengo441337-a11y/phantomchat/actions/workflows/ci.yml)
 ![Android](https://img.shields.io/badge/Android-v1.2.1-brightgreen)
 ![Desktop](https://img.shields.io/badge/Desktop-v3.0.11-yellow)
-![License](https://img.shields.io/badge/License-MIT-blue)
+![License](https://img.shields.io/badge/License-PolyForm_Shield_1.0.0-9945FF)
 ![Crypto](https://img.shields.io/badge/Crypto-PQXDH_%2B_XChaCha20--Poly1305-red)
 ![PQ](https://img.shields.io/badge/Post--Quantum-ML--KEM--1024-blueviolet)
 ![MLS](https://img.shields.io/badge/Groups-MLS_RFC_9420-success)
@@ -23,9 +23,9 @@ offiziellen Vertriebspunkt erhältlich:
 
 **[pylonyx.de/argos/buy](https://pylonyx.de/argos/buy)** — Einmal-Kauf 4 EUR via Stripe (Karte) oder Solana Pay (4 USDC). Nach Bezahlung sofortiger Download + lebenslange Auto-Updates.
 
-### Source-Build (für Entwickler)
+### Source-Build (für Audit & Eigennutzung)
 
-Der Quellcode ist AGPLv3 und liegt offen in diesem Repo. Wer selbst bauen möchte:
+Der Quellcode steht ab v1.4.1 unter [PolyForm Shield 1.0.0](LICENSE) — du kannst ihn lesen, klonen, auditieren und für deinen persönlichen Gebrauch bauen. Was du **nicht** darfst: einen konkurrierenden Wallet- oder Messenger-Service damit aufbauen. Releases bis einschließlich v1.4.0 bleiben unter MIT — diese Rechte sind unwiderruflich. Wer selbst bauen möchte:
 
 ```bash
 git clone https://github.com/cengo441337-a11y/phantomchat
