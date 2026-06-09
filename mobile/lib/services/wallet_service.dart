@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'app_lock_service.dart';
 import '../src/rust/api/wallet.dart' as rust;
 import '../src/rust/api/wallet/eth_api.dart' as eth_rust;
 
@@ -42,6 +44,35 @@ class ArgosWalletService {
   /// Reset the counter (call on every successful unlock).
   Future<void> resetFailedAttempts() async {
     await _secure.delete(key: _kFailedAttempts);
+  }
+
+  // ── Biometric unlock (T3-2) ────────────────────────────────────────────
+  // The PIN is the Argon2id KDF input, so biometrics alone can't decrypt the
+  // keypair. We store the PIN in hardware-backed secure storage and gate its
+  // retrieval behind a fresh biometric auth — fingerprint/FaceID then unlocks
+  // without typing the PIN. Disabled by default; the user opts in.
+
+  Future<bool> biometricUnlockEnabled() async =>
+      (await _secure.read(key: _kAutoLockPin)) != null;
+
+  Future<void> enableBiometricUnlock(String pin) async =>
+      _secure.write(key: _kAutoLockPin, value: pin);
+
+  Future<void> disableBiometricUnlock() async =>
+      _secure.delete(key: _kAutoLockPin);
+
+  /// Authenticate via biometrics, then unlock the wallet with the stored
+  /// PIN. Returns the pubkey on success. Throws on biometric failure or if
+  /// biometric-unlock isn't enabled.
+  Future<String> unlockWithBiometric() async {
+    final ok = await AppLockService.authenticateBiometric(
+        reason: 'Argos Wallet entsperren');
+    if (!ok) throw 'Biometrie abgebrochen';
+    final pin = await _secure.read(key: _kAutoLockPin);
+    if (pin == null) throw 'Biometrik-Unlock nicht aktiviert';
+    final pk = await unlock(pin);
+    await resetFailedAttempts();
+    return pk;
   }
 
   String? _cachedPubkey;
@@ -421,4 +452,47 @@ BigInt? decimalToBaseUnits(String input, int decimals) {
   final v = BigInt.tryParse(combined.isEmpty ? '0' : combined);
   if (v == null || v <= BigInt.zero) return null;
   return v;
+}
+
+/// A Solana NFT as returned by the Argos NFT proxy (Helius DAS server-side).
+class ArgosNft {
+  final String id;
+  final String name;
+  final String? image;
+  final String? collection;
+  const ArgosNft({
+    required this.id,
+    required this.name,
+    this.image,
+    this.collection,
+  });
+  factory ArgosNft.fromJson(Map<String, dynamic> j) => ArgosNft(
+        id: j['id'] as String? ?? '',
+        name: j['name'] as String? ?? 'Unnamed',
+        image: j['image'] as String?,
+        collection: j['collection'] as String?,
+      );
+}
+
+/// Fetches the Solana NFTs owned by [owner] via the Argos backend proxy
+/// (which holds the Helius key server-side). Best-effort: returns [] on error.
+Future<List<ArgosNft>> fetchArgosNfts(String owner) async {
+  const base = 'https://pylonyx-dev.dc-infosec.de/api/argos/nfts';
+  try {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+    final req = await client
+        .getUrl(Uri.parse('$base?owner=${Uri.encodeComponent(owner)}'))
+        .timeout(const Duration(seconds: 10));
+    final res = await req.close().timeout(const Duration(seconds: 12));
+    if (res.statusCode != 200) return [];
+    final body = await res.transform(const Utf8Decoder()).join();
+    client.close(force: true);
+    final json = jsonDecode(body) as Map<String, dynamic>;
+    final list = (json['nfts'] as List?) ?? const [];
+    return list
+        .map((e) => ArgosNft.fromJson(e as Map<String, dynamic>))
+        .toList();
+  } catch (_) {
+    return [];
+  }
 }

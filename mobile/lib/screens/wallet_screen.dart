@@ -6,6 +6,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../services/price_service.dart';
+import '../services/address_book.dart';
+import '../services/app_lock_service.dart';
 import '../services/wallet_service.dart';
 import '../services/risk_check_service.dart';
 import '../src/rust/api/wallet.dart' as rust;
@@ -913,6 +915,43 @@ class _UnlockPanelState extends State<_UnlockPanel> {
   final _pin = TextEditingController();
   String? _error;
   bool _busy = false;
+  bool _bioEnabled = false;
+  bool _bioAvailable = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBio();
+  }
+
+  Future<void> _loadBio() async {
+    final enabled = await ArgosWalletService.instance.biometricUnlockEnabled();
+    final avail = await AppLockService.biometricAvailable();
+    if (!mounted) return;
+    setState(() {
+      _bioEnabled = enabled;
+      _bioAvailable = avail;
+    });
+    // Auto-prompt biometric on open if it's set up (fast path).
+    if (enabled && avail) _bioUnlock();
+  }
+
+  Future<void> _bioUnlock() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await ArgosWalletService.instance.unlockWithBiometric();
+      widget.onUnlocked();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = '$e';
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -931,6 +970,38 @@ class _UnlockPanelState extends State<_UnlockPanel> {
       await ArgosWalletService.instance.unlock(p);
       // Reset the PERSISTED counter on success.
       await ArgosWalletService.instance.resetFailedAttempts();
+      // Offer to enable biometric unlock once, if available + not yet on.
+      if (_bioAvailable && !_bioEnabled && mounted) {
+        final enable = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: kBgCard,
+            title: Text('Biometrik aktivieren?',
+                style: GoogleFonts.orbitron(color: kCyan, fontSize: 13)),
+            content: Text(
+              'Künftig per Fingerabdruck / FaceID entsperren statt PIN tippen. '
+              'Die PIN bleibt als Fallback gültig.',
+              style: GoogleFonts.spaceMono(color: kWhite, fontSize: 12),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text('Später',
+                    style:
+                        GoogleFonts.orbitron(color: kWhiteDim, fontSize: 11)),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: Text('Aktivieren',
+                    style: GoogleFonts.orbitron(color: kCyan, fontSize: 11)),
+              ),
+            ],
+          ),
+        );
+        if (enable == true) {
+          await ArgosWalletService.instance.enableBiometricUnlock(p);
+        }
+      }
       widget.onUnlocked();
     } catch (e) {
       if (!mounted) return;
@@ -1005,6 +1076,16 @@ class _UnlockPanelState extends State<_UnlockPanel> {
                   )
                 : const Text('ENTSPERREN'),
           ),
+          if (_bioEnabled && _bioAvailable) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _busy ? null : _bioUnlock,
+              icon: const Icon(Icons.fingerprint, color: kCyan),
+              label: Text('Per Biometrik entsperren',
+                  style: GoogleFonts.orbitron(
+                      color: kCyan, fontSize: 11, letterSpacing: 1)),
+            ),
+          ],
           const Spacer(),
           TextButton(
             onPressed: widget.onWipe,
@@ -1326,6 +1407,23 @@ class _MainPanel extends StatelessWidget {
               ),
             );
           }),
+          if (activeChain.isSolana) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.image_outlined, color: kCyan, size: 16),
+              label: Text('NFTs ansehen',
+                  style: GoogleFonts.orbitron(
+                      color: kCyan,
+                      fontSize: 11,
+                      letterSpacing: 2,
+                      fontWeight: FontWeight.w700)),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: kCyan),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              onPressed: () => _openNftSheet(context, pubkey),
+            ),
+          ],
           if (network == 'devnet') ...[
             const SizedBox(height: 16),
             OutlinedButton.icon(
@@ -1383,6 +1481,17 @@ class _MainPanel extends StatelessWidget {
       ),
     );
     if (res == true) await onRefresh();
+  }
+
+  Future<void> _openNftSheet(BuildContext context, String owner) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: kBgCard,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
+      builder: (_) => _NftSheet(owner: owner),
+    );
   }
 
   Future<void> _openHistorySheet(
@@ -1686,6 +1795,100 @@ class _SendSheetState extends State<_SendSheet> {
     );
   }
 
+  Future<void> _pickFromBook() async {
+    final entries = await AddressBook.forChain(_chain.backendId);
+    if (!mounted) return;
+    if (entries.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Adressbuch leer — nach dem Senden kannst du speichern.',
+            style: GoogleFonts.spaceMono(color: kWhiteDim, fontSize: 11)),
+        backgroundColor: kBgCard,
+      ));
+      return;
+    }
+    final picked = await showModalBottomSheet<AddressEntry>(
+      context: context,
+      backgroundColor: kBgCard,
+      builder: (_) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.all(16),
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text('ADRESSBUCH',
+                  style: GoogleFonts.orbitron(
+                      color: kCyan, fontSize: 12, letterSpacing: 3)),
+            ),
+            ...entries.map((e) => ListTile(
+                  leading: const Icon(Icons.person_outline, color: kCyan),
+                  title: Text(e.name,
+                      style: GoogleFonts.spaceGrotesk(color: kWhite)),
+                  subtitle: Text(
+                    e.address.length > 16
+                        ? '${e.address.substring(0, 8)}…${e.address.substring(e.address.length - 6)}'
+                        : e.address,
+                    style:
+                        GoogleFonts.spaceMono(color: kWhiteDim, fontSize: 10),
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete_outline,
+                        color: kMagenta, size: 18),
+                    onPressed: () async {
+                      final nav = Navigator.of(context);
+                      await AddressBook.remove(e);
+                      nav.pop();
+                    },
+                  ),
+                  onTap: () => Navigator.pop(context, e),
+                )),
+          ],
+        ),
+      ),
+    );
+    if (picked != null) {
+      setState(() => _recipient.text = picked.address);
+    }
+  }
+
+  Future<void> _maybeOfferSave(String address) async {
+    final existing = await AddressBook.nameFor(address);
+    if (existing != null || !mounted) return;
+    final nameCtrl = TextEditingController();
+    final save = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kBgCard,
+        title: Text('Empfänger speichern?',
+            style: GoogleFonts.orbitron(color: kCyan, fontSize: 13)),
+        content: TextField(
+          controller: nameCtrl,
+          decoration: const InputDecoration(labelText: 'Name'),
+          style: GoogleFonts.spaceMono(color: kCyan),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('Nein',
+                style: GoogleFonts.orbitron(color: kWhiteDim, fontSize: 11)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Speichern',
+                style: GoogleFonts.orbitron(color: kCyan, fontSize: 11)),
+          ),
+        ],
+      ),
+    );
+    if (save == true && nameCtrl.text.trim().isNotEmpty) {
+      await AddressBook.add(AddressEntry(
+        name: nameCtrl.text.trim(),
+        address: address,
+        chain: _chain.isSolana ? 'mainnet-beta' : 'any',
+      ));
+    }
+  }
+
   Future<void> _go() async {
     final raw = _recipient.text.trim();
     if (raw.isEmpty) {
@@ -1765,6 +1968,7 @@ class _SendSheetState extends State<_SendSheet> {
         _busy = false;
         _confirmedSig = sig;
       });
+      unawaited(_maybeOfferSave(validated));
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -1831,6 +2035,12 @@ class _SendSheetState extends State<_SendSheet> {
                     ? 'EMPFÄNGER · Solana-Adresse'
                     : 'EMPFÄNGER · ${_chain.label}-Adresse (0x…)',
                 hintText: _chain.isSolana ? '9xKL…' : '0x…',
+                suffixIcon: IconButton(
+                  tooltip: 'Adressbuch',
+                  icon: const Icon(Icons.contacts_outlined,
+                      color: kCyan, size: 18),
+                  onPressed: _pickFromBook,
+                ),
               ),
               style: GoogleFonts.spaceMono(color: kCyan, fontSize: 12),
             ),
@@ -2588,6 +2798,146 @@ class _HistorySheetState extends State<_HistorySheet> {
                           ],
                         ),
                       ),
+                    );
+                  },
+                ),
+              ),
+            const SizedBox(height: 16),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('SCHLIESSEN',
+                  style: GoogleFonts.orbitron(
+                      color: kWhiteDim, fontSize: 11, letterSpacing: 2)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+/// Solana NFT grid for the unlocked wallet. Images load from the metadata
+/// URIs returned by Helius DAS (via the Argos backend proxy). Best-effort —
+/// a broken image URI just shows a placeholder.
+class _NftSheet extends StatefulWidget {
+  final String owner;
+  const _NftSheet({required this.owner});
+
+  @override
+  State<_NftSheet> createState() => _NftSheetState();
+}
+
+class _NftSheetState extends State<_NftSheet> {
+  bool _loading = true;
+  List<ArgosNft> _nfts = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final nfts = await fetchArgosNfts(widget.owner);
+    if (!mounted) return;
+    setState(() {
+      _nfts = nfts;
+      _loading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('NFTs',
+                style: GoogleFonts.orbitron(
+                    color: kCyan,
+                    fontSize: 14,
+                    letterSpacing: 3,
+                    fontWeight: FontWeight.w700)),
+            const SizedBox(height: 16),
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.all(24),
+                child: CircularProgressIndicator(color: kCyan, strokeWidth: 2),
+              )
+            else if (_nfts.isEmpty)
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Text('Keine NFTs in dieser Wallet.',
+                    style:
+                        GoogleFonts.spaceMono(color: kWhiteDim, fontSize: 12)),
+              )
+            else
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(context).size.height * 0.6),
+                child: GridView.builder(
+                  shrinkWrap: true,
+                  gridDelegate:
+                      const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
+                    crossAxisSpacing: 8,
+                    mainAxisSpacing: 8,
+                    childAspectRatio: 0.78,
+                  ),
+                  itemCount: _nfts.length,
+                  itemBuilder: (_, i) {
+                    final n = _nfts[i];
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: kBgInput,
+                              border: Border.all(color: kCyanDim),
+                            ),
+                            clipBehavior: Clip.hardEdge,
+                            child: (n.image != null && n.image!.isNotEmpty)
+                                ? Image.network(
+                                    n.image!,
+                                    fit: BoxFit.cover,
+                                    width: double.infinity,
+                                    errorBuilder: (ctx2, err, stack) => const Center(
+                                        child: Icon(Icons.broken_image,
+                                            color: kGrayText, size: 24)),
+                                    loadingBuilder: (c, child, prog) =>
+                                        prog == null
+                                            ? child
+                                            : const Center(
+                                                child: SizedBox(
+                                                    width: 16,
+                                                    height: 16,
+                                                    child:
+                                                        CircularProgressIndicator(
+                                                            color: kCyan,
+                                                            strokeWidth: 1.5))),
+                                  )
+                                : const Center(
+                                    child: Icon(Icons.image,
+                                        color: kGrayText, size: 24)),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(n.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.spaceMono(
+                                color: kWhite, fontSize: 9)),
+                        if (n.collection != null)
+                          Text(n.collection!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.spaceMono(
+                                  color: kWhiteDim, fontSize: 8)),
+                      ],
                     );
                   },
                 ),
