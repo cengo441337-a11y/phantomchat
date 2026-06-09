@@ -20,6 +20,41 @@ import '../theme.dart';
 ///   restoring     → paste mnemonic + PIN, then main
 ///   locked        → wallet exists, enter PIN
 ///   unlocked      → main wallet view (balance + actions)
+/// Parse a user-entered decimal amount string into raw base units using
+/// EXACT BigInt math. `double` has a 53-bit mantissa (~15-16 significant
+/// digits) and silently loses precision / overflows for high-decimal tokens
+/// (USDC 6, SOL 9, ETH 18). Going through `double` could send a slightly
+/// different amount than the user typed. This stays integer the whole way.
+///
+/// Truncates any digits beyond `decimals` (never rounds up) so the user can
+/// never accidentally send MORE than they entered. Returns null on invalid
+/// input or a non-positive amount.
+BigInt? decimalToBaseUnits(String input, int decimals) {
+  var t = input.trim().replaceAll(',', '.');
+  if (t.isEmpty || t == '.') return null;
+  if (!RegExp(r'^\d*\.?\d*$').hasMatch(t)) return null;
+  final dot = t.indexOf('.');
+  String wholePart;
+  String fracPart;
+  if (dot < 0) {
+    wholePart = t;
+    fracPart = '';
+  } else {
+    wholePart = t.substring(0, dot);
+    fracPart = t.substring(dot + 1);
+  }
+  if (wholePart.isEmpty) wholePart = '0';
+  if (fracPart.length > decimals) {
+    fracPart = fracPart.substring(0, decimals);
+  } else {
+    fracPart = fracPart.padRight(decimals, '0');
+  }
+  final combined = wholePart + fracPart;
+  final v = BigInt.tryParse(combined.isEmpty ? '0' : combined);
+  if (v == null || v <= BigInt.zero) return null;
+  return v;
+}
+
 class ArgosWalletScreen extends StatefulWidget {
   const ArgosWalletScreen({super.key});
 
@@ -860,7 +895,6 @@ class _UnlockPanelState extends State<_UnlockPanel> {
   final _pin = TextEditingController();
   String? _error;
   bool _busy = false;
-  int _attempts = 0;
 
   @override
   void dispose() {
@@ -877,21 +911,28 @@ class _UnlockPanelState extends State<_UnlockPanel> {
     });
     try {
       await ArgosWalletService.instance.unlock(p);
-      _attempts = 0;
+      // Reset the PERSISTED counter on success.
+      await ArgosWalletService.instance.resetFailedAttempts();
       widget.onUnlocked();
     } catch (e) {
       if (!mounted) return;
-      _attempts += 1;
       _pin.clear();
-      if (_attempts >= _maxAttempts) {
+      // Increment the PERSISTED counter — survives app restart / background,
+      // so an attacker cannot dodge the 10-try wipe by force-stopping the
+      // app between attempt batches (the old in-memory _attempts reset to 0
+      // on every rebuild).
+      final attempts =
+          await ArgosWalletService.instance.incrementFailedAttempts();
+      if (attempts >= _maxAttempts) {
         // Panic-wipe: defense against an attacker brute-forcing the PIN
-        // on a stolen device. The encrypted blob is destroyed; only the
-        // recovery phrase can rebuild the wallet.
+        // on a stolen device. The encrypted blob + mnemonic sidecar are
+        // destroyed; only the recovery phrase can rebuild the wallet.
         await ArgosWalletService.instance.wipe();
         widget.onWipe();
         return;
       }
-      final remaining = _maxAttempts - _attempts;
+      final remaining = _maxAttempts - attempts;
+      if (!mounted) return;
       setState(() {
         _busy = false;
         _error = (remaining <= 3)
@@ -1570,8 +1611,11 @@ class _SendSheetState extends State<_SendSheet> {
       setState(() => _error = 'Empfänger fehlt.');
       return;
     }
-    final amt = double.tryParse(_amount.text.trim().replaceAll(',', '.'));
-    if (amt == null || amt <= 0) {
+    final sendDecimals = _asset == 'SOL'
+        ? 9
+        : argosKnownTokens.firstWhere((t) => t.symbol == _asset).decimals;
+    final baseUnits = decimalToBaseUnits(_amount.text, sendDecimals);
+    if (baseUnits == null) {
       setState(() => _error = 'Betrag ungültig.');
       return;
     }
@@ -1608,14 +1652,12 @@ class _SendSheetState extends State<_SendSheet> {
     try {
       String sig;
       if (_asset == 'SOL') {
-        final lamports = BigInt.from((amt * 1000000000).round());
         sig = await ArgosWalletService.instance
-            .sendSol(recipient: validated, lamports: lamports);
+            .sendSol(recipient: validated, lamports: baseUnits);
       } else {
         final tok = argosKnownTokens.firstWhere((t) => t.symbol == _asset);
-        final raw = BigInt.from((amt * _pow10(tok.decimals)).round());
         sig = await ArgosWalletService.instance
-            .sendToken(mint: tok.mint, recipient: validated, amount: raw);
+            .sendToken(mint: tok.mint, recipient: validated, amount: baseUnits);
       }
       if (!mounted) return;
       setState(() {
@@ -1629,14 +1671,6 @@ class _SendSheetState extends State<_SendSheet> {
         _error = '$e';
       });
     }
-  }
-
-  num _pow10(int n) {
-    num r = 1;
-    for (var i = 0; i < n; i++) {
-      r *= 10;
-    }
-    return r;
   }
 
   @override
@@ -1816,17 +1850,9 @@ class _SwapSheetState extends State<_SwapSheet> {
     return argosKnownTokens.firstWhere((t) => t.symbol == symbol).decimals;
   }
 
-  num _pow10(int n) {
-    num r = 1;
-    for (var i = 0; i < n; i++) {
-      r *= 10;
-    }
-    return r;
-  }
-
   Future<void> _quote() async {
-    final amt = double.tryParse(_amount.text.trim().replaceAll(',', '.'));
-    if (amt == null || amt <= 0) {
+    final raw = decimalToBaseUnits(_amount.text, _decimalsFor(_input));
+    if (raw == null) {
       setState(() => _error = 'Betrag ungültig.');
       return;
     }
@@ -1836,7 +1862,6 @@ class _SwapSheetState extends State<_SwapSheet> {
       _preview = null;
     });
     try {
-      final raw = BigInt.from((amt * _pow10(_decimalsFor(_input))).round());
       final p = await ArgosWalletService.instance.quoteSwap(
         inputMint: _mintFor(_input),
         outputMint: _mintFor(_output),

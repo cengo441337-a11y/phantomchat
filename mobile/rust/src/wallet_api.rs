@@ -177,6 +177,11 @@ pub fn argos_unlock_wallet(pin: String, storage_path: String) -> Result<String, 
         ArgosWallet::load_encrypted(&pin, &path).map_err(|e| format!("unlock: {e}"))?;
     let pk = wallet.pubkey().to_string();
     *cache().lock().map_err(|e| format!("lock: {e}"))? = Some(Arc::new(wallet));
+    // Clear any stale mnemonic from a previous unlock BEFORE attempting to
+    // load this wallet's sidecar. Otherwise unlocking wallet B (no sidecar)
+    // after wallet A would leave A's phrase cached and ETH ops would derive
+    // from the wrong wallet.
+    clear_mnemonic_cache();
     // Best-effort: load the mnemonic sidecar so EVM chains can derive on
     // demand. Pre-1.4 wallets won't have it — that's OK; ETH commands
     // will then return a clear "mnemonic not unlocked" error and the UI

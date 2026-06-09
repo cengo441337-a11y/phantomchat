@@ -295,3 +295,21 @@ pub fn argos_eth_validate_address(s: String) -> Result<String, String> {
     let _ = bytes; // ensure parse succeeded
     Ok(format!("0x{}", hex::encode(bytes)))
 }
+
+/// Securely delete the encrypted mnemonic sidecar for the given Solana
+/// storage path. MUST be called from the Dart wipe() path — otherwise the
+/// recovery phrase survives a wallet wipe (including the 10-try panic-wipe)
+/// because wallet_service.dart only deletes the Solana keypair blob.
+///
+/// Uses the same [mnemonic_sidecar_path] derivation as persist/load so the
+/// path can never drift between write and delete. Also clears the in-memory
+/// mnemonic cache. Idempotent — returns Ok even if the sidecar was absent.
+pub fn argos_wipe_mnemonic_sidecar(storage_path: String) -> Result<(), String> {
+    clear_mnemonic_cache();
+    let target = mnemonic_sidecar_path(&storage_path);
+    match std::fs::remove_file(&target) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("sidecar delete: {e}")),
+    }
+}

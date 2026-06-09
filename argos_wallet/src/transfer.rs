@@ -68,7 +68,11 @@ pub fn argos_send_fee(amount: u64, floor: u64) -> u64 {
     let pct = amount
         .saturating_mul(SEND_FEE_BPS as u64)
         / 10_000;
-    pct.max(floor)
+    // Sicherheit: die Gebuehr darf NIE den Sendebetrag selbst uebersteigen.
+    // Ohne das min(amount) wuerde ein Mikro-Transfer (z.B. 1 Lamport) die
+    // 100_000-Lamport-Floor-Gebuehr ausloesen — Faktor 100_000 ueber dem
+    // eigentlichen Transfer. Der Cap garantiert: Gebuehr <= Betrag.
+    pct.max(floor).min(amount)
 }
 
 /// One-shot RPC client built from the wallet's configured network. Each
@@ -285,9 +289,19 @@ mod tests {
 
     #[test]
     fn argos_send_fee_uses_floor_for_small_amounts() {
-        // 0.5 % of 100_000 lamports = 500 lamports, below the floor.
+        // 0.5 % of 100_000 lamports = 500 lamports, below the floor — and
+        // the amount itself equals the floor, so the cap is a no-op here.
         let fee = argos_send_fee(100_000, MIN_SEND_FEE_LAMPORTS);
         assert_eq!(fee, MIN_SEND_FEE_LAMPORTS);
+    }
+
+    #[test]
+    fn argos_send_fee_never_exceeds_amount() {
+        // Dust send: 1 lamport. Without the cap the floor (100_000) would
+        // be 100_000x the transfer. The cap clamps fee to the amount.
+        assert_eq!(argos_send_fee(1, MIN_SEND_FEE_LAMPORTS), 1);
+        // 50_000-lamport send (below floor): fee capped at the 50_000 amount.
+        assert_eq!(argos_send_fee(50_000, MIN_SEND_FEE_LAMPORTS), 50_000);
     }
 
     #[test]

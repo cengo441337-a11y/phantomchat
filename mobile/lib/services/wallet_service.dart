@@ -22,6 +22,27 @@ class ArgosWalletService {
   static const _kStoredPubkey = 'argos.pubkey.b58';
   static const _kStoredNetwork = 'argos.network';
   static const _kAutoLockPin = 'argos.autounlock.pin';
+  static const _kFailedAttempts = 'argos.unlock.failed_attempts';
+
+  /// Persisted count of consecutive wrong-PIN attempts. Survives app
+  /// restarts and backgrounding so the 10-try panic-wipe cannot be reset
+  /// by an attacker force-stopping the app between attempt batches.
+  Future<int> failedAttempts() async {
+    final raw = await _secure.read(key: _kFailedAttempts);
+    return int.tryParse(raw ?? '0') ?? 0;
+  }
+
+  /// Increment + persist the failed-attempt counter. Returns the new value.
+  Future<int> incrementFailedAttempts() async {
+    final next = (await failedAttempts()) + 1;
+    await _secure.write(key: _kFailedAttempts, value: next.toString());
+    return next;
+  }
+
+  /// Reset the counter (call on every successful unlock).
+  Future<void> resetFailedAttempts() async {
+    await _secure.delete(key: _kFailedAttempts);
+  }
 
   String? _cachedPubkey;
   String? _cachedNetwork;
@@ -110,13 +131,31 @@ class ArgosWalletService {
   Future<void> wipe() async {
     await lock();
     final p = await walletPath();
+    // Delete the mnemonic sidecar FIRST (via Rust, same path derivation as
+    // persist/load) so the recovery phrase can never survive a wipe — this
+    // includes the 10-try panic-wipe. Without this the .mn.enc.json blob
+    // stayed on disk and a stolen device kept the phrase recoverable.
+    try {
+      await eth_rust.argosWipeMnemonicSidecar(storagePath: p);
+    } catch (_) {
+      // Best-effort; fall through to delete the Solana blob regardless.
+    }
     final f = File(p);
     if (f.existsSync()) {
       await f.delete();
     }
+    // Belt-and-suspenders: also remove the sidecar Dart-side in case the
+    // FFI path ever drifts. Derivation mirrors mnemonic_sidecar_path:
+    // strip the last extension, append .mn.enc.json.
+    final stem = p.endsWith('.json') ? p.substring(0, p.length - 5) : p;
+    final sidecar = File('$stem.mn.enc.json');
+    if (sidecar.existsSync()) {
+      await sidecar.delete();
+    }
     await _secure.delete(key: _kStoredPubkey);
     await _secure.delete(key: _kStoredNetwork);
     await _secure.delete(key: _kAutoLockPin);
+    await _secure.delete(key: _kFailedAttempts);
   }
 
   /// SOL balance in lamports.

@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1070686678;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -2113954315;
 
 // Section: executor
 
@@ -849,6 +849,40 @@ fn wire__crate__api__wallet__argos_wallet_pubkey_impl(
                 let output_ok = Result::<_, ()>::Ok(crate::api::wallet::argos_wallet_pubkey())?;
                 Ok(output_ok)
             })())
+        },
+    )
+}
+fn wire__crate__api__wallet__eth_api__argos_wipe_mnemonic_sidecar_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "argos_wipe_mnemonic_sidecar",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_storage_path = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok =
+                        crate::api::wallet::eth_api::argos_wipe_mnemonic_sidecar(api_storage_path)?;
+                    Ok(output_ok)
+                })())
+            }
         },
     )
 }
@@ -2235,31 +2269,37 @@ fn pde_ffi_dispatcher_primary_impl(
         17 => wire__crate__api__wallet__argos_send_token_impl(port, ptr, rust_vec_len, data_len),
         18 => wire__crate__api__wallet__argos_swap_and_send_impl(port, ptr, rust_vec_len, data_len),
         19 => wire__crate__api__wallet__argos_unlock_wallet_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__init_secure_storage_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__join_group_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__load_local_identity_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__load_local_identity_v3_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__mls_add_member_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__mls_create_group_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__mls_decrypt_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__mls_directory_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__mls_directory_insert_impl(port, ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__mls_encrypt_impl(port, ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__mls_init_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__mls_join_via_welcome_impl(port, ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__mls_list_members_impl(port, ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__mls_publish_key_package_impl(port, ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__mls_self_signing_pub_hex_impl(port, ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__nostr_build_event_impl(port, ptr, rust_vec_len, data_len),
-        44 => wire__crate__api__nostr_extract_event_payload_impl(port, ptr, rust_vec_len, data_len),
-        45 => wire__crate__api__nostr_subscription_req_impl(port, ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__perform_panic_wipe_impl(port, ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__receive_full_v3_impl(port, ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__scan_incoming_envelope_impl(port, ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__send_group_message_impl(port, ptr, rust_vec_len, data_len),
-        50 => wire__crate__api__send_sealed_v3_impl(port, ptr, rust_vec_len, data_len),
-        51 => wire__crate__api__send_secure_message_impl(port, ptr, rust_vec_len, data_len),
-        53 => wire__crate__api__update_avatar_cid_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__wallet__eth_api__argos_wipe_mnemonic_sidecar_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        26 => wire__crate__api__init_secure_storage_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__join_group_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__load_local_identity_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__load_local_identity_v3_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__mls_add_member_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__mls_create_group_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__mls_decrypt_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__mls_directory_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__mls_directory_insert_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__mls_encrypt_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__mls_init_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__mls_join_via_welcome_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__mls_list_members_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__mls_publish_key_package_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__mls_self_signing_pub_hex_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__nostr_build_event_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__nostr_extract_event_payload_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__nostr_subscription_req_impl(port, ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__perform_panic_wipe_impl(port, ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__receive_full_v3_impl(port, ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__scan_incoming_envelope_impl(port, ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__send_group_message_impl(port, ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__send_sealed_v3_impl(port, ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__send_secure_message_impl(port, ptr, rust_vec_len, data_len),
+        54 => wire__crate__api__update_avatar_cid_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2275,12 +2315,12 @@ fn pde_ffi_dispatcher_sync_impl(
         20 => wire__crate__api__wallet__argos_validate_address_impl(ptr, rust_vec_len, data_len),
         21 => wire__crate__api__wallet__argos_wallet_network_impl(ptr, rust_vec_len, data_len),
         22 => wire__crate__api__wallet__argos_wallet_pubkey_impl(ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__generate_phantom_id_impl(ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__get_privacy_mode_impl(ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__mls_in_group_impl(ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__mls_member_count_impl(ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__mls_self_label_impl(ptr, rust_vec_len, data_len),
-        52 => wire__crate__api__set_privacy_mode_impl(ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__generate_phantom_id_impl(ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__get_privacy_mode_impl(ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__mls_in_group_impl(ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__mls_member_count_impl(ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__mls_self_label_impl(ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__set_privacy_mode_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

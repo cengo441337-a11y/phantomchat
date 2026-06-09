@@ -126,13 +126,19 @@ class RiskVerdict {
 
   /// `true` if the UI should require an explicit "yes, I know what I'm
   /// doing" tap before signing. Anything ≥ 50 OR explicit warning.
-  bool get shouldWarn => maxScore >= 50 || warnings.isNotEmpty;
+  ///  if the UI must pop a confirmation before signing. Includes the
+  /// OFFLINE case: if the backend was unreachable we could NOT verify the
+  /// recipient, so the user must explicitly acknowledge an unchecked send
+  /// rather than the old silent fail-open that looked identical to "clean".
+  bool get shouldWarn =>
+      !reachable || maxScore >= 50 || warnings.isNotEmpty;
 
   /// `true` for the green "verified clean" chip on USDC/USDT/wSOL.
-  bool get isClean => trusted && maxScore < 20 && warnings.isEmpty;
+  bool get isClean => reachable && trusted && maxScore < 20 && warnings.isEmpty;
 
   /// Color hint: 'green' (clean), 'amber' (caution), 'red' (warn).
   String get severity {
+    if (!reachable) return 'amber'; // unverified != clean
     if (maxScore >= 70) return 'red';
     if (maxScore >= 30 || warnings.isNotEmpty) return 'amber';
     return 'green';

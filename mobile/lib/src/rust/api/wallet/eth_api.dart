@@ -62,3 +62,16 @@ Future<String> argosEthFormat({required String wei}) =>
 /// lower-case hex. Returns the EIP-55 form on success.
 Future<String> argosEthValidateAddress({required String s}) =>
     RustLib.instance.api.crateApiWalletEthApiArgosEthValidateAddress(s: s);
+
+/// Securely delete the encrypted mnemonic sidecar for the given Solana
+/// storage path. MUST be called from the Dart wipe() path — otherwise the
+/// recovery phrase survives a wallet wipe (including the 10-try panic-wipe)
+/// because wallet_service.dart only deletes the Solana keypair blob.
+///
+/// Uses the same [mnemonic_sidecar_path] derivation as persist/load so the
+/// path can never drift between write and delete. Also clears the in-memory
+/// mnemonic cache. Idempotent — returns Ok even if the sidecar was absent.
+Future<void> argosWipeMnemonicSidecar({required String storagePath}) => RustLib
+    .instance
+    .api
+    .crateApiWalletEthApiArgosWipeMnemonicSidecar(storagePath: storagePath);
