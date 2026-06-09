@@ -53,6 +53,11 @@ use crate::{ArgosWallet, Error};
 /// Argos platform fee in basis points (1 bp = 0.01 %). 50 = 0.5 %.
 pub const PLATFORM_FEE_BPS: u16 = 50;
 
+/// Reduced swap fee for Argos Pro subscribers (0,25 %). The client passes
+/// this when the wallet holds an active Pro subscription; free users keep
+/// PLATFORM_FEE_BPS. quote_swap clamps to [PRO_FEE_BPS, PLATFORM_FEE_BPS].
+pub const PRO_FEE_BPS: u16 = 25;
+
 /// Argos treasury wallet — receives all platform fees as SPL tokens.
 ///
 /// **Placeholder** until UG is set up. Once UG is registered, this rotates
@@ -215,7 +220,11 @@ impl ArgosWallet {
         output_mint: &Pubkey,
         amount_in: u64,
         slippage_bps: u16,
+        fee_bps: u16,
     ) -> Result<SwapPreview, Error> {
+        // Clamp to [PRO_FEE_BPS, PLATFORM_FEE_BPS] so a client can never set
+        // the fee ABOVE the standard rate, and never below the Pro rate.
+        let effective_fee = fee_bps.clamp(PRO_FEE_BPS, PLATFORM_FEE_BPS);
         let url = format!(
             "{base}/quote?\
              inputMint={input}&outputMint={output}&\
@@ -226,7 +235,7 @@ impl ArgosWallet {
             output = output_mint,
             amount = amount_in,
             slippage = slippage_bps,
-            fee = PLATFORM_FEE_BPS,
+            fee = effective_fee,
         );
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
@@ -534,7 +543,7 @@ mod tests {
         let sol =
             Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap();
         let preview = w
-            .quote_swap(&usdc, &sol, 10_000_000, 50)
+            .quote_swap(&usdc, &sol, 10_000_000, 50, PLATFORM_FEE_BPS)
             .await
             .expect("quote should succeed");
         assert!(preview.amount_out_expected > 0);

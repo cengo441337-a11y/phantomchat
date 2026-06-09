@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../services/price_service.dart';
+import '../services/pro_service.dart';
 import '../services/address_book.dart';
 import '../services/app_lock_service.dart';
 import '../services/wallet_service.dart';
@@ -121,6 +123,8 @@ class _ArgosWalletScreenState extends State<ArgosWalletScreen>
           _refreshing = false;
         });
         unawaited(_updatePortfolio());
+        final pk = _svc.pubkey;
+        if (pk != null) unawaited(ProService.refresh(pk));
       } else {
         final net = _activeChain.backendId;
         final addr = await _svc.ethAddress(net);
@@ -1423,6 +1427,8 @@ class _MainPanel extends StatelessWidget {
               ),
               onPressed: () => _openNftSheet(context, pubkey),
             ),
+            const SizedBox(height: 12),
+            _ProCard(pubkey: pubkey),
           ],
           if (network == 'devnet') ...[
             const SizedBox(height: 16),
@@ -2186,6 +2192,7 @@ class _SwapSheetState extends State<_SwapSheet> {
         outputMint: _mintFor(_output),
         amountIn: raw,
         slippageBps: _slippageBps,
+        feeBps: ProService.swapFeeBps,
       );
       if (!mounted) return;
       setState(() {
@@ -2285,7 +2292,10 @@ class _SwapSheetState extends State<_SwapSheet> {
                     letterSpacing: 3,
                     fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
-            Text('Gebühr: 0,5 % an Argos-Treasury',
+            Text(
+                ProService.isPro
+                    ? 'Gebühr: 0,25 % · Argos Pro aktiv ★'
+                    : 'Gebühr: 0,5 % an Argos-Treasury',
                 style: GoogleFonts.spaceMono(color: kWhiteDim, fontSize: 10)),
             const SizedBox(height: 16),
             Row(
@@ -2951,6 +2961,110 @@ class _NftSheetState extends State<_NftSheet> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+
+/// Argos Pro upsell / status card. Pro is keyed by the Solana wallet
+/// address (the subscription on Pylonyx links addr -> Stripe sub). Shows a
+/// subscribe button (opens Stripe checkout in the browser) or an active
+/// badge. Pro lowers the swap fee from 0,5 % to 0,25 %.
+class _ProCard extends StatefulWidget {
+  final String pubkey;
+  const _ProCard({required this.pubkey});
+
+  @override
+  State<_ProCard> createState() => _ProCardState();
+}
+
+class _ProCardState extends State<_ProCard> {
+  bool _busy = false;
+
+  Future<void> _subscribe() async {
+    setState(() => _busy = true);
+    final url = await ProService.startCheckout(widget.pubkey);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (url == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Checkout konnte nicht gestartet werden.',
+            style: GoogleFonts.spaceMono(color: kMagenta, fontSize: 11)),
+        backgroundColor: kBgCard,
+      ));
+      return;
+    }
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      // Fallback: copy the link.
+      await Clipboard.setData(ClipboardData(text: url));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Checkout-Link kopiert.',
+            style: GoogleFonts.spaceMono(color: kCyan, fontSize: 11)),
+        backgroundColor: kBgCard,
+      ));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isPro = ProService.isPro;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: kBgCard,
+        border: Border.all(color: isPro ? kGreen : kYellow),
+        boxShadow: isPro ? neonGlow(kGreen, radius: 10) : null,
+      ),
+      child: Row(
+        children: [
+          Icon(isPro ? Icons.star : Icons.star_border,
+              color: isPro ? kGreen : kYellow, size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(isPro ? 'ARGOS PRO AKTIV' : 'ARGOS PRO',
+                    style: GoogleFonts.orbitron(
+                        color: isPro ? kGreen : kYellow,
+                        fontSize: 12,
+                        letterSpacing: 2,
+                        fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Text(
+                    isPro
+                        ? 'Swap-Gebühr 0,25 % aktiv'
+                        : '0,25 % Swap-Gebühr · 4 €/Monat',
+                    style:
+                        GoogleFonts.spaceMono(color: kWhiteDim, fontSize: 10)),
+              ],
+            ),
+          ),
+          if (!isPro)
+            ElevatedButton(
+              onPressed: _busy ? null : _subscribe,
+              style: ElevatedButton.styleFrom(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                side: const BorderSide(color: kYellow, width: 1.5),
+                foregroundColor: kYellow,
+              ),
+              child: _busy
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                          color: kYellow, strokeWidth: 1.5))
+                  : Text('AKTIVIEREN',
+                      style: GoogleFonts.orbitron(
+                          fontSize: 10, letterSpacing: 1)),
+            ),
+        ],
       ),
     );
   }

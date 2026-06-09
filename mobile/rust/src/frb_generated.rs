@@ -550,6 +550,7 @@ fn wire__crate__api__wallet__argos_quote_swap_impl(
             let api_output_mint_b58 = <String>::sse_decode(&mut deserializer);
             let api_amount_in = <u64>::sse_decode(&mut deserializer);
             let api_slippage_bps = <u16>::sse_decode(&mut deserializer);
+            let api_fee_bps = <u16>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
@@ -559,6 +560,7 @@ fn wire__crate__api__wallet__argos_quote_swap_impl(
                             api_output_mint_b58,
                             api_amount_in,
                             api_slippage_bps,
+                            api_fee_bps,
                         )
                         .await?;
                         Ok(output_ok)

@@ -129,6 +129,7 @@ abstract class RustLibApi extends BaseApi {
     required String outputMintB58,
     required BigInt amountIn,
     required int slippageBps,
+    required int feeBps,
   });
 
   Future<List<ArgosTxRow>> crateApiWalletArgosRecentSignatures({
@@ -708,6 +709,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String outputMintB58,
     required BigInt amountIn,
     required int slippageBps,
+    required int feeBps,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -717,6 +719,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(outputMintB58, serializer);
           sse_encode_u_64(amountIn, serializer);
           sse_encode_u_16(slippageBps, serializer);
+          sse_encode_u_16(feeBps, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -729,7 +732,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiWalletArgosQuoteSwapConstMeta,
-        argValues: [inputMintB58, outputMintB58, amountIn, slippageBps],
+        argValues: [inputMintB58, outputMintB58, amountIn, slippageBps, feeBps],
         apiImpl: this,
       ),
     );
@@ -738,7 +741,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiWalletArgosQuoteSwapConstMeta =>
       const TaskConstMeta(
         debugName: "argos_quote_swap",
-        argNames: ["inputMintB58", "outputMintB58", "amountIn", "slippageBps"],
+        argNames: [
+          "inputMintB58",
+          "outputMintB58",
+          "amountIn",
+          "slippageBps",
+          "feeBps",
+        ],
       );
 
   @override

@@ -217,11 +217,13 @@ class ArgosWalletService {
     required String outputMint,
     required BigInt amountIn,
     required int slippageBps,
+    int feeBps = 50,
   }) => rust.argosQuoteSwap(
         inputMintB58: inputMint,
         outputMintB58: outputMint,
         amountIn: amountIn,
         slippageBps: slippageBps,
+        feeBps: feeBps,
       );
 
   /// Execute the cached preview as a swap (output stays in user wallet).

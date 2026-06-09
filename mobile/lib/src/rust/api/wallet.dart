@@ -97,11 +97,13 @@ Future<ArgosSwapPreview> argosQuoteSwap({
   required String outputMintB58,
   required BigInt amountIn,
   required int slippageBps,
+  required int feeBps,
 }) => RustLib.instance.api.crateApiWalletArgosQuoteSwap(
   inputMintB58: inputMintB58,
   outputMintB58: outputMintB58,
   amountIn: amountIn,
   slippageBps: slippageBps,
+  feeBps: feeBps,
 );
 
 /// Execute the most recently quoted swap. Output stays in the user's wallet.

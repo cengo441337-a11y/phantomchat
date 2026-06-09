@@ -278,6 +278,7 @@ pub async fn argos_quote_swap(
     output_mint_b58: String,
     amount_in: u64,
     slippage_bps: u16,
+    fee_bps: u16,
 ) -> Result<ArgosSwapPreview, String> {
     let input_mint =
         Pubkey::from_str(input_mint_b58.trim()).map_err(|e| format!("input: {e}"))?;
@@ -285,7 +286,7 @@ pub async fn argos_quote_swap(
         Pubkey::from_str(output_mint_b58.trim()).map_err(|e| format!("output: {e}"))?;
     let w = unlocked()?;
     let preview = w
-        .quote_swap(&input_mint, &output_mint, amount_in, slippage_bps)
+        .quote_swap(&input_mint, &output_mint, amount_in, slippage_bps, fee_bps)
         .await
         .map_err(|e| format!("quote: {e}"))?;
     let info = ArgosSwapPreview {
