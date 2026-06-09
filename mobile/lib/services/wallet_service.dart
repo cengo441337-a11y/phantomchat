@@ -408,6 +408,13 @@ const argosKnownTokens = [
 
 const argosWsolMint = 'So11111111111111111111111111111111111111112';
 
+/// jitoSOL — Jito liquid-staking token. "Staking" in Argos = swapping SOL
+/// into jitoSOL via Jupiter; the yield (~7-8 % APY) accrues in the jitoSOL
+/// price, so the holder earns just by holding. Unstaking swaps back. This
+/// reuses the existing swap engine instead of managing native stake accounts.
+const argosJitoSolMint = 'J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn';
+const argosJitoSolDecimals = 9;
+
 class ArgosKnownToken {
   final String symbol;
   final String name;

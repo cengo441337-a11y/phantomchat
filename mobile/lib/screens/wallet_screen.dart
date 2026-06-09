@@ -1429,6 +1429,41 @@ class _MainPanel extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             _ProCard(pubkey: pubkey),
+            const SizedBox(height: 12),
+            GestureDetector(
+              onTap: () => _openStakingSheet(context),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: kBgCard,
+                  border: Border.all(color: kCyanDim),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.savings_outlined, color: kCyan, size: 22),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('SOL STAKEN',
+                              style: GoogleFonts.orbitron(
+                                  color: kCyan,
+                                  fontSize: 12,
+                                  letterSpacing: 2,
+                                  fontWeight: FontWeight.w700)),
+                          const SizedBox(height: 2),
+                          Text('~7-8 % p.a. · liquid via jitoSOL',
+                              style: GoogleFonts.spaceMono(
+                                  color: kWhiteDim, fontSize: 10)),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right, color: kCyan, size: 20),
+                  ],
+                ),
+              ),
+            ),
           ],
           if (network == 'devnet') ...[
             const SizedBox(height: 16),
@@ -1484,6 +1519,22 @@ class _MainPanel extends StatelessWidget {
           bottom: MediaQuery.of(context).viewInsets.bottom,
         ),
         child: _SendSheet(chain: activeChain),
+      ),
+    );
+    if (res == true) await onRefresh();
+  }
+
+  Future<void> _openStakingSheet(BuildContext context) async {
+    final res = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: kBgCard,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
+      builder: (_) => Padding(
+        padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: const _StakingSheet(),
       ),
     );
     if (res == true) await onRefresh();
@@ -1627,6 +1678,33 @@ class _ReceiveSheet extends StatelessWidget {
                   fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.qr_code_2, color: kYellow, size: 16),
+                label: Text('ZAHLUNG ANFORDERN (QR)',
+                    style: GoogleFonts.orbitron(
+                        color: kYellow, fontSize: 11, letterSpacing: 1)),
+                style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: kYellow)),
+                onPressed: () {
+                  showModalBottomSheet<void>(
+                    context: context,
+                    backgroundColor: kBgCard,
+                    isScrollControlled: true,
+                    shape: const RoundedRectangleBorder(
+                        borderRadius:
+                            BorderRadius.vertical(top: Radius.circular(8))),
+                    builder: (_) => Padding(
+                      padding: EdgeInsets.only(
+                          bottom: MediaQuery.of(context).viewInsets.bottom),
+                      child: _MerchantSheet(pubkey: pubkey),
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 10),
             Row(
               children: [
                 Expanded(
@@ -3065,6 +3143,416 @@ class _ProCardState extends State<_ProCard> {
                           fontSize: 10, letterSpacing: 1)),
             ),
         ],
+      ),
+    );
+  }
+}
+
+
+/// Liquid staking via Jupiter: stake = swap SOL -> jitoSOL, unstake = swap
+/// back. Yield (~7-8 % APY) accrues in the jitoSOL price. Reuses the swap
+/// quote/execute path, so the Argos swap fee (Pro-aware) applies.
+class _StakingSheet extends StatefulWidget {
+  const _StakingSheet();
+  @override
+  State<_StakingSheet> createState() => _StakingSheetState();
+}
+
+class _StakingSheetState extends State<_StakingSheet> {
+  final _svc = ArgosWalletService.instance;
+  bool _unstake = false;
+  final _amount = TextEditingController();
+  String _stakedHuman = '…';
+  rust.ArgosSwapPreview? _preview;
+  String? _error;
+  String? _doneSig;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStaked();
+  }
+
+  @override
+  void dispose() {
+    _amount.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadStaked() async {
+    try {
+      final bal = await _svc.balanceToken(argosJitoSolMint);
+      final pow = BigInt.from(10).pow(argosJitoSolDecimals);
+      final whole = bal ~/ pow;
+      final frac = (bal % pow)
+          .toString()
+          .padLeft(argosJitoSolDecimals, '0')
+          .substring(0, 4);
+      if (mounted) setState(() => _stakedHuman = '$whole.$frac');
+    } catch (_) {
+      if (mounted) setState(() => _stakedHuman = '0.0000');
+    }
+  }
+
+  Future<void> _quote() async {
+    final decimals = _unstake ? argosJitoSolDecimals : 9;
+    final raw = decimalToBaseUnits(_amount.text, decimals);
+    if (raw == null) {
+      setState(() => _error = 'Betrag ungültig.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+      _preview = null;
+    });
+    try {
+      final input = _unstake ? argosJitoSolMint : argosWsolMint;
+      final output = _unstake ? argosWsolMint : argosJitoSolMint;
+      final p = await _svc.quoteSwap(
+        inputMint: input,
+        outputMint: output,
+        amountIn: raw,
+        slippageBps: 50,
+        feeBps: ProService.swapFeeBps,
+      );
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _preview = p;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = '$e';
+      });
+    }
+  }
+
+  Future<void> _execute() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final sig = await _svc.executeSwap();
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _doneSig = sig;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = '$e';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_doneSig != null) {
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.check_circle_outline, color: kGreen, size: 56),
+              const SizedBox(height: 12),
+              Text(_unstake ? 'UNSTAKED' : 'GESTAKED',
+                  style: GoogleFonts.orbitron(
+                      color: kGreen,
+                      fontSize: 16,
+                      letterSpacing: 2,
+                      fontWeight: FontWeight.w700)),
+              const SizedBox(height: 12),
+              SelectableText('${_doneSig!.substring(0, 16)}…',
+                  style: GoogleFonts.spaceMono(color: kCyan, fontSize: 12)),
+              const SizedBox(height: 18),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('FERTIG'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('STAKING',
+                style: GoogleFonts.orbitron(
+                    color: kCyan,
+                    fontSize: 14,
+                    letterSpacing: 3,
+                    fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text('Gestaked: $_stakedHuman jitoSOL',
+                style: GoogleFonts.spaceMono(color: kGreen, fontSize: 12)),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() {
+                      _unstake = false;
+                      _preview = null;
+                    }),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        color: !_unstake ? kCyanDim : Colors.transparent,
+                        border:
+                            Border.all(color: !_unstake ? kCyan : kGray),
+                      ),
+                      child: Center(
+                        child: Text('STAKEN',
+                            style: GoogleFonts.orbitron(
+                                color: !_unstake ? kCyan : kGrayText,
+                                fontSize: 11,
+                                letterSpacing: 2,
+                                fontWeight: FontWeight.w700)),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() {
+                      _unstake = true;
+                      _preview = null;
+                    }),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        color: _unstake ? kCyanDim : Colors.transparent,
+                        border: Border.all(color: _unstake ? kCyan : kGray),
+                      ),
+                      child: Center(
+                        child: Text('UNSTAKEN',
+                            style: GoogleFonts.orbitron(
+                                color: _unstake ? kCyan : kGrayText,
+                                fontSize: 11,
+                                letterSpacing: 2,
+                                fontWeight: FontWeight.w700)),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _amount,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                  labelText: _unstake ? 'BETRAG · jitoSOL' : 'BETRAG · SOL'),
+              style: GoogleFonts.spaceMono(
+                  color: kCyan, fontSize: 18, letterSpacing: 2),
+              onChanged: (_) => setState(() => _preview = null),
+            ),
+            if (_preview != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                  'Du erhältst ~${_humanOut(_preview!.amountOutExpected)} ${_unstake ? "SOL" : "jitoSOL"}',
+                  style: GoogleFonts.spaceMono(color: kCyan, fontSize: 12)),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Text(_error!,
+                  style:
+                      GoogleFonts.spaceMono(color: kMagenta, fontSize: 11)),
+            ],
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: _busy ? null : (_preview == null ? _quote : _execute),
+              child: _busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                          color: kCyan, strokeWidth: 2))
+                  : Text(_preview == null
+                      ? 'PREVIEW'
+                      : (_unstake ? 'UNSTAKEN' : 'STAKEN')),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('ABBRECHEN',
+                  style: GoogleFonts.orbitron(
+                      color: kWhiteDim, fontSize: 11, letterSpacing: 2)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _humanOut(BigInt raw) {
+    final d = _unstake ? 9 : argosJitoSolDecimals;
+    final pow = BigInt.from(10).pow(d);
+    final whole = raw ~/ pow;
+    final frac = (raw % pow).toString().padLeft(d, '0').substring(0, 4);
+    return '$whole.$frac';
+  }
+}
+
+
+/// Merchant payment request — generates a Solana Pay URL + QR that ANY wallet
+/// can scan to pay the user a fixed amount. Unlike the in-chat payment
+/// request (which is E2E to one contact), this is a public QR for a shop /
+/// invoice / tip-jar use case.
+class _MerchantSheet extends StatefulWidget {
+  final String pubkey;
+  const _MerchantSheet({required this.pubkey});
+  @override
+  State<_MerchantSheet> createState() => _MerchantSheetState();
+}
+
+class _MerchantSheetState extends State<_MerchantSheet> {
+  String _asset = 'SOL';
+  final _amount = TextEditingController();
+  String? _payUrl;
+
+  @override
+  void dispose() {
+    _amount.dispose();
+    super.dispose();
+  }
+
+  void _generate() {
+    final amt = _amount.text.trim().replaceAll(',', '.');
+    if (amt.isEmpty || double.tryParse(amt) == null) return;
+    final label = Uri.encodeComponent('Argos Zahlung');
+    String url;
+    if (_asset == 'SOL') {
+      url = 'solana:${widget.pubkey}?amount=$amt&label=$label';
+    } else {
+      final tok = argosKnownTokens.firstWhere((t) => t.symbol == _asset);
+      url =
+          'solana:${widget.pubkey}?amount=$amt&spl-token=${tok.mint}&label=$label';
+    }
+    setState(() => _payUrl = url);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final assets = ['SOL', ...argosKnownTokens.map((t) => t.symbol)];
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('ZAHLUNG ANFORDERN',
+                style: GoogleFonts.orbitron(
+                    color: kYellow,
+                    fontSize: 14,
+                    letterSpacing: 3,
+                    fontWeight: FontWeight.w700)),
+            const SizedBox(height: 16),
+            if (_payUrl == null) ...[
+              Row(
+                children: assets.map((a) {
+                  final sel = a == _asset;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: GestureDetector(
+                      onTap: () => setState(() => _asset = a),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: sel ? kCyanDim : Colors.transparent,
+                          border: Border.all(color: sel ? kCyan : kGray),
+                        ),
+                        child: Text(a,
+                            style: GoogleFonts.orbitron(
+                                color: sel ? kCyan : kGrayText,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700)),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _amount,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(labelText: 'BETRAG · $_asset'),
+                style: GoogleFonts.spaceMono(
+                    color: kCyan, fontSize: 18, letterSpacing: 2),
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _generate,
+                  child: const Text('QR ERZEUGEN'),
+                ),
+              ),
+            ] else ...[
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                    color: Colors.white,
+                    border: Border.all(color: kCyan, width: 2)),
+                child: QrImageView(
+                  data: _payUrl!,
+                  version: QrVersions.auto,
+                  size: 220,
+                  backgroundColor: Colors.white,
+                  eyeStyle: const QrEyeStyle(
+                      eyeShape: QrEyeShape.square, color: kBg),
+                  dataModuleStyle: const QrDataModuleStyle(
+                      dataModuleShape: QrDataModuleShape.square, color: kBg),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text('${_amount.text} $_asset',
+                  style: GoogleFonts.orbitron(
+                      color: kCyan, fontSize: 16, letterSpacing: 1)),
+              const SizedBox(height: 8),
+              Text('Jede Solana-Wallet kann diesen QR scannen und zahlen.',
+                  textAlign: TextAlign.center,
+                  style:
+                      GoogleFonts.spaceMono(color: kWhiteDim, fontSize: 10)),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.copy, color: kCyan, size: 16),
+                label: Text('LINK KOPIEREN',
+                    style: GoogleFonts.orbitron(
+                        color: kCyan, fontSize: 11, letterSpacing: 2)),
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: _payUrl!));
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text('Zahlungslink kopiert',
+                        style: GoogleFonts.spaceMono(color: kCyan)),
+                    backgroundColor: kBgCard,
+                  ));
+                },
+              ),
+            ],
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('SCHLIESSEN',
+                  style: GoogleFonts.orbitron(
+                      color: kWhiteDim, fontSize: 11, letterSpacing: 2)),
+            ),
+          ],
+        ),
       ),
     );
   }
