@@ -367,3 +367,39 @@ pub async fn argos_devnet_airdrop_one_sol() -> Result<String, String> {
 
 /// EVM (Ethereum / Base / Polygon) operations.
 pub mod eth_api;
+
+/// One row of Solana transaction history surfaced to the Dart UI.
+#[frb]
+#[derive(Debug, Clone)]
+pub struct ArgosTxRow {
+    /// Base58 signature (deep-links to Solscan).
+    pub signature_b58: String,
+    /// Slot the tx landed in.
+    pub slot: u64,
+    /// Unix-seconds block time (0 if the node returned none).
+    pub block_time: i64,
+    /// True if the tx reverted on-chain.
+    pub failed: bool,
+    /// Optional memo.
+    pub memo: String,
+}
+
+/// Recent transaction history for the unlocked wallet (Solana), newest
+/// first. Up to  rows (capped at 50 server-side).
+pub async fn argos_recent_signatures(limit: u32) -> Result<Vec<ArgosTxRow>, String> {
+    let w = unlocked()?;
+    let rows = w
+        .recent_signatures(limit as usize)
+        .await
+        .map_err(|e| format!("history: {e}"))?;
+    Ok(rows
+        .into_iter()
+        .map(|r| ArgosTxRow {
+            signature_b58: r.signature,
+            slot: r.slot,
+            block_time: r.block_time.unwrap_or(0),
+            failed: r.failed,
+            memo: r.memo.unwrap_or_default(),
+        })
+        .collect())
+}

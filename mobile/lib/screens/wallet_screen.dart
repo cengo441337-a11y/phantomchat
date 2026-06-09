@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../services/price_service.dart';
 import '../services/wallet_service.dart';
 import '../services/risk_check_service.dart';
 import '../src/rust/api/wallet.dart' as rust;
@@ -80,6 +81,7 @@ class _ArgosWalletScreenState extends State<ArgosWalletScreen>
   final Map<String, String> _evmTokenBalances = {}; // key = token address, decimal string
   bool _refreshing = false;
   String? _refreshError;
+  double? _portfolioEur;
 
   @override
   void initState() {
@@ -149,6 +151,7 @@ class _ArgosWalletScreenState extends State<ArgosWalletScreen>
             ..addAll(tokens);
           _refreshing = false;
         });
+        unawaited(_updatePortfolio());
       } else {
         final net = _activeChain.backendId;
         final addr = await _svc.ethAddress(net);
@@ -171,6 +174,7 @@ class _ArgosWalletScreenState extends State<ArgosWalletScreen>
             ..addAll(tokens);
           _refreshing = false;
         });
+        unawaited(_updatePortfolio());
       }
     } catch (e) {
       if (!mounted) return;
@@ -181,11 +185,57 @@ class _ArgosWalletScreenState extends State<ArgosWalletScreen>
     }
   }
 
+  double _rawToHuman(BigInt raw, int decimals) {
+    // Display-only conversion; double is fine for a portfolio estimate
+    // (exact base-unit math is reserved for the send path).
+    return raw.toDouble() / _pow10d(decimals);
+  }
+
+  double _pow10d(int n) {
+    var r = 1.0;
+    for (var i = 0; i < n; i++) {
+      r *= 10;
+    }
+    return r;
+  }
+
+  Future<void> _updatePortfolio() async {
+    double nativeHuman;
+    final tokenHuman = <String, double>{};
+    if (_activeChain.isSolana) {
+      nativeHuman = _solLamports.toDouble() / 1e9;
+      for (final t in argosKnownTokens) {
+        final bal = _tokenBalances[t.mint];
+        if (bal != null && bal > BigInt.zero) {
+          tokenHuman[t.symbol] = _rawToHuman(bal, t.decimals);
+        }
+      }
+    } else {
+      nativeHuman =
+          (BigInt.tryParse(_ethBalanceWei) ?? BigInt.zero).toDouble() / 1e18;
+      for (final t in argosEvmKnownTokens.where((t) => t.chain == _activeChain)) {
+        final raw = _evmTokenBalances[t.address];
+        final bal = raw == null ? BigInt.zero : (BigInt.tryParse(raw) ?? BigInt.zero);
+        if (bal > BigInt.zero) {
+          tokenHuman[t.symbol] = _rawToHuman(bal, t.decimals);
+        }
+      }
+    }
+    final eur = await PriceService.portfolioEur(
+      chain: _activeChain,
+      nativeHuman: nativeHuman,
+      tokenHuman: tokenHuman,
+    );
+    if (!mounted) return;
+    setState(() => _portfolioEur = eur);
+  }
+
   void _switchChain(ArgosChain next) {
     if (next == _activeChain) return;
     setState(() {
       _activeChain = next;
       _refreshError = null;
+      _portfolioEur = null;
     });
     unawaited(_refresh());
   }
@@ -279,6 +329,7 @@ class _ArgosWalletScreenState extends State<ArgosWalletScreen>
               ethAddress: _ethAddress,
               ethBalanceWei: _ethBalanceWei,
               evmTokenBalances: _evmTokenBalances,
+              portfolioEur: _portfolioEur,
               refreshing: _refreshing,
               error: _refreshError,
               onRefresh: _refresh,
@@ -1012,6 +1063,7 @@ class _MainPanel extends StatelessWidget {
   final String ethAddress;
   final String ethBalanceWei;
   final Map<String, String> evmTokenBalances;
+  final double? portfolioEur;
   final bool refreshing;
   final String? error;
   final Future<void> Function() onRefresh;
@@ -1026,6 +1078,7 @@ class _MainPanel extends StatelessWidget {
     required this.ethAddress,
     required this.ethBalanceWei,
     required this.evmTokenBalances,
+    this.portfolioEur,
     required this.refreshing,
     required this.error,
     required this.onRefresh,
@@ -1124,6 +1177,12 @@ class _MainPanel extends StatelessWidget {
                   ),
                 ),
                 IconButton(
+                  tooltip: 'Verlauf',
+                  icon: const Icon(Icons.history, color: kWhite, size: 18),
+                  onPressed: () =>
+                      _openHistorySheet(context, activeChain, displayAddr),
+                ),
+                IconButton(
                   tooltip: 'Adresse kopieren',
                   icon: const Icon(Icons.copy_all, color: kWhite, size: 18),
                   onPressed: () {
@@ -1183,6 +1242,12 @@ class _MainPanel extends StatelessWidget {
                             letterSpacing: 2)),
                   ],
                 ),
+                if (portfolioEur != null) ...[
+                  const SizedBox(height: 4),
+                  Text('≈ ${portfolioEur!.toStringAsFixed(2)} €',
+                      style: GoogleFonts.spaceMono(
+                          color: kGreen, fontSize: 13, letterSpacing: 1)),
+                ],
                 if (refreshing)
                   const Padding(
                     padding: EdgeInsets.only(top: 6),
@@ -1220,7 +1285,7 @@ class _MainPanel extends StatelessWidget {
                 child: _ActionButton(
                   icon: Icons.arrow_downward,
                   label: 'EMPFANGEN',
-                  onTap: () => _openReceiveSheet(context, pubkey),
+                  onTap: () => _openReceiveSheet(context, displayAddr),
                 ),
               ),
               const SizedBox(width: 10),
@@ -1347,10 +1412,22 @@ class _MainPanel extends StatelessWidget {
         padding: EdgeInsets.only(
           bottom: MediaQuery.of(context).viewInsets.bottom,
         ),
-        child: const _SendSheet(),
+        child: _SendSheet(chain: activeChain),
       ),
     );
     if (res == true) await onRefresh();
+  }
+
+  Future<void> _openHistorySheet(
+      BuildContext context, ArgosChain chain, String addr) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: kBgCard,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
+      builder: (_) => _HistorySheet(chain: chain, address: addr),
+    );
   }
 
   Future<void> _openReceiveSheet(BuildContext context, String pk) async {
@@ -1507,19 +1584,56 @@ class _ReceiveSheet extends StatelessWidget {
 // ── Send sheet (SOL + SPL token) ─────────────────────────────────────────
 
 class _SendSheet extends StatefulWidget {
-  const _SendSheet();
+  final ArgosChain chain;
+  const _SendSheet({required this.chain});
 
   @override
   State<_SendSheet> createState() => _SendSheetState();
 }
 
 class _SendSheetState extends State<_SendSheet> {
-  String _asset = 'SOL';
+  late String _asset;
   final _recipient = TextEditingController();
   final _amount = TextEditingController();
   String? _error;
   bool _busy = false;
   String? _confirmedSig;
+
+  ArgosChain get _chain => widget.chain;
+
+  /// Native-coin symbol for the active chain.
+  String get _nativeSymbol => switch (_chain) {
+        ArgosChain.solanaMainnet || ArgosChain.solanaDevnet => 'SOL',
+        ArgosChain.ethereum || ArgosChain.base => 'ETH',
+        ArgosChain.polygon => 'MATIC',
+      };
+
+  /// Selectable assets: native + the chain's known tokens.
+  List<String> get _assetSymbols => _chain.isSolana
+      ? ['SOL', ...argosKnownTokens.map((t) => t.symbol)]
+      : [
+          _nativeSymbol,
+          ...argosEvmKnownTokens
+              .where((t) => t.chain == _chain)
+              .map((t) => t.symbol),
+        ];
+
+  /// Decimals for the currently-selected asset.
+  int get _selectedDecimals {
+    if (_asset == _nativeSymbol) return _chain.isSolana ? 9 : 18;
+    if (_chain.isSolana) {
+      return argosKnownTokens.firstWhere((t) => t.symbol == _asset).decimals;
+    }
+    return argosEvmKnownTokens
+        .firstWhere((t) => t.chain == _chain && t.symbol == _asset)
+        .decimals;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _asset = _nativeSymbol;
+  }
 
   @override
   void dispose() {
@@ -1611,17 +1725,17 @@ class _SendSheetState extends State<_SendSheet> {
       setState(() => _error = 'Empfänger fehlt.');
       return;
     }
-    final sendDecimals = _asset == 'SOL'
-        ? 9
-        : argosKnownTokens.firstWhere((t) => t.symbol == _asset).decimals;
-    final baseUnits = decimalToBaseUnits(_amount.text, sendDecimals);
+    final baseUnits = decimalToBaseUnits(_amount.text, _selectedDecimals);
     if (baseUnits == null) {
       setState(() => _error = 'Betrag ungültig.');
       return;
     }
+    // Address validation is chain-specific (base58 vs. EIP-55 hex).
     String validated;
     try {
-      validated = ArgosWalletService.instance.validateAddress(raw);
+      validated = _chain.isSolana
+          ? ArgosWalletService.instance.validateAddress(raw)
+          : await ArgosWalletService.instance.ethValidateAddress(raw);
     } catch (e) {
       setState(() => _error = '$e');
       return;
@@ -1630,34 +1744,54 @@ class _SendSheetState extends State<_SendSheet> {
       _busy = true;
       _error = null;
     });
-    // Argos Pre-Send Risk-Check (v1.2.2). Calls argos.dc-infosec.de/api/risk
-    // for the recipient + the token mint about to be transferred. The
-    // backend currently returns hardcoded clean-for-USDC/USDT/wSOL and
-    // amber for everything unknown; the real Pylonyx scoring engine will
-    // replace it without a wire-format change.
-    final mintForCheck = _asset == 'SOL'
-        ? argosWsolMint
-        : argosKnownTokens.firstWhere((t) => t.symbol == _asset).mint;
-    final verdict = await RiskCheckService.check(
-      recipient: validated,
-      mint: mintForCheck,
-    );
-    if (verdict.shouldWarn && mounted) {
-      final proceed = await _showRiskDialog(verdict);
-      if (proceed != true) {
-        setState(() => _busy = false);
-        return;
+    // Pre-Send Risk-Check is Solana-mint-based today; run it only on Solana.
+    // EVM risk scoring lands with the real Pylonyx engine (see backlog).
+    if (_chain.isSolana) {
+      final mintForCheck = _asset == 'SOL'
+          ? argosWsolMint
+          : argosKnownTokens.firstWhere((t) => t.symbol == _asset).mint;
+      final verdict = await RiskCheckService.check(
+        recipient: validated,
+        mint: mintForCheck,
+      );
+      if (verdict.shouldWarn && mounted) {
+        final proceed = await _showRiskDialog(verdict);
+        if (proceed != true) {
+          setState(() => _busy = false);
+          return;
+        }
       }
     }
     try {
       String sig;
-      if (_asset == 'SOL') {
-        sig = await ArgosWalletService.instance
-            .sendSol(recipient: validated, lamports: baseUnits);
+      if (_chain.isSolana) {
+        if (_asset == 'SOL') {
+          sig = await ArgosWalletService.instance
+              .sendSol(recipient: validated, lamports: baseUnits);
+        } else {
+          final tok = argosKnownTokens.firstWhere((t) => t.symbol == _asset);
+          sig = await ArgosWalletService.instance.sendToken(
+              mint: tok.mint, recipient: validated, amount: baseUnits);
+        }
       } else {
-        final tok = argosKnownTokens.firstWhere((t) => t.symbol == _asset);
-        sig = await ArgosWalletService.instance
-            .sendToken(mint: tok.mint, recipient: validated, amount: baseUnits);
+        // EVM send: native ETH/MATIC vs. ERC-20.
+        final net = _chain.backendId;
+        if (_asset == _nativeSymbol) {
+          sig = await ArgosWalletService.instance.ethSendNative(
+            network: net,
+            recipient: validated,
+            wei: baseUnits.toString(),
+          );
+        } else {
+          final tok = argosEvmKnownTokens
+              .firstWhere((t) => t.chain == _chain && t.symbol == _asset);
+          sig = await ArgosWalletService.instance.ethSendErc20(
+            network: net,
+            token: tok.address,
+            recipient: validated,
+            amount: baseUnits.toString(),
+          );
+        }
       }
       if (!mounted) return;
       setState(() {
@@ -1718,15 +1852,18 @@ class _SendSheetState extends State<_SendSheet> {
                     fontWeight: FontWeight.w700)),
             const SizedBox(height: 16),
             _AssetChips(
+              symbols: _assetSymbols,
               current: _asset,
               onChanged: (a) => setState(() => _asset = a),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: _recipient,
-              decoration: const InputDecoration(
-                labelText: 'EMPFÄNGER · Solana-Adresse',
-                hintText: '9xKL…',
+              decoration: InputDecoration(
+                labelText: _chain.isSolana
+                    ? 'EMPFÄNGER · Solana-Adresse'
+                    : 'EMPFÄNGER · ${_chain.label}-Adresse (0x…)',
+                hintText: _chain.isSolana ? '9xKL…' : '0x…',
               ),
               style: GoogleFonts.spaceMono(color: kCyan, fontSize: 12),
             ),
@@ -1775,13 +1912,18 @@ class _SendSheetState extends State<_SendSheet> {
 }
 
 class _AssetChips extends StatelessWidget {
+  final List<String> symbols;
   final String current;
   final ValueChanged<String> onChanged;
-  const _AssetChips({required this.current, required this.onChanged});
+  const _AssetChips({
+    required this.symbols,
+    required this.current,
+    required this.onChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final all = ['SOL', ...argosKnownTokens.map((t) => t.symbol)];
+    final all = symbols;
     return Row(
       children: all
           .map((a) {
@@ -2279,6 +2421,219 @@ class _ChainSwitcher extends StatelessWidget {
             ),
           );
         }).toList(),
+      ),
+    );
+  }
+}
+
+
+/// Transaction history. Solana renders an in-app list (recent signatures
+/// with success/fail + relative time + Solscan deep-link). EVM chains link
+/// out to the chain's block explorer for the address (no standard JSON-RPC
+/// address-history; a full EVM list needs an indexer — backlog).
+class _HistorySheet extends StatefulWidget {
+  final ArgosChain chain;
+  final String address;
+  const _HistorySheet({required this.chain, required this.address});
+
+  @override
+  State<_HistorySheet> createState() => _HistorySheetState();
+}
+
+class _HistorySheetState extends State<_HistorySheet> {
+  bool _loading = true;
+  String? _error;
+  List<dynamic> _rows = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.chain.isSolana) {
+      _load();
+    } else {
+      _loading = false;
+    }
+  }
+
+  Future<void> _load() async {
+    try {
+      final rows =
+          await ArgosWalletService.instance.recentSignatures(limit: 25);
+      if (!mounted) return;
+      setState(() {
+        _rows = rows;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  String _explorerBase() {
+    switch (widget.chain) {
+      case ArgosChain.ethereum:
+        return 'https://etherscan.io/address/';
+      case ArgosChain.base:
+        return 'https://basescan.org/address/';
+      case ArgosChain.polygon:
+        return 'https://polygonscan.com/address/';
+      case ArgosChain.solanaDevnet:
+        return 'https://solscan.io/account/';
+      case ArgosChain.solanaMainnet:
+        return 'https://solscan.io/account/';
+    }
+  }
+
+  String _solscanTx(String sig) => widget.chain == ArgosChain.solanaDevnet
+      ? 'https://solscan.io/tx/$sig?cluster=devnet'
+      : 'https://solscan.io/tx/$sig';
+
+  String _ago(int unixSec) {
+    if (unixSec <= 0) return '';
+    final then = DateTime.fromMillisecondsSinceEpoch(unixSec * 1000);
+    final d = DateTime.now().difference(then);
+    if (d.inMinutes < 1) return 'gerade eben';
+    if (d.inMinutes < 60) return 'vor ${d.inMinutes} min';
+    if (d.inHours < 24) return 'vor ${d.inHours} h';
+    return 'vor ${d.inDays} d';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('VERLAUF · ${widget.chain.label.toUpperCase()}',
+                style: GoogleFonts.orbitron(
+                    color: kCyan,
+                    fontSize: 14,
+                    letterSpacing: 3,
+                    fontWeight: FontWeight.w700)),
+            const SizedBox(height: 16),
+            if (!widget.chain.isSolana)
+              Column(
+                children: [
+                  Text(
+                    'EVM-Verlauf öffnet sich im Block-Explorer.',
+                    textAlign: TextAlign.center,
+                    style:
+                        GoogleFonts.spaceMono(color: kWhiteDim, fontSize: 12),
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.open_in_new, color: kCyan, size: 16),
+                    label: Text('Auf Explorer ansehen',
+                        style: GoogleFonts.orbitron(
+                            color: kCyan, fontSize: 11, letterSpacing: 2)),
+                    onPressed: () {
+                      final url = '${_explorerBase()}${widget.address}';
+                      Clipboard.setData(ClipboardData(text: url));
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                        content: Text('Explorer-Link kopiert: $url',
+                            style: GoogleFonts.spaceMono(
+                                color: kCyan, fontSize: 10)),
+                        backgroundColor: kBgCard,
+                        duration: const Duration(seconds: 5),
+                      ));
+                    },
+                  ),
+                ],
+              )
+            else if (_loading)
+              const Padding(
+                padding: EdgeInsets.all(24),
+                child: CircularProgressIndicator(color: kCyan, strokeWidth: 2),
+              )
+            else if (_error != null)
+              Text(_error!,
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.spaceMono(color: kMagenta, fontSize: 11))
+            else if (_rows.isEmpty)
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text('Noch keine Transaktionen.',
+                    style:
+                        GoogleFonts.spaceMono(color: kWhiteDim, fontSize: 12)),
+              )
+            else
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(context).size.height * 0.55),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: _rows.length,
+                  separatorBuilder: (context, index) => const SizedBox(height: 6),
+                  itemBuilder: (_, i) {
+                    final r = _rows[i];
+                    final sig = r.signatureB58 as String;
+                    final failed = r.failed as bool;
+                    final bt = (r.blockTime as BigInt).toInt();
+                    return GestureDetector(
+                      onTap: () {
+                        final url = _solscanTx(sig);
+                        Clipboard.setData(ClipboardData(text: url));
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text('Solscan-Link kopiert',
+                              style:
+                                  GoogleFonts.spaceMono(color: kCyan)),
+                          backgroundColor: kBgCard,
+                          duration: const Duration(seconds: 2),
+                        ));
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: kBgInput,
+                          border: Border.all(
+                              color: failed ? kMagDim : kCyanDim),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              failed
+                                  ? Icons.error_outline
+                                  : Icons.check_circle_outline,
+                              color: failed ? kMagenta : kGreen,
+                              size: 16,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                '${sig.substring(0, 8)}…${sig.substring(sig.length - 6)}',
+                                style: GoogleFonts.spaceMono(
+                                    color: kCyan, fontSize: 12),
+                              ),
+                            ),
+                            Text(_ago(bt),
+                                style: GoogleFonts.spaceMono(
+                                    color: kWhiteDim, fontSize: 10)),
+                            const SizedBox(width: 6),
+                            const Icon(Icons.open_in_new,
+                                color: kGrayText, size: 14),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            const SizedBox(height: 16),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('SCHLIESSEN',
+                  style: GoogleFonts.orbitron(
+                      color: kWhiteDim, fontSize: 11, letterSpacing: 2)),
+            ),
+          ],
+        ),
       ),
     );
   }

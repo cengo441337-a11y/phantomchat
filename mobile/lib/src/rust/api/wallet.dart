@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `cache`, `map_network`, `preview_cache`, `unlocked`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`
 
 /// Generate a fresh wallet, persist it encrypted with `pin` to `storage_path`,
 /// and return the recovery mnemonic. The mnemonic MUST be displayed to the
@@ -128,6 +128,11 @@ String argosValidateAddress({required String s}) =>
 Future<String> argosDevnetAirdropOneSol() =>
     RustLib.instance.api.crateApiWalletArgosDevnetAirdropOneSol();
 
+/// Recent transaction history for the unlocked wallet (Solana), newest
+/// first. Up to  rows (capped at 50 server-side).
+Future<List<ArgosTxRow>> argosRecentSignatures({required int limit}) =>
+    RustLib.instance.api.crateApiWalletArgosRecentSignatures(limit: limit);
+
 /// Result of `argos_swap_and_send` — the killer Auto-Swap-on-Send feature.
 class ArgosSwapAndSendOutcome {
   /// Confirmed transaction signature (base58, links to Solscan).
@@ -224,6 +229,51 @@ class ArgosSwapPreview {
           routeLabel == other.routeLabel &&
           slippageBps == other.slippageBps &&
           outputMintB58 == other.outputMintB58;
+}
+
+/// One row of Solana transaction history surfaced to the Dart UI.
+class ArgosTxRow {
+  /// Base58 signature (deep-links to Solscan).
+  final String signatureB58;
+
+  /// Slot the tx landed in.
+  final BigInt slot;
+
+  /// Unix-seconds block time (0 if the node returned none).
+  final PlatformInt64 blockTime;
+
+  /// True if the tx reverted on-chain.
+  final bool failed;
+
+  /// Optional memo.
+  final String memo;
+
+  const ArgosTxRow({
+    required this.signatureB58,
+    required this.slot,
+    required this.blockTime,
+    required this.failed,
+    required this.memo,
+  });
+
+  @override
+  int get hashCode =>
+      signatureB58.hashCode ^
+      slot.hashCode ^
+      blockTime.hashCode ^
+      failed.hashCode ^
+      memo.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ArgosTxRow &&
+          runtimeType == other.runtimeType &&
+          signatureB58 == other.signatureB58 &&
+          slot == other.slot &&
+          blockTime == other.blockTime &&
+          failed == other.failed &&
+          memo == other.memo;
 }
 
 /// What the UI shows on wallet creation / restore. Mnemonic is ONLY

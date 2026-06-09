@@ -60,6 +60,23 @@ pub const MIN_SEND_FEE_LAMPORTS: u64 = 100_000;
 /// USDC = ~0.1 cent.
 pub const MIN_SEND_FEE_TOKEN_BASE: u64 = 1_000;
 
+/// One row of on-chain history for the wallet, surfaced to the UI's
+/// transaction list. Times are unix seconds (None if the node didn't
+/// return a block time). `failed` is true if the tx landed but reverted.
+#[derive(Debug, Clone)]
+pub struct TxSummary {
+    /// Base58 transaction signature (links to Solscan).
+    pub signature: String,
+    /// Slot the tx landed in.
+    pub slot: u64,
+    /// Unix-seconds block time, or None if unavailable.
+    pub block_time: Option<i64>,
+    /// True if the tx executed but reverted on-chain.
+    pub failed: bool,
+    /// Optional memo attached to the tx.
+    pub memo: Option<String>,
+}
+
 /// Computes the Argos send-fee for an amount in *some* base unit, applying
 /// the [`SEND_FEE_BPS`] percentage and clamping to the supplied floor.
 /// Saturates rather than panicking on absurd inputs.
@@ -253,6 +270,35 @@ impl ArgosWallet {
         rpc.send_and_confirm_transaction(&tx)
             .await
             .map_err(|e| Error::Rpc(e.to_string()))
+    }
+
+    /// Recent transaction history for this wallet, newest first. Wraps
+    /// `getSignaturesForAddress` — returns up to `limit` (capped at 50)
+    /// signatures with slot, block time, success/fail and any memo. The UI
+    /// renders these as a list with Solscan deep-links.
+    pub async fn recent_signatures(&self, limit: usize) -> Result<Vec<TxSummary>, Error> {
+        use solana_client::rpc_client::GetConfirmedSignaturesForAddress2Config;
+        let cfg = GetConfirmedSignaturesForAddress2Config {
+            before: None,
+            until: None,
+            limit: Some(limit.min(50)),
+            commitment: Some(CommitmentConfig::confirmed()),
+        };
+        let rows = self
+            .rpc()
+            .get_signatures_for_address_with_config(&self.pubkey(), cfg)
+            .await
+            .map_err(|e| Error::Rpc(e.to_string()))?;
+        Ok(rows
+            .into_iter()
+            .map(|r| TxSummary {
+                signature: r.signature,
+                slot: r.slot,
+                block_time: r.block_time,
+                failed: r.err.is_some(),
+                memo: r.memo,
+            })
+            .collect())
     }
 
     /// Request a 1 SOL airdrop on Devnet (used by integration tests).

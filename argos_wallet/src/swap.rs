@@ -519,6 +519,11 @@ impl ArgosWallet {
 mod tests {
     use super::*;
     use crate::Network;
+    use std::sync::Mutex;
+
+    // The ARGOS_TREASURY_WALLET tests mutate process-global env and must not
+    // run concurrently (cargo test is multi-threaded by default).
+    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[tokio::test]
     #[ignore = "live HTTP to api.jup.ag; run with --ignored when online"]
@@ -553,6 +558,7 @@ mod tests {
 
     #[test]
     fn treasury_address_defaults_to_placeholder() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap();
         // No env var set in this test → falls back to placeholder.
         // (Other tests may set ARGOS_TREASURY_WALLET; isolate by reading
         // the env explicitly and asserting on the parsed pubkey.)
@@ -567,6 +573,7 @@ mod tests {
 
     #[test]
     fn treasury_address_honours_env_override() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap();
         let usdc = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
         let old = std::env::var("ARGOS_TREASURY_WALLET").ok();
         std::env::set_var("ARGOS_TREASURY_WALLET", usdc);
@@ -580,6 +587,7 @@ mod tests {
 
     #[test]
     fn treasury_address_rejects_garbage() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap();
         let old = std::env::var("ARGOS_TREASURY_WALLET").ok();
         std::env::set_var("ARGOS_TREASURY_WALLET", "this is not a pubkey");
         let result = treasury_address();

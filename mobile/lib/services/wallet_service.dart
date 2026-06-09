@@ -206,6 +206,10 @@ class ArgosWalletService {
   /// Devnet QA — request a 1 SOL airdrop. Throws on mainnet.
   Future<String> devnetAirdropOneSol() => rust.argosDevnetAirdropOneSol();
 
+  /// Recent Solana transaction history (newest first, up to [limit]).
+  Future<List<rust.ArgosTxRow>> recentSignatures({int limit = 25}) =>
+      rust.argosRecentSignatures(limit: limit);
+
   // ── EVM (Ethereum / Base / Polygon) — v1.4.0 ───────────────────────────
 
   /// EIP-55 address derived for the given EVM network. Re-derives every

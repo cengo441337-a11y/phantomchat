@@ -30,6 +30,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ArgosSwapPreview dco_decode_argos_swap_preview(dynamic raw);
 
   @protected
+  ArgosTxRow dco_decode_argos_tx_row(dynamic raw);
+
+  @protected
   ArgosWalletInfo dco_decode_argos_wallet_info(dynamic raw);
 
   @protected
@@ -37,6 +40,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ReceivedFullV3 dco_decode_box_autoadd_received_full_v_3(dynamic raw);
+
+  @protected
+  PlatformInt64 dco_decode_i_64(dynamic raw);
+
+  @protected
+  List<ArgosTxRow> dco_decode_list_argos_tx_row(dynamic raw);
 
   @protected
   List<MlsMemberInfoV3> dco_decode_list_mls_member_info_v_3(dynamic raw);
@@ -102,6 +111,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ArgosSwapPreview sse_decode_argos_swap_preview(SseDeserializer deserializer);
 
   @protected
+  ArgosTxRow sse_decode_argos_tx_row(SseDeserializer deserializer);
+
+  @protected
   ArgosWalletInfo sse_decode_argos_wallet_info(SseDeserializer deserializer);
 
   @protected
@@ -111,6 +123,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ReceivedFullV3 sse_decode_box_autoadd_received_full_v_3(
     SseDeserializer deserializer,
   );
+
+  @protected
+  PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
+
+  @protected
+  List<ArgosTxRow> sse_decode_list_argos_tx_row(SseDeserializer deserializer);
 
   @protected
   List<MlsMemberInfoV3> sse_decode_list_mls_member_info_v_3(
@@ -191,6 +209,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_argos_tx_row(ArgosTxRow self, SseSerializer serializer);
+
+  @protected
   void sse_encode_argos_wallet_info(
     ArgosWalletInfo self,
     SseSerializer serializer,
@@ -202,6 +223,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_received_full_v_3(
     ReceivedFullV3 self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_argos_tx_row(
+    List<ArgosTxRow> self,
     SseSerializer serializer,
   );
 
