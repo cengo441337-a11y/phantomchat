@@ -18,6 +18,8 @@ import '../services/storage_service.dart';
 import '../services/voice_message.dart' as voice;
 import '../src/rust/api.dart' as rust;
 import '../theme.dart';
+import '../services/chat_payment.dart';
+import '../widgets/chat_payment_widgets.dart';
 import '../widgets/cyber_card.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -179,6 +181,86 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       }
     });
+  }
+
+  /// Send an arbitrary payload string over the same sealed-sender v3 path
+  /// `_send` uses, and store it as an outgoing message. `preview` is the
+  /// friendly contact-list summary (payments store an opaque marker
+  /// payload as `plaintext`, but the preview shows "Zahlung ..."). Returns
+  /// true if a relay accepted the wire.
+  Future<bool> _sendWire(String payload, String preview) async {
+    bool relayDelivered = false;
+    String ciphertextHex = '';
+    try {
+      final mlkem = widget.contact.mlkemPubB64;
+      final recipientAddress = (mlkem != null && mlkem.isNotEmpty)
+          ? 'phantomx:${widget.contact.publicViewKey}:${widget.contact.publicSpendKey}:$mlkem'
+          : 'phantom:${widget.contact.publicViewKey}:${widget.contact.publicSpendKey}';
+      final wire = await rust.sendSealedV3(
+        recipientAddress: recipientAddress,
+        plaintext: utf8.encode(payload),
+      );
+      ciphertextHex =
+          wire.take(32).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      relayDelivered = await RelayService.instance.publish(wire);
+    } catch (e) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Senden fehlgeschlagen: $e')),
+      );
+      return false;
+    }
+    final msg = PhantomMessage(
+      id: _uuid.v4(),
+      contactId: widget.contact.id,
+      outgoing: true,
+      plaintext: payload,
+      ciphertext: ciphertextHex,
+      ephemeralKey: '',
+      nonce: '',
+      timestamp: DateTime.now(),
+      status: MessageStatus.sent,
+    );
+    await StorageService.addMessage(msg);
+    widget.contact.lastMessage = preview;
+    widget.contact.lastMessageAt = DateTime.now();
+    if (mounted) {
+      setState(() => _messages.add(msg));
+      _scrollToBottom();
+    }
+    return relayDelivered;
+  }
+
+  /// Open the "request payment" composer; on confirm, send the request
+  /// (the requester's receive address travels E2E inside the message).
+  Future<void> _onRequestPayment() async {
+    final pay = await showModalBottomSheet<ChatPayment>(
+      context: context,
+      backgroundColor: kBgCard,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
+      builder: (_) => const PaymentRequestSheet(),
+    );
+    if (pay != null) {
+      await _sendWire(pay.encode(), pay.summary);
+    }
+  }
+
+  /// Pay an incoming request; on success, send a `paid` receipt back so the
+  /// requester's chat flips to "bezahlt".
+  Future<void> _onPayRequest(ChatPayment request) async {
+    final receipt = await showModalBottomSheet<ChatPayment>(
+      context: context,
+      backgroundColor: kBgCard,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
+      builder: (_) => PaySheet(request: request),
+    );
+    if (receipt != null) {
+      await _sendWire(receipt.encode(), receipt.summary);
+    }
   }
 
   Future<void> _send() async {
@@ -699,10 +781,20 @@ class _ChatScreenState extends State<ChatScreen> {
       itemBuilder: (ctx, i) {
         final msg = _messages[i];
         final showDate = i == 0 || !_sameDay(_messages[i - 1].timestamp, msg.timestamp);
+        final pay = ChatPayment.decode(msg.plaintext);
+        final Widget body = pay != null
+            ? PaymentCard(
+                payment: pay,
+                outgoing: msg.outgoing,
+                onPay: (pay.kind == 'payreq' && !msg.outgoing)
+                    ? () => _onPayRequest(pay)
+                    : null,
+              )
+            : _MsgBubble(message: msg);
         return Column(
           children: [
             if (showDate) _DateDivider(date: msg.timestamp),
-            _MsgBubble(message: msg),
+            body,
           ],
         );
       },
@@ -735,6 +827,19 @@ class _ChatScreenState extends State<ChatScreen> {
       // instance for `onPointerUp` to fire as expected.
       child: Row(
         children: [
+          if (!_recording)
+            GestureDetector(
+              onTap: _onRequestPayment,
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                  border: Border.all(color: kYellow.withValues(alpha: 0.5)),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Icon(Icons.attach_money, color: kYellow, size: 20),
+              ),
+            ),
           Expanded(
             child: _recording ? _buildRecordingBar() : _buildTextBar(),
           ),

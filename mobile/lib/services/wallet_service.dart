@@ -387,3 +387,38 @@ class ArgosKnownToken {
     required this.decimals,
   });
 }
+
+/// Parse a user-entered decimal amount string into raw base units using
+/// EXACT BigInt math. `double` has a 53-bit mantissa (~15-16 significant
+/// digits) and silently loses precision / overflows for high-decimal tokens
+/// (USDC 6, SOL 9, ETH 18). Going through `double` could send a slightly
+/// different amount than the user typed. This stays integer the whole way.
+///
+/// Truncates any digits beyond `decimals` (never rounds up) so the user can
+/// never accidentally send MORE than they entered. Returns null on invalid
+/// input or a non-positive amount.
+BigInt? decimalToBaseUnits(String input, int decimals) {
+  var t = input.trim().replaceAll(',', '.');
+  if (t.isEmpty || t == '.') return null;
+  if (!RegExp(r'^\d*\.?\d*$').hasMatch(t)) return null;
+  final dot = t.indexOf('.');
+  String wholePart;
+  String fracPart;
+  if (dot < 0) {
+    wholePart = t;
+    fracPart = '';
+  } else {
+    wholePart = t.substring(0, dot);
+    fracPart = t.substring(dot + 1);
+  }
+  if (wholePart.isEmpty) wholePart = '0';
+  if (fracPart.length > decimals) {
+    fracPart = fracPart.substring(0, decimals);
+  } else {
+    fracPart = fracPart.padRight(decimals, '0');
+  }
+  final combined = wholePart + fracPart;
+  final v = BigInt.tryParse(combined.isEmpty ? '0' : combined);
+  if (v == null || v <= BigInt.zero) return null;
+  return v;
+}
