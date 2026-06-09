@@ -21,7 +21,7 @@
 Die signierte Argos-Binary (Android-APK und Windows-MSI) ist nur über den
 offiziellen Vertriebspunkt erhältlich:
 
-**[pylonyx.de/argos/buy](https://pylonyx.de/argos/buy)** — Einmal-Kauf 4 EUR via Stripe (Karte) oder Solana Pay (4 USDC). Nach Bezahlung sofortiger Download + lebenslange Auto-Updates.
+**[pylonyx-dev.dc-infosec.de/argos/buy](https://pylonyx-dev.dc-infosec.de/argos/buy)** — Einmal-Kauf 4 EUR via Stripe (Karte) oder Solana Pay (4 USDC). Nach Bezahlung sofortiger Download + lebenslange Auto-Updates.
 
 ### Source-Build (für Audit & Eigennutzung)
 
