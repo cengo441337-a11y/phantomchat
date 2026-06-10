@@ -120,7 +120,9 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
         ],
       ),
       body: GridBackground(
-        child: Padding(
+        child: SafeArea(
+          top: false,
+          child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -184,6 +186,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
               ),
             ],
           ),
+        ),
         ),
       ),
     );

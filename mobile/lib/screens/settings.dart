@@ -534,7 +534,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ? 'Hintergrund-Aktivität ist gesichert. Nachrichten '
                     'kommen auch dann an, wenn die App nicht im '
                     'Vordergrund ist.'
-                : 'Das System darf PhantomChat im Hintergrund anhalten. '
+                : 'Das System darf Argos im Hintergrund anhalten. '
                     'Auf manchen Geräten (Xiaomi, Huawei, OnePlus, Samsung) '
                     'gehen dadurch Nachrichten verloren.',
             style: GoogleFonts.spaceMono(
@@ -792,7 +792,7 @@ Widget _walletCard() {    return GestureDetector(      onTap: () => Navigator.of
             children: [
               const Icon(Icons.shield_outlined, color: kCyan, size: 22),
               const SizedBox(width: 12),
-              Text('PhantomChat',
+              Text('Argos',
                   style: GoogleFonts.orbitron(
                       fontSize: 14, fontWeight: FontWeight.w700, color: kWhite,
                       letterSpacing: 1.5)),

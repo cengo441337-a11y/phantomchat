@@ -79,7 +79,10 @@ class _RelayManagerScreenState extends State<RelayManagerScreen> {
       builder: (ctx) => Padding(
         padding: EdgeInsets.only(
           left: 24, right: 24, top: 24,
-          bottom: MediaQuery.of(ctx).viewInsets.bottom + 32,
+          bottom: (MediaQuery.of(ctx).viewInsets.bottom > 0
+                  ? MediaQuery.of(ctx).viewInsets.bottom
+                  : MediaQuery.of(ctx).viewPadding.bottom) +
+              32,
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,

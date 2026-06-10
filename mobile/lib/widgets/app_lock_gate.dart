@@ -167,7 +167,7 @@ class _BioLaunchOverlay extends StatelessWidget {
                 ),
                 const SizedBox(height: 24),
                 Text(
-                  'PHANTOMCHAT',
+                  'ARGOS',
                   style: GoogleFonts.orbitron(
                     fontSize: 22,
                     fontWeight: FontWeight.w900,

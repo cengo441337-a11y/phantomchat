@@ -216,7 +216,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         builder: (ctx, setSheetState) => Padding(
           padding: EdgeInsets.only(
             left: 24, right: 24, top: 24,
-            bottom: MediaQuery.of(ctx).viewInsets.bottom + 32,
+            bottom: (MediaQuery.of(ctx).viewInsets.bottom > 0
+                    ? MediaQuery.of(ctx).viewInsets.bottom
+                    : MediaQuery.of(ctx).viewPadding.bottom) +
+                32,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -376,7 +379,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       backgroundColor: kBgCard,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
       builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(24),
+        padding: EdgeInsets.fromLTRB(
+            24, 24, 24, 24 + MediaQuery.of(ctx).viewPadding.bottom),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,

@@ -37,7 +37,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   bool _bootDone = false;
 
   static const _bootSequence = [
-    '> PHANTOM OS v1.0.0',
+    '> ARGOS OS v1.0.0',
     '> LOADING CRYPTO MODULE...',
     '> X25519 ECDH: OK',
     '> CHACHA20-POLY1305: OK',
@@ -221,7 +221,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                 ),
                 const SizedBox(height: 28),
                 GlitchText(
-                  text: 'PHANTOM',
+                  text: 'ARGOS',
                   style: GoogleFonts.orbitron(
                     fontSize: 46,
                     fontWeight: FontWeight.w900,
