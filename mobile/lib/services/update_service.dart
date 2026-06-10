@@ -36,6 +36,7 @@ import 'package:crypto/crypto.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -330,6 +331,34 @@ class UpdateService {
       manifestCode: variant.versionCode,
       info: info,
     );
+  }
+
+  /// Platform channel to MainActivity.kt for Android install-permission
+  /// checks (`argos/installer`).
+  static const MethodChannel _installerChannel =
+      MethodChannel('argos/installer');
+
+  /// Whether this app may install APKs ("install unknown apps"). Android 8+
+  /// blocks the package-installer otherwise, which makes the in-app update
+  /// appear to do nothing. Returns true on non-Android or if the check
+  /// throws, so we never wrongly block the flow.
+  static Future<bool> canInstallPackages() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      final ok = await _installerChannel.invokeMethod<bool>('canInstall');
+      return ok ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// Opens the system "install unknown apps" settings page for THIS app so
+  /// the user can grant the permission with one toggle.
+  static Future<void> openInstallPermissionSettings() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _installerChannel.invokeMethod('openInstallSettings');
+    } catch (_) {}
   }
 
   /// Fetches the manifest, compares versions, returns an `UpdateInfo` if

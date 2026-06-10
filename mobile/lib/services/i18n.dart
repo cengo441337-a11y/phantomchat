@@ -58,6 +58,10 @@ class I18n {
       'update.error.download': 'DOWNLOAD FAILED',
       'update.error.checksum': 'CHECKSUM MISMATCH — ABORTED',
       'update.error.install': 'COULD NOT LAUNCH INSTALLER',
+      'update.perm.title': 'ALLOW INSTALLS',
+      'update.perm.body':
+          'Android blocks the update until you allow Argos to install apps. Tap below, turn on "Allow from this source", then come back — the update continues on its own.',
+      'update.perm.open': 'OPEN SETTINGS',
       'update.abort': 'ABORT',
     },
     'de': {
@@ -86,6 +90,10 @@ class I18n {
       'update.error.download': 'DOWNLOAD FEHLGESCHLAGEN',
       'update.error.checksum': 'PRÜFSUMME UNGÜLTIG — ABGEBROCHEN',
       'update.error.install': 'INSTALLER KONNTE NICHT GESTARTET WERDEN',
+      'update.perm.title': 'INSTALLATION ERLAUBEN',
+      'update.perm.body':
+          'Android blockiert das Update, bis du Argos erlaubst, Apps zu installieren. Tippe unten, aktiviere „Aus dieser Quelle zulassen“ und komm zurück — das Update läuft dann von allein weiter.',
+      'update.perm.open': 'EINSTELLUNGEN ÖFFNEN',
       'update.abort': 'ABBRECHEN',
     },
   };

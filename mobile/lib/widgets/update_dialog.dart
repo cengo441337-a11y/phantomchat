@@ -27,16 +27,44 @@ class UpdateDialog extends StatefulWidget {
   State<UpdateDialog> createState() => _UpdateDialogState();
 }
 
-enum _Phase { idle, downloading, installing, error }
+enum _Phase { idle, needPermission, downloading, installing, error }
 
-class _UpdateDialogState extends State<UpdateDialog> {
+class _UpdateDialogState extends State<UpdateDialog>
+    with WidgetsBindingObserver {
   _Phase _phase = _Phase.idle;
   int _received = 0;
   int _total = 0;
   String? _errorMessage;
   bool _aborted = false;
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // User just returned from the system "install unknown apps" settings.
+    // If they granted it, resume automatically so they don't have to hunt
+    // for the button again.
+    if (state == AppLifecycleState.resumed &&
+        _phase == _Phase.needPermission) {
+      UpdateService.canInstallPackages().then((ok) {
+        if (ok && mounted && _phase == _Phase.needPermission) _startDownload();
+      });
+    }
+  }
+
   Future<void> _startDownload() async {
+    // Android 8+ refuses the package-installer unless this app holds the
+    // "install unknown apps" permission — without it the update silently
+    // does nothing. Gate on it first and guide the user to the right page.
+    if (!await UpdateService.canInstallPackages()) {
+      if (!mounted) return;
+      setState(() => _phase = _Phase.needPermission);
+      return;
+    }
     setState(() {
       _phase = _Phase.downloading;
       _received = 0;
@@ -79,6 +107,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
   @override
   void dispose() {
     _aborted = true;
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -228,6 +257,69 @@ class _UpdateDialogState extends State<UpdateDialog> {
                           color: kCyan,
                           letterSpacing: 2,
                         ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ];
+
+      case _Phase.needPermission:
+        return [
+          header,
+          const SizedBox(height: 20),
+          Text(
+            I18n.t('update.perm.title'),
+            style: GoogleFonts.spaceMono(
+                fontSize: 12, color: kCyan, letterSpacing: 1),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            I18n.t('update.perm.body'),
+            style: GoogleFonts.spaceMono(
+                fontSize: 11, color: kWhite, height: 1.4),
+          ),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => Navigator.of(context).pop(),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                          color: kGrayText.withValues(alpha: 0.5), width: 1.2),
+                    ),
+                    child: Center(
+                      child: Text(
+                        I18n.t('update.dialog.dismiss'),
+                        style: GoogleFonts.orbitron(
+                            fontSize: 11, color: kGrayText, letterSpacing: 2),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                flex: 2,
+                child: GestureDetector(
+                  onTap: UpdateService.openInstallPermissionSettings,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: kCyan, width: 1.5),
+                      color: kCyan.withValues(alpha: 0.08),
+                      boxShadow: neonGlow(kCyan, radius: 8),
+                    ),
+                    child: Center(
+                      child: Text(
+                        I18n.t('update.perm.open'),
+                        style: GoogleFonts.orbitron(
+                            fontSize: 11, color: kCyan, letterSpacing: 2),
                       ),
                     ),
                   ),
