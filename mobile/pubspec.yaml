@@ -1,7 +1,7 @@
 name: phantomchat
 description: PhantomChat — decentralized encrypted messenger
 publish_to: none
-version: 1.9.4+40
+version: 1.9.5+41
 
 environment:
   sdk: ^3.11.4
