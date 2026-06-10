@@ -101,7 +101,7 @@ class _QrScanScreenState extends State<QrScanScreen> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: Text(
-          'PHANTOM_ID SCAN',
+          'ARGOS_ID SCAN',
           style: GoogleFonts.orbitron(
             fontSize: 14,
             fontWeight: FontWeight.w700,
@@ -269,7 +269,7 @@ class _CameraPermissionDenied extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'PhantomChat braucht Kamera-Zugriff zum Scannen von Phantom-IDs. Sonst nichts — die Bilddaten verlassen das Gerät nie.',
+              'Argos braucht Kamera-Zugriff zum Scannen von Argos-IDs. Sonst nichts — die Bilddaten verlassen das Gerät nie.',
               textAlign: TextAlign.center,
               style: GoogleFonts.spaceMono(
                 fontSize: 11,

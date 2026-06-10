@@ -133,7 +133,7 @@ class _RelayManagerScreenState extends State<RelayManagerScreen> {
             Text(
               'Akzeptiert ws:// und wss:// URLs. Eigener Relay liefert '
               'am zuverlaessigsten — Nostr-Public-Relays verwerfen '
-              'PhantomChat-Events oft.',
+              'Argos-Events oft.',
               style: GoogleFonts.spaceMono(fontSize: 11, color: kGrayText, height: 1.5),
             ),
             const SizedBox(height: 20),

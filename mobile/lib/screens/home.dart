@@ -250,7 +250,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 decoration: const InputDecoration(hintText: 'ghost · cipher · zero'),
               ),
               const SizedBox(height: 16),
-              Text('PHANTOM_ID:', style: GoogleFonts.spaceMono(fontSize: 10, color: kCyan, letterSpacing: 1)),
+              Text('ARGOS_ID:', style: GoogleFonts.spaceMono(fontSize: 10, color: kCyan, letterSpacing: 1)),
               const SizedBox(height: 8),
               TextField(
                 controller: ctrl,
@@ -310,7 +310,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 onTap: busy ? null : () async {
                   final raw = ctrl.text.trim();
                   if (raw.isEmpty) {
-                    setSheetState(() => errorMsg = 'Phantom-ID darf nicht leer sein');
+                    setSheetState(() => errorMsg = 'Argos-ID darf nicht leer sein');
                     return;
                   }
                   final contact = PhantomContact.fromPhantomId(
@@ -392,7 +392,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 Container(width: 3, height: 22, color: kMagenta),
                 const SizedBox(width: 12),
                 Text(
-                  'MY_PHANTOM_ID //',
+                  'MY_ARGOS_ID //',
                   style: GoogleFonts.orbitron(
                     fontSize: 14, fontWeight: FontWeight.w700,
                     color: kWhite, letterSpacing: 1.5,
@@ -430,7 +430,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 Clipboard.setData(ClipboardData(text: _identity!.phantomId));
                 Navigator.pop(ctx);
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('> PHANTOM ID COPIED TO CLIPBOARD')),
+                  const SnackBar(content: Text('> ARGOS ID COPIED TO CLIPBOARD')),
                 );
               },
               child: Container(
@@ -720,7 +720,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'Share your Phantom ID and\nadd contacts by theirs.',
+                    'Share your Argos ID and\nadd contacts by theirs.',
                     textAlign: TextAlign.center,
                     style: GoogleFonts.spaceMono(fontSize: 11, color: kGrayText.withValues(alpha: 0.6), height: 1.5),
                   ),

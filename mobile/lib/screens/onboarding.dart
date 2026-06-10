@@ -533,7 +533,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                     const Icon(Icons.fingerprint, color: kCyan, size: 14),
                     const SizedBox(width: 8),
                     Text(
-                      'PHANTOM_ID //',
+                      'ARGOS_ID //',
                       style: GoogleFonts.spaceMono(
                         fontSize: 10,
                         color: kCyan,
@@ -558,7 +558,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                   children: [
                     Expanded(
                       child: Text(
-                        'Share your Phantom ID to receive encrypted messages. Only contacts with your ID can reach you.',
+                        'Share your Argos ID to receive encrypted messages. Only contacts with your ID can reach you.',
                         style: GoogleFonts.spaceGrotesk(fontSize: 12, color: kGrayText, height: 1.5),
                       ),
                     ),
@@ -567,7 +567,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                       onTap: () {
                         Clipboard.setData(ClipboardData(text: identity.phantomId));
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('> PHANTOM ID COPIED')),
+                          const SnackBar(content: Text('> ARGOS ID COPIED')),
                         );
                       },
                       child: CyberCard(
@@ -618,7 +618,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _CyberButton(
-                    label: '[ ENTER PHANTOM ]',
+                    label: '[ ENTER ARGOS ]',
                     onTap: _finish,
                     width: double.infinity,
                     color: kCyan,

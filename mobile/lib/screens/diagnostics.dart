@@ -59,7 +59,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
   /// shape used by both Copy + Share.
   String _composeReport() {
     final buf = StringBuffer();
-    buf.writeln('=== PhantomChat Diagnostics ===');
+    buf.writeln('=== Argos Diagnostics ===');
     buf.writeln('app version : $_version+$_buildNumber');
     buf.writeln('relay count : $_relayCount');
     buf.writeln('relay open  : $_anyRelayConnected');
@@ -79,7 +79,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
         backgroundColor: kBgCard,
         content: Text(
           'In Zwischenablage kopiert (${LogService().length} Zeilen). '
-          'Über verschlüsselten Kanal teilen — kann Phantom-IDs enthalten.',
+          'Über verschlüsselten Kanal teilen — kann Argos-IDs enthalten.',
           style: GoogleFonts.spaceMono(fontSize: 12, color: kCyan),
         ),
         duration: const Duration(seconds: 4),

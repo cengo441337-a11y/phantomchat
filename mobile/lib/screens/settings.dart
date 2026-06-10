@@ -15,7 +15,7 @@ import 'diagnostics.dart';
 import 'relay_manager.dart';
 import 'wallet_screen.dart';
 
-/// PhantomChat settings panel — Wave 8a.
+/// Argos settings panel — Wave 8a.
 ///
 /// Two sections for now:
 ///
@@ -687,7 +687,7 @@ Widget _walletCard() {    return GestureDetector(      onTap: () => Navigator.of
           ),
           const SizedBox(height: 10),
           Text(
-            'Die KI-Bridge laeuft auf deinem Home-PC (PhantomChat Desktop). '
+            'Die KI-Bridge läuft auf deinem Home-PC (Argos Desktop). '
             'Provider waehlbar dort: Claude CLI (Pro-Abo), Ollama (lokal), '
             'OpenAI-kompatibel oder Anthropic API. Auf dem Handy '
             'konfigurierst du nur, welcher Kontakt ueber die Bridge '
