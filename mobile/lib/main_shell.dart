@@ -49,13 +49,23 @@ class _MainShellState extends State<MainShell> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: kBg,
-      body: IndexedStack(
-        index: _index,
-        children: const [
-          ArgosWalletScreen(),
-          HomeScreen(),
-          SettingsScreen(),
-        ],
+      // The tab screens (wallet/chats/settings) were written as full-screen
+      // scaffolds that add MediaQuery.viewPadding.bottom themselves to clear
+      // the system gesture bar. Inside this shell, the bottomNavigationBar
+      // already reserves + pads that inset, so the inner screens must NOT
+      // double-count it. removeBottom zeros their bottom inset, leaving the
+      // shell's nav bar as the single owner of the system-bar area.
+      body: MediaQuery.removePadding(
+        context: context,
+        removeBottom: true,
+        child: IndexedStack(
+          index: _index,
+          children: const [
+            ArgosWalletScreen(),
+            HomeScreen(),
+            SettingsScreen(),
+          ],
+        ),
       ),
       bottomNavigationBar: SafeArea(
         top: false,
